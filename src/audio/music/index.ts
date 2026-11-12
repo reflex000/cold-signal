@@ -57,6 +57,10 @@ export interface MusicOptions {
   seed?: number;
   /** Called for every note as it is scheduled (bench page, tests). */
   onNote?: (n: MusicNote) => void;
+  /** Players left out entirely (level analysis in tools/music-check.mjs). */
+  mute?: readonly Player[];
+  /** Leave out the ceiling that keeps the score from clipping (level analysis only). */
+  raw?: boolean;
 }
 
 export interface Music {
@@ -72,6 +76,8 @@ export interface Music {
 const LOOK = 0.45;
 /** A note found this late (update was not called) is dropped rather than played out of time. */
 const LATE = 0.15;
+/** Seconds a damped piano note sounds on under the next one: a legato pedal change. */
+const PEDAL = 0.1;
 
 interface Ev {
   t: number;
@@ -80,12 +86,16 @@ interface Ev {
   vel: number;
   player: Player;
   colour: string;
+  /** Seconds after the onset by which the note must be stopped (piano damper). */
+  hold?: number;
 }
 
 interface Playing {
   phrase: Phrase;
   events: Ev[];
   i: number;
+  /** Audio-clock time the phrase begins (later than asked when held back for a clean entry). */
+  start: number;
   /** Audio-clock time the phrase's written length ends. */
   end: number;
 }
@@ -97,9 +107,24 @@ interface Section {
   faders: Map<Player, GainNode>;
   /** Time its fade completes; 0 while alive. */
   gone: number;
+  /** Time its fade has brought it 16 dB down, low enough to be masked by what comes next. */
+  quiet: number;
 }
 
+/** The longest a new mood's first phrase is held back so it does not grind against the old one. */
+const MAX_CLEAR = 6;
+
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
+
+/**
+ * A semitone (or a semitone and octaves) apart. Inside the score's key family everything else may
+ * overlap during a cross-fade; this is what would sound like a wrong note: F against F#, Bb
+ * against B, the cold's Eb against D.
+ */
+const grinds = (a: number, b: number): boolean => {
+  const d = (((a - b) % 12) + 12) % 12;
+  return d === 1 || d === 11;
+};
 
 function mulberry(seed: number): () => number {
   let s = seed | 0;
@@ -112,9 +137,13 @@ function mulberry(seed: number): () => number {
 }
 
 export function createMusic(ctx: BaseAudioContext, out: AudioNode, opts: MusicOptions = {}): Music {
-  const rnd = mulberry(opts.seed ?? 417);
-  const kit = makeKit(ctx, rnd);
-  const mixer = makeMixer(ctx, out);
+  const seed = opts.seed ?? 417;
+  const rnd = mulberry(seed);
+  // The players draw from their own stream, so the conductor's timing does not depend on which
+  // instruments happened to play (or were muted).
+  const kit = makeKit(ctx, mulberry(seed ^ 0x2545f491));
+  const mixer = makeMixer(ctx, out, { raw: opts.raw });
+  const muted = new Set<Player>(opts.mute ?? []);
 
   let target: MusicMood = 'none';
   let targetSince = 0;
@@ -129,7 +158,8 @@ export function createMusic(ctx: BaseAudioContext, out: AudioNode, opts: MusicOp
   let notes = 0;
   let disposed = false;
   const fading: Section[] = [];
-  const sounding: MusicNote[] = [];
+  /** Notes not yet died away, with the stay they belong to. */
+  const sounding: { n: MusicNote; sec: Section }[] = [];
   /** Where each mood was in its order when it was left, so coming back soon does not start over. */
   const left = new Map<MusicMood, { pos: number; at: number }>();
   let pos = 0;
@@ -151,7 +181,27 @@ export function createMusic(ctx: BaseAudioContext, out: AudioNode, opts: MusicOp
       g.gain.linearRampToValueAtTime(0, at + seconds);
     }
     sec.gone = at + seconds + 0.1;
+    // A linear fade is 16 dB down at 84 % of its length.
+    sec.quiet = at + seconds * 0.84;
     fading.push(sec);
+  }
+
+  /**
+   * How much later than written the first phrase of `mood` must start so that none of its notes
+   * grinds a semitone against a note of a mood being left that is still sounding. An old note
+   * counts until it has died away or its section's fade has taken it 16 dB down; never more than
+   * MAX_CLEAR, the old material is on its way out.
+   */
+  function clearance(events: Ev[], sec: Section): number {
+    let shift = 0;
+    for (const { n: o, sec: from } of sounding) {
+      if (from === sec || from.gone === 0) continue;
+      const until = Math.min(o.end, from.quiet);
+      for (const e of events) {
+        if (until > e.t && o.t < e.t + e.dur && grinds(o.midi, e.midi)) shift = Math.max(shift, until - e.t);
+      }
+    }
+    return Math.min(shift, MAX_CLEAR);
   }
 
   /** The next phrase of the current mood that the present intensity allows, or null. */
@@ -187,25 +237,35 @@ export function createMusic(ctx: BaseAudioContext, out: AudioNode, opts: MusicOp
     const events: Ev[] = [];
     for (const line of phrase.lines) {
       if (intensity < line.min || intensity >= line.max) continue;
+      // A muted line still draws its nuances, so the rest of the timing is the same without it.
+      const mute = muted.has(line.player);
       // A drum keeps strict time; everyone else breathes by a few milliseconds.
       const loose = line.player === 'drum' ? 0 : 0.012;
+      const piano = line.player === 'piano';
       for (const n of line.notes) {
-        const roll = line.player === 'piano' ? n.chord * 0.022 : 0;
+        const roll = piano ? n.chord * 0.022 : 0;
+        const t = at + n.beat * beat + roll + (n.beat > 0 ? (rnd() - 0.5) * 2 * loose : 0);
+        const vel = clamp01(n.vel * louder * (1 + (rnd() - 0.5) * 0.1));
+        if (mute) continue;
         events.push({
-          t: at + n.beat * beat + roll + (n.beat > 0 ? (rnd() - 0.5) * 2 * loose : 0),
+          t,
           dur: n.dur * beat,
           midi: n.midi,
-          vel: clamp01(n.vel * louder * (1 + (rnd() - 0.5) * 0.1)),
+          vel,
           player: line.player,
           colour: line.colour,
+          hold: piano && n.damp < Infinity ? n.damp * beat - roll + PEDAL : undefined,
         });
       }
     }
     events.sort((a, b) => a.t - b.t);
-    const end = at + phrase.len * beat;
+    // Coming in over a mood that is still dying away: wait until nothing of it rubs against this.
+    const shift = clearance(events, sec);
+    if (shift > 0) for (const e of events) e.t += shift;
+    const end = at + shift + phrase.len * beat;
     // Rests shorten as intensity rises, but a rest is never dropped.
     const rest = (phrase.restMin + (phrase.restMax - phrase.restMin) * rnd()) * (1.25 - 0.5 * intensity);
-    playing = { phrase, events, i: 0, end };
+    playing = { phrase, events, i: 0, start: at + shift, end };
     lastEnd = end;
     nextAt = end + rest * beat;
   }
@@ -219,9 +279,9 @@ export function createMusic(ctx: BaseAudioContext, out: AudioNode, opts: MusicOp
       const e = p.events[p.i++];
       if (e.t < now - LATE) continue;
       const t = Math.max(e.t, now + 0.005);
-      const end = INSTRUMENTS[e.player](kit, { t, dur: e.dur, freq: midiToHz(e.midi), midi: e.midi, vel: e.vel, colour: e.colour }, fader(sec, e.player));
+      const end = INSTRUMENTS[e.player](kit, { t, dur: e.dur, freq: midiToHz(e.midi), midi: e.midi, vel: e.vel, colour: e.colour, hold: e.hold }, fader(sec, e.player));
       const note: MusicNote = { player: e.player, colour: e.colour, midi: e.midi, t, dur: e.dur, end, vel: e.vel, mood: sec.score.mood };
-      sounding.push(note);
+      sounding.push({ n: note, sec });
       notes++;
       if (opts.onNote) opts.onNote(note);
     }
@@ -267,7 +327,7 @@ export function createMusic(ctx: BaseAudioContext, out: AudioNode, opts: MusicOp
       nextAt = Infinity;
       return;
     }
-    section = { score: next, level: Math.pow(10, next.level / 20), faders: new Map(), gone: 0 };
+    section = { score: next, level: Math.pow(10, next.level / 20), faders: new Map(), gone: 0, quiet: 0 };
     const was = left.get(mood);
     // Coming back soon to a mood that simply cycles: go on from where it was. Moods with an
     // opening (`a | b c`) and moods played once always start from the top.
@@ -285,7 +345,7 @@ export function createMusic(ctx: BaseAudioContext, out: AudioNode, opts: MusicOp
         fading.splice(i, 1);
       }
     }
-    for (let i = sounding.length - 1; i >= 0; i--) if (sounding[i].end < now) sounding.splice(i, 1);
+    for (let i = sounding.length - 1; i >= 0; i--) if (sounding[i].n.end < now) sounding.splice(i, 1);
 
     schedule(now);
 
@@ -319,20 +379,22 @@ export function createMusic(ctx: BaseAudioContext, out: AudioNode, opts: MusicOp
     const now = ctx.currentTime;
     const players = {} as Record<Player, number>;
     for (const p of PLAYERS) players[p] = 0;
-    for (const n of sounding) {
+    for (const { n } of sounding) {
       if (n.t > now || n.end < now) continue;
       // Full while the note is held, falling over its die-away.
       const tail = n.end - (n.t + n.dur);
       const level = now <= n.t + n.dur || tail <= 0 ? 1 : 1 - (now - n.t - n.dur) / tail;
       players[n.player] = Math.max(players[n.player], n.vel * level);
     }
-    const inPhrase = playing !== null && now < playing.end;
+    const p = playing;
+    const inPhrase = p !== null && now >= p.start && now < p.end;
+    const due = p !== null && now < p.start ? p.start : nextAt;
     return {
       mood,
       target,
       intensity,
-      phrase: inPhrase && playing ? playing.phrase.name : '',
-      nextIn: inPhrase ? 0 : Math.max(0, nextAt - now),
+      phrase: inPhrase && p ? p.phrase.name : '',
+      nextIn: inPhrase ? 0 : Math.max(0, due - now),
       players,
       notes,
     };

@@ -4,13 +4,12 @@
 // keeps mutating its own objects, and with the 'ref' wire the client holds what it is handed.
 // Companion bots are players with no transport, driven through the same input and action path.
 // Owner: NET.
-import { copyInput, MAX_PLAYERS, type Sim } from '../sim/sim';
-import { neutralInput } from '../sim/entities';
+import { MAX_PLAYERS, type Sim } from '../sim/sim';
+import { copyInput, ENTITY_KINDS, neutralInput } from '../sim/entities';
 import { DYNAMIC_KINDS, type Action, type Entity, type EntityKind, type Env, type IceCell, type InputCmd, type NetId, type Objective, type PlayerEnt, type SimEvent, type Stats } from '../sim/types';
 import { PROTOCOL, type ClientMsg, type HostSideTransport, type Snapshot } from './protocol';
 
-const STATIC_KINDS: readonly EntityKind[] = (['player', 'wolf', 'fire', 'pickup', 'crate', 'wood', 'log', 'flare', 'device', 'heli'] as EntityKind[])
-  .filter((k) => !DYNAMIC_KINDS.includes(k));
+const STATIC_KINDS: readonly EntityKind[] = ENTITY_KINDS.filter((k) => !DYNAMIC_KINDS.includes(k));
 
 /** Commands waiting beyond this are a lag burst: the oldest are skipped (their buttons are kept). */
 const MAX_BACKLOG = 5;
@@ -34,7 +33,10 @@ interface Conn {
   open: boolean;
 }
 
-/** Deep copy of plain JSON data (entities, env, objective). */
+/**
+ * Deep copy of plain JSON data (entities, env, objective). The spread copies an object's shape in
+ * one go; only nested objects (a pack, a crate's loot) are then replaced by their own copies.
+ */
 function clone<T>(v: T): T {
   if (Array.isArray(v)) {
     const a = new Array(v.length);
@@ -44,10 +46,10 @@ function clone<T>(v: T): T {
     }
     return a as unknown as T;
   }
-  const o: Record<string, unknown> = {};
-  for (const k in v) {
-    const x = v[k];
-    o[k] = typeof x === 'object' && x !== null ? clone(x) : x;
+  const o = { ...(v as object) } as Record<string, unknown>;
+  for (const k in o) {
+    const x = o[k];
+    if (typeof x === 'object' && x !== null) o[k] = clone(x);
   }
   return o as T;
 }
@@ -174,10 +176,15 @@ export class Host {
     }
 
     // --- per client: slow entities whose rev moved, its ack, its toasts --------------------------
+    // A transport without lag delivers inside send(), and the receiver may leave on the spot:
+    // walk a copy of the connection list.
     const copies = this.copies;
     copies.clear();
-    for (const c of this.conns) {
-      if (!c.id) continue;
+    const conns = this.connScratch;
+    conns.length = 0;
+    for (const c of this.conns) conns.push(c);
+    for (const c of conns) {
+      if (!c.id || !c.open) continue;
       const me = sim.ctx.get<PlayerEnt>(c.id);
       let ents = dyn;
       for (const k of STATIC_KINDS) {
@@ -207,6 +214,7 @@ export class Host {
       if (stats) snap.stats = stats;
       c.t.send(snap);
     }
+    conns.length = 0;
     return events;
   }
 
@@ -221,6 +229,7 @@ export class Host {
   // --- internals ----------------------------------------------------------------------------------
 
   private readonly copies = new Map<NetId, Entity>();
+  private readonly connScratch: Conn[] = [];
 
   private receive(c: Conn, m: ClientMsg): void {
     if (!c.open || !m || typeof m !== 'object') return;

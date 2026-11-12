@@ -30,6 +30,12 @@ interface Strand {
 }
 
 const TC = 0.09;
+/**
+ * The bed under everything, measured offline (tools/audio-check.mjs, the scene_* rows: RMS with the
+ * body and the scene's events): a calm dusk about -30 dBFS, a whiteout on the ridge about -19,
+ * the cabin about -31. Room is left above it for boots (-16 peak) and the shot (-1).
+ */
+const BED_LEVEL = 0.7;
 const NUM: (keyof AmbienceEx)[] = ['wind', 'gust', 'storm', 'snowfall', 'shelter', 'indoor', 'forest', 'height', 'night', 'onIce', 'cold', 'cave'];
 
 export class AmbienceSynth {
@@ -75,14 +81,18 @@ export class AmbienceSynth {
     const ctx = eng.ctx;
     const wide = !eng.lite;
 
+    // the whole bed's level against everything else (set by measuring the scenes: see BED_LEVEL)
+    const bed = ctx.createGain();
+    bed.gain.value = BED_LEVEL;
+    bed.connect(eng.bus.ambience);
     this.outLP = ctx.createBiquadFilter();
     this.outLP.type = 'lowpass';
     this.outLP.Q.value = 0.5;
     this.outLP.frequency.value = 20000;
     this.outG = ctx.createGain();
-    this.outLP.connect(this.outG).connect(eng.bus.ambience);
+    this.outLP.connect(this.outG).connect(bed);
     const out = this.outLP;
-    const inside = eng.bus.ambience;
+    const inside = bed;
 
     this.body = this.strand('brown', 'lowpass', 160, 0.6, out, 0);
     this.buffet = this.strand('brown', 'lowpass', 190, 0.7, out, 0);
@@ -283,7 +293,8 @@ export class AmbienceSynth {
     set(this.moan[1].f.frequency, 240 + 95 * Ik(12) + 14 * wander(T * 0.33, 61));
     set(this.moan[0].g.gain, 5 * inn * (0.15 + I) * (0.6 + 0.4 * wander(T * 0.21, 62)));
     set(this.moan[1].g.gain, 3.2 * inn * Math.pow(I, 1.5) * (0.5 + 0.5 * wander(T * 0.27, 63)));
-    set(this.draft.g.gain, 1.6 * inn * I);
+    // brown noise under 75 Hz is nearly all of its energy: a little is a pull you feel, more is a rumble
+    set(this.draft.g.gain, 0.28 * inn * I);
     set(this.room.g.gain, 0.12 * (inn + c.cave));
 
     // what the engine needs to know: the space, and how much the wind hides

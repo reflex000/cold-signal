@@ -6,29 +6,15 @@
 import { rngStep } from '../core/rng';
 import type { World } from '../world/types';
 import type { SimCtx, SimOptions, System } from './api';
-import { makePlayer, makeState, neutralInput, STATE_VERSION } from './entities';
-import { PITCH_LIMIT } from './move';
+import { copyInput, ENTITY_KINDS, makePlayer, makeState, neutralInput, STATE_VERSION } from './entities';
 import { SYSTEMS } from './systems/index';
 import { DT, type Action, type Entity, type EntityKind, type InputCmd, type NetId, type PlayerEnt, type SimEvent, type SimState } from './types';
 
+export { copyInput, ENTITY_KINDS };
+
 export const MAX_PLAYERS = 4;
 
-const KINDS: readonly EntityKind[] = ['player', 'wolf', 'fire', 'pickup', 'crate', 'wood', 'log', 'flare', 'device', 'heli'];
-
-const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-
-/** Copy a command into `dst`, making it safe: finite numbers, axes in -1..1, integer bits. */
-export function copyInput(dst: InputCmd, src: InputCmd): InputCmd {
-  const mx = num(src.mx), mz = num(src.mz), pitch = num(src.pitch);
-  dst.seq = Math.floor(num(src.seq));
-  dst.mx = mx < -1 ? -1 : mx > 1 ? 1 : mx;
-  dst.mz = mz < -1 ? -1 : mz > 1 ? 1 : mz;
-  dst.yaw = num(src.yaw);
-  dst.pitch = pitch < -PITCH_LIMIT ? -PITCH_LIMIT : pitch > PITCH_LIMIT ? PITCH_LIMIT : pitch;
-  dst.b = num(src.b) | 0;
-  dst.focus = Math.floor(num(src.focus));
-  return dst;
-}
+const KINDS = ENTITY_KINDS;
 
 /** What the sim remembers about a player's controls between ticks (not part of the saved state, except `prevKey`). */
 interface Controls {
@@ -114,9 +100,14 @@ export class Sim {
     return p;
   }
 
+  /** A player leaves: every system's leave hook runs while the entity still exists, then it is removed. */
   removePlayer(id: NetId): void {
     const e = this.ctx.get(id);
     if (!e || e.kind !== 'player') return;
+    for (const s of this.systems) {
+      s.leave?.(this.ctx, e);
+      this.flushRemoved();
+    }
     this.ctx.remove(id);
     this.flushRemoved();
   }
@@ -149,6 +140,11 @@ export class Sim {
   /** Advance exactly one tick. Returns the events of this tick (and of actions since the last one). */
   step(): SimEvent[] {
     const st = this.state;
+    if (this.removedStale) {
+      // Nothing was removed since the last step returned: its list is spent.
+      this.removed.length = 0;
+      this.removedStale = false;
+    }
     st.tick++;
     for (const s of this.systems) {
       if (s.step) {

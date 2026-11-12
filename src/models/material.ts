@@ -204,6 +204,18 @@ export function createPropMaterial(o: PropMaterialOpts = {}): THREE.MeshStandard
     const pix: N = max(length(dx), length(dy)).max(1e-6); // metres of surface per pixel
     const lodIso = (scale: number): N => log2(pix.mul(scale)).max(0);
     const lodAni = (s: N): N => log2(max(length(dx.mul(s)), length(dy.mul(s))).max(1e-6)).max(0);
+    // A thin line where `dist` (in noise units, from a noise of `freq` cycles per metre) is near 0.
+    // Once the line is thinner than a pixel it widens and fades by the same factor, so it neither
+    // aliases into dots nor vanishes. No derivatives: it is safe inside the material branches.
+    const line = (dist: N, width: number, freq: number): N => {
+      const w: N = max(pix.mul(freq * 1.5), width);
+      return smoothstep(0, w, dist).oneMinus().mul(float(width).div(w));
+    };
+    // A soft threshold of noise value v at t, its edge at least a pixel wide (same idea).
+    const edge = (t: N, v: N, width: number, freq: number): N => {
+      const w: N = max(pix.mul(freq * 1.5), width);
+      return smoothstep(t.sub(w), t.add(w), v);
+    };
     // which way the surface faces in the part's own space (for end grain and triplanar weave)
     const nD: N = abs(normalize(cross(dx, dy).add(vec3(1e-12, 2e-12, 3e-12))));
 
@@ -226,22 +238,32 @@ export function createPropMaterial(o: PropMaterialOpts = {}): THREE.MeshStandard
     const grime: N = float(0.3).toVar();
 
     If(id.equal(MAT.WOOD), () => {
+      // Growth rings round the heart (the kit puts it far off for boards, on the axis for logs):
+      // straight or cathedral stripes on the faces, circles on the ends. A narrow dark latewood
+      // band per ring, wobbling with the fibre; fibre streaks along the grain on top.
       const sA = vec3(72, 2.3, 72);
       const g: N = noise2(det.mul(sA), lodAni(sA));
       const sB = vec3(17, 0.8, 21);
       const g2: N = noise2(det.mul(sB).add(3.3), lodAni(sB));
       const endGrain: N = smoothstep(0.8, 0.95, nD.y);
-      const rings: N = sin(length(det.xz.mul(vec2(1, 1.4))).mul(190).add(g2.y.mul(5))).mul(0.5).add(0.5).mul(smoothstep(2.5, 0.8, pix.mul(190)));
-      const tone: N = mix(g.x.mul(0.55).add(g2.x.mul(0.45)), rings.mul(0.6).add(nHi.x.mul(0.4)), endGrain);
-      col.mulAssign(mix(0.6, 1.25, tone));
-      const crack: N = smoothstep(0.7, 0.85, g.y).mul(wear.mul(0.7).add(0.3)).mul(endGrain.oneMinus());
-      col.mulAssign(crack.mul(-0.5).add(1));
+      const rr: N = length(det.xz).add(g2.y.sub(0.5).mul(0.012)).add(g.y.sub(0.5).mul(0.0025));
+      const RING = 150; // rings per metre
+      const ph: N = fract(rr.mul(RING));
+      const late: N = smoothstep(0.55, 0.78, ph).mul(smoothstep(1.0, 0.86, ph)).mul(smoothstep(2.4, 0.9, pix.mul(RING)));
+      const fibre: N = g.x.mul(0.6).add(g2.x.mul(0.4));
+      col.mulAssign(mix(fibre.mul(0.36).add(0.8), nHi.x.mul(0.16).add(0.92), endGrain).mul(late.mul(-0.34).add(1.08)));
+      // checks: along the grain on the faces, radial splits from the heart on the ends
+      const dir: N = det.xz.div(rr.max(1e-4));
+      const radial: N = noise2(vec3(dir.x.mul(5), dir.y.mul(5), rr.mul(3)).add(7.7), lodIso(30));
+      const crack: N = mix(smoothstep(0.72, 0.86, g.y).mul(wear.mul(0.7).add(0.3)), line(abs(radial.x.sub(0.5)), 0.035, 30).mul(wear.mul(0.8).add(0.2)), endGrain);
+      col.mulAssign(crack.mul(-0.55).add(1));
       // weather silvers wood and bleaches the high grain
       const lum: N = dot(col, vec3(0.3, 0.55, 0.15));
       col.assign(mix(col, vec3(lum).mul(vec3(1.0, 1.02, 1.05)).mul(1.08), wear.mul(nLo.x.mul(0.5).add(0.35))));
-      col.mulAssign(mix(1, 0.78, endGrain));
+      col.mulAssign(mix(1, 0.8, endGrain));
       rough.addAssign(crack.mul(0.1));
-      h.assign(g.x.mul(0.0005).sub(crack.mul(0.0012)).add(nHi.x.mul(0.00012)));
+      // weathered latewood stands proud of the softer earlywood
+      h.assign(fibre.mul(0.0004).sub(crack.mul(0.0012)).add(late.mul(wear).mul(0.0005)).add(nHi.x.mul(0.0001)));
       porous.assign(1);
       grime.assign(0.45);
     }).ElseIf(id.equal(MAT.PAINT), () => {
@@ -253,7 +275,7 @@ export function createPropMaterial(o: PropMaterialOpts = {}): THREE.MeshStandard
       const drip: N = noise2(det.mul(sD).add(1.7), lodAni(sD));
       const rustAmt: N = smoothstep(0.3, 0.8, wear).add(ao.oneMinus().mul(0.35));
       const rustMask: N = deep.mul(smoothstep(rustAmt.oneMinus(), rustAmt.oneMinus().add(0.25), nHi.y.mul(0.5).add(nMd.y.mul(0.5)).add(0.15)));
-      const rustCol: N = mix(vec3(0.19, 0.07, 0.028), vec3(0.075, 0.035, 0.018), nHi.y);
+      const rustCol: N = mix(vec3(0.13, 0.05, 0.022), vec3(0.055, 0.028, 0.016), nHi.y);
       col.mulAssign(nLo.x.mul(0.18).add(0.91));
       // chalky fade on the weather side, rust weeping down from the chips
       const bleed: N = smoothstep(0.52, 0.8, drip.x).mul(wear.mul(1.5).min(1)).mul(nLo.y.mul(0.7).add(0.3));
@@ -276,7 +298,10 @@ export function createPropMaterial(o: PropMaterialOpts = {}): THREE.MeshStandard
       // above wear 0.5 steel rusts: blooms first in the creases
       const rustAmt: N = wear.mul(2).sub(1).max(0).add(ao.oneMinus().mul(wear).mul(0.6));
       const rustMask: N = smoothstep(rustAmt.oneMinus(), rustAmt.oneMinus().add(0.22), nMd.y.mul(0.5).add(nLo.x.mul(0.3)).add(nHi.y.mul(0.2))).mul(step(0.001, rustAmt));
-      col.assign(mix(col, mix(vec3(0.2, 0.075, 0.03), vec3(0.075, 0.035, 0.018), nHi.x), rustMask));
+      // rust follows the painted albedo: brown where the model painted rust, near black under soot
+      const rustK: N = dot(base, vec3(0.3, 0.55, 0.15)).div(0.045).clamp(0.18, 1.15);
+      const rustCol: N = mix(mix(vec3(0.12, 0.048, 0.022), vec3(0.05, 0.027, 0.016), nHi.x), vec3(0.07, 0.05, 0.04), nMd.x.mul(0.5)).mul(rustK);
+      col.assign(mix(col, rustCol, rustMask));
       metal.mulAssign(rustMask.oneMinus());
       rough.assign(mix(rough, 0.95, rustMask));
       h.assign(g.x.mul(0.00006).sub(scratch.mul(0.00015)).add(rustMask.mul(nHi.x).mul(0.0008)));
@@ -293,16 +318,33 @@ export function createPropMaterial(o: PropMaterialOpts = {}): THREE.MeshStandard
       porous.assign(0.9);
       grime.assign(0.5);
     }).ElseIf(id.equal(MAT.BARK), () => {
-      const sA = vec3(31, 4.2, 31);
+      // Conifer bark: long fissures (contours of a noise stretched 10 : 1 along the grain) broken
+      // by finer cracks into plates, each plate its own tone, the ridges weathered paler.
+      const sA = vec3(30, 1.5, 30);
       const g: N = noise2(det.mul(sA), lodAni(sA));
-      const furrow: N = smoothstep(0, 0.32, abs(g.x.mul(2).sub(1)));
-      col.mulAssign(mix(0.42, 1.25, furrow.mul(nMd.x.mul(0.4).add(0.6))));
-      col.assign(mix(col, col.mul(1.25).add(0.03), smoothstep(0.62, 0.8, nLo.y).mul(0.5)));
-      h.assign(furrow.mul(0.005).add(g.y.mul(0.002)).add(nHi.x.mul(0.0008)));
+      const sB = vec3(76, 3.8, 76);
+      const g2: N = noise2(det.mul(sB).add(5.1), lodAni(sB));
+      const fiss: N = line(abs(g.x.sub(0.5)), 0.07, 30).max(line(abs(g2.x.sub(0.5)), 0.05, 76).mul(0.6));
+      const plate: N = g.y.mul(0.6).add(g2.y.mul(0.4));
+      col.mulAssign(mix(1, 0.3, fiss).mul(plate.mul(0.5).add(0.75)).mul(nMd.x.mul(0.2).add(0.9)));
+      col.mulAssign(smoothstep(0.6, 0.85, nLo.y).mul(fiss.oneMinus()).mul(0.35).add(1));
+      const hb: N = fiss.oneMinus().mul(0.004).add(plate.mul(0.0015)).add(nHi.x.mul(0.0004));
+      // Bark falls away with wear above 0.35, in ragged patches, baring bleached grey wood with
+      // its fibres along the grain, a bark's thickness lower.
+      const loss: N = smoothstep(0.35, 1.0, wear);
+      // (the fine octave also hides the 1/256 steps of the hardware's bilinear weights on the coarse ones)
+      const pn: N = nLo.y.mul(0.58).add(nMd.y.mul(0.32)).add(nHi.y.sub(0.5).mul(0.2));
+      const bare: N = edge(loss.oneMinus(), pn, 0.012, 12).mul(step(0.001, loss));
+      const sF = vec3(110, 3, 110);
+      const fib: N = noise2(det.mul(sF).add(2.2), lodAni(sF));
+      const wood: N = vec3(0.26, 0.235, 0.2).mul(fib.x.mul(0.35).add(0.8)).mul(line(abs(fib.y.sub(0.5)), 0.04, 110).mul(-0.45).add(1));
+      col.assign(mix(col, wood, bare));
+      rough.assign(mix(rough, 0.8, bare));
+      h.assign(mix(hb, fib.x.mul(0.0004).sub(0.002), bare));
       porous.assign(1);
       grime.assign(0.5);
     }).ElseIf(id.equal(MAT.ROCK), () => {
-      const crack: N = smoothstep(0.035, 0.0, abs(nMd.y.sub(0.5)));
+      const crack: N = line(abs(nMd.y.sub(0.5)), 0.035, 27);
       col.mulAssign(nMd.x.mul(0.55).add(0.72).mul(nLo.x.mul(0.3).add(0.85)));
       col.addAssign(smoothstep(0.68, 0.8, nHi.x).mul(0.05));
       col.assign(mix(col, col.mul(vec3(1.18, 1.08, 0.9)), nLo.y.mul(0.5)));
@@ -312,7 +354,7 @@ export function createPropMaterial(o: PropMaterialOpts = {}): THREE.MeshStandard
     }).ElseIf(id.equal(MAT.CHAR), () => {
       const sA = vec3(58, 21, 58);
       const g: N = noise2(det.mul(sA), lodAni(sA));
-      const crack: N = smoothstep(0.2, 0.03, abs(g.x.mul(2).sub(1))).max(smoothstep(0.16, 0.02, abs(nMd.x.mul(2).sub(1))).mul(0.6));
+      const crack: N = line(abs(g.x.sub(0.5)), 0.09, 58).max(line(abs(nMd.x.sub(0.5)), 0.07, 27).mul(0.6));
       col.mulAssign(nHi.x.mul(0.9).add(0.5).mul(mix(1, 0.5, crack)));
       const ash: N = smoothstep(wear.oneMinus(), wear.oneMinus().add(0.18), nLo.x.mul(0.5).add(nMd.y.mul(0.5)));
       col.assign(mix(col, vec3(0.42, 0.41, 0.4).mul(nHi.y.mul(0.4).add(0.8)), ash.mul(0.85)));
@@ -340,7 +382,7 @@ export function createPropMaterial(o: PropMaterialOpts = {}): THREE.MeshStandard
       rough.assign(1);
       porous.assign(0.6);
     }).ElseIf(id.equal(MAT.ICE), () => {
-      const crack: N = smoothstep(0.03, 0.0, abs(nMd.x.sub(0.5)));
+      const crack: N = line(abs(nMd.x.sub(0.5)), 0.03, 27);
       col.mulAssign(nLo.x.mul(0.3).add(0.85));
       col.assign(mix(col, vec3(0.9, 0.95, 1), crack.mul(0.5).add(smoothstep(0.7, 0.85, nHi.y).mul(0.2))));
       rough.assign(nLo.y.mul(0.3).add(0.1).add(crack.mul(0.3)));
@@ -401,7 +443,11 @@ export function createPropMaterial(o: PropMaterialOpts = {}): THREE.MeshStandard
       const sx: N = dFdx(positionView), sy: N = dFdy(positionView);
       const r1: N = cross(sy, nGeo), r2: N = cross(nGeo, sx);
       const d: N = dot(sx, r1);
-      const grad: N = d.sign().mul(dFdx(h).mul(r1).add(dFdy(h).mul(r2)));
+      const g0: N = d.sign().mul(dFdx(h).mul(r1).add(dFdy(h).mul(r2)));
+      // Limit the slope to about 40 degrees: at grazing angles, and where the height steps at a
+      // material border, an unclamped gradient flips normals into sparkling dotted lines.
+      const lim: N = d.abs().mul(0.85);
+      const grad: N = g0.mul(min(lim.div(length(g0).max(1e-20)), 1));
       pNormal.assign(normalize(d.abs().mul(nGeo).sub(grad)));
     } else pNormal.assign(nGeo);
 

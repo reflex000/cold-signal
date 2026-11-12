@@ -42,6 +42,12 @@ export interface System {
   action?(ctx: SimCtx, player: PlayerEnt, a: Action): boolean;
   /** Called when a player joins, after the player entity exists. */
   join?(ctx: SimCtx, player: PlayerEnt): void;
+  /**
+   * Called when a player leaves the session (disconnect, bot removed), while the entity still
+   * exists; it is removed right after. Drop what they carry, clear references, delete per-player vars.
+   * (Optional member added by SIM.)
+   */
+  leave?(ctx: SimCtx, player: PlayerEnt): void;
 }
 
 export interface SimOptions {

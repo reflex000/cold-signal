@@ -30,6 +30,11 @@ export interface NoteOn {
   /** 0..1 dynamic (ppp 0.1 ... ff 1). */
   vel: number;
   colour: string;
+  /**
+   * Seconds after the onset by which the note must be stopped, however long it would ring by
+   * itself: the piano's damper falling when the next note of its line is struck.
+   */
+  hold?: number;
 }
 
 export type Instrument = (k: Kit, n: NoteOn, dest: AudioNode) => number;
@@ -124,7 +129,7 @@ const cello: Instrument = (k, n, dest) => {
   const pont = n.colour === 'pont';
   const { t, freq: f, vel } = n;
   const d = Math.max(0.3, n.dur);
-  const amp = dynAmp(vel) * (pont ? 0.62 : 1);
+  const amp = dynAmp(vel) * (pont ? 0.7 : 1);
   const att = pont ? clamp(d * 0.35, 0.2, 2.2) : Math.min(d * 0.4, 0.12 + 0.5 * (1 - vel));
   const tPeak = t + Math.max(att + 0.05, d * 0.45);
   const tEnd = t + d;
@@ -165,6 +170,18 @@ const cello: Instrument = (k, n, dest) => {
     mix.connect(filter(ctx, 'highpass', f * 2.2, 0.7)).connect(lp).connect(trem);
   } else {
     mix.connect(lp).connect(env);
+    // The finger settles: each note starts a few cents flat and finds its pitch.
+    const scoop = 5 + 6 * (1 - vel);
+    o1.detune.setValueAtTime(-scoop, t);
+    o1.detune.linearRampToValueAtTime(0, t + 0.14);
+    o2.detune.setValueAtTime(-6 - scoop, t);
+    o2.detune.linearRampToValueAtTime(-6, t + 0.14);
+    // And it never sits ruler-straight: a slow wander of a few cents under the vibrato.
+    const drift = osc(ctx, 'sine', 0.21 + k.rnd() * 0.34, 0, t, tStop);
+    const wander = gain(ctx, 2 + 2.5 * (1 - vel));
+    drift.connect(wander);
+    wander.connect(o1.detune);
+    wander.connect(o2.detune);
     if (d >= 1) {
       // Vibrato opens late and widens with the dynamic.
       const start = t + Math.min(0.9, d * 0.35);
@@ -188,7 +205,8 @@ const cello: Instrument = (k, n, dest) => {
 // ---------------------------------------------------------------------------------------------
 // Felt piano: stretched (inharmonic) partials, each with a quick first decay and a long second
 // one that is shorter the higher the partial; two strings on the lowest partials beating slowly;
-// the knock of a felted hammer; the damper comes down slowly, long after the written length.
+// the knock of a felted hammer. The pedal is down: a note rings on past its written length
+// unless `hold` says the damper falls (the conductor works that out from the line).
 
 const piano: Instrument = (k, n, dest) => {
   const ctx = k.ctx;
@@ -196,7 +214,7 @@ const piano: Instrument = (k, n, dest) => {
   const amp = dynAmp(vel);
   const B = 0.0003 * Math.pow(2, (midi - 50) / 14);
   const tau1 = clamp(6.5 * Math.pow(2, -(midi - 38) / 16), 0.8, 7);
-  const ring = Math.max(n.dur, Math.min(3 * tau1, 9));
+  const ring = Math.min(Math.max(n.dur, Math.min(3 * tau1, 9)), n.hold ?? Infinity);
   const tOff = t + ring;
   const tStop = tOff + 2.2;
   const atk = 0.006 + 0.016 * (1 - vel);
@@ -231,13 +249,14 @@ const piano: Instrument = (k, n, dest) => {
     }
   }
 
-  // Hammer: a soft wooden knock and a brush of felt.
+  // Hammer: a soft wooden knock and a brush of felt, under the tone rather than over it (four
+  // notes struck together must not add up to a crack).
   const hit = gain(ctx, 1);
   const ns = noise(k, t, t + 0.3);
   const knock = gain(ctx, 0);
   knock.gain.setValueAtTime(0, t);
-  knock.gain.linearRampToValueAtTime(1.1 * amp, t + 0.003);
-  knock.gain.setTargetAtTime(0, t + 0.003, 0.028);
+  knock.gain.linearRampToValueAtTime(0.55 * amp, t + 0.004);
+  knock.gain.setTargetAtTime(0, t + 0.004, 0.032);
   ns.connect(filter(ctx, 'lowpass', 420 + 800 * vel, 0.7)).connect(knock).connect(hit);
   const felt = gain(ctx, 0);
   felt.gain.setValueAtTime(0, t);
@@ -254,7 +273,8 @@ const piano: Instrument = (k, n, dest) => {
 // ---------------------------------------------------------------------------------------------
 // Bowed glass / singing bowl: a pair of sines a fraction of a hertz apart, one to each side, so
 // the tone turns slowly in the stereo field; weak upper modes, one of them inharmonic; a thread
-// of friction noise at the pitch. Speaks slowly, lets go slowly.
+// of friction noise at the pitch. Speaks slowly, lets go slowly. The pair is unequal so that
+// summed to mono (a phone speaker) the beating dips about 10 dB instead of to nothing.
 
 const glass: Instrument = (k, n, dest) => {
   const ctx = k.ctx;
@@ -271,12 +291,12 @@ const glass: Instrument = (k, n, dest) => {
   env.gain.setTargetAtTime(amp, t, att / 2.6);
   env.gain.setTargetAtTime(0, tEnd, rel);
 
-  const beat = 0.3 + 0.5 * k.rnd();
+  const beat = 0.22 + 0.5 * k.rnd();
   const side = k.rnd() < 0.5 ? -1 : 1;
   const a = osc(ctx, 'sine', f - beat / 2, 0, t, tStop);
   const b = osc(ctx, 'sine', f + beat / 2, 0, t, tStop);
-  a.connect(gain(ctx, 0.5)).connect(panner(ctx, -0.55 * side)).connect(env);
-  b.connect(gain(ctx, 0.5)).connect(panner(ctx, 0.55 * side)).connect(env);
+  a.connect(gain(ctx, 0.66)).connect(panner(ctx, -0.55 * side)).connect(env);
+  b.connect(gain(ctx, 0.34)).connect(panner(ctx, 0.55 * side)).connect(env);
   osc(ctx, 'sine', f * 2.003, 0, t, tStop).connect(gain(ctx, 0.07)).connect(env);
   osc(ctx, 'sine', f * 2.76, 0, t, tStop).connect(gain(ctx, 0.045)).connect(env);
   osc(ctx, 'sine', f * 2.997, 0, t, tStop).connect(gain(ctx, 0.025)).connect(env);
@@ -290,13 +310,15 @@ const glass: Instrument = (k, n, dest) => {
 // ---------------------------------------------------------------------------------------------
 // Frame drum, soft mallet: the skin's fundamental dropping in pitch as it is struck, two of its
 // inharmonic overtones dying faster, and the dull slap of the mallet. A heartbeat when played
-// in pairs.
+// in pairs. The hand damps the skin when the strokes come close together, so a fast pulse
+// stays a row of strokes instead of running together into a drone.
 
 const drum: Instrument = (k, n, dest) => {
   const ctx = k.ctx;
   const { t, freq: f, vel } = n;
   const amp = dynAmp(vel);
-  const tStop = t + 1.4;
+  const decay = clamp(0.3 * n.dur, 0.075, 0.13 + 0.1 * vel);
+  const tStop = t + Math.min(1.4, 0.3 + decay * 7);
   const out = gain(ctx, amp);
 
   const body = osc(ctx, 'sine', f, 0, t, tStop);
@@ -306,7 +328,7 @@ const drum: Instrument = (k, n, dest) => {
   const bg = gain(ctx, 0);
   bg.gain.setValueAtTime(0, t);
   bg.gain.linearRampToValueAtTime(1, t + 0.004);
-  bg.gain.setTargetAtTime(0, t + 0.004, 0.13 + 0.1 * vel);
+  bg.gain.setTargetAtTime(0, t + 0.004, decay);
   body.connect(bg).connect(out);
 
   const modes: [number, number, number][] = [
@@ -325,11 +347,13 @@ const drum: Instrument = (k, n, dest) => {
   slap.gain.setValueAtTime(0, t);
   slap.gain.linearRampToValueAtTime(2.2 * (0.4 + 0.6 * vel), t + 0.002);
   slap.gain.setTargetAtTime(0, t + 0.002, 0.022);
-  noise(k, t, t + 0.25).connect(filter(ctx, 'lowpass', 250 + 700 * vel, 0.7)).connect(slap).connect(out);
+  // A thud in the low middle: what is left of the skin's attack on a small speaker. Nothing
+  // below the fundamental, where it would only rumble.
+  noise(k, t, t + 0.25).connect(filter(ctx, 'bandpass', 190 + 380 * vel, 0.75)).connect(slap).connect(out);
 
   out.connect(dest);
   release(body, out);
-  return t + 0.55;
+  return t + 0.12 + decay * 3;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -403,7 +427,11 @@ const brass: Instrument = (k, n, dest) => {
 
   let last: OscillatorNode | null = null;
   for (const cents of [-7, 0, 6]) {
-    last = osc(ctx, 'sawtooth', f, cents + (k.rnd() - 0.5) * 3, t, tStop);
+    const c = cents + (k.rnd() - 0.5) * 3;
+    last = osc(ctx, 'sawtooth', f, c, t, tStop);
+    // Each player lips up into the note from a little under it.
+    last.detune.setValueAtTime(c - 14, t);
+    last.detune.linearRampToValueAtTime(c, t + 0.18 + 0.1 * k.rnd());
     last.connect(gain(ctx, 0.33)).connect(lp);
   }
   lp.connect(env);

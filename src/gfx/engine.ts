@@ -51,6 +51,11 @@ export interface CsEngine extends Engine {
   dynamicResolution: boolean;
   /** The factor dynamic resolution currently applies, 0.6..1. */
   readonly dynScale: number;
+  /**
+   * Compile the materials of one object that is about to be added to the scene (a fire, a flare,
+   * a model loaded mid-game) so its first frame does not hitch. Safe while frames are running.
+   */
+  compile(object: THREE.Object3D): Promise<void>;
 }
 
 const LOST_KEY = 'cs.gfx.lost';
@@ -345,6 +350,16 @@ class EngineImpl implements CsEngine {
     }
   }
 
+  async compile(object: THREE.Object3D): Promise<void> {
+    if (this.lost || this.disposed) return;
+    try {
+      object.updateMatrixWorld(true);
+      await this.post.compile(object);
+    } catch (e) {
+      console.error('[engine] compile failed', e);
+    }
+  }
+
   async warmup(): Promise<void> {
     if (this.lost || this.disposed) return;
     this.camera.updateMatrixWorld();
@@ -435,6 +450,14 @@ export async function createEngine(canvas: HTMLCanvasElement, opts: { quality: Q
   // Reversed depth: always on WebGPU; on WebGL2 it needs EXT_clip_control.
   const reversed = opts.depth === 'standard' ? false : gl ? gl.clipControl : true;
 
+  // Chrome on Windows ignores the adapter power preference and warns about it on every page
+  // load; elsewhere (dual-GPU Macs and Linux laptops) it picks the discrete GPU.
+  let windows = false;
+  try {
+    windows = /Windows/i.test(navigator.userAgent);
+  } catch {
+    /* no navigator */
+  }
   const params = {
     canvas,
     antialias: false, // the scene is drawn into the post pipeline's own target
@@ -443,7 +466,7 @@ export async function createEngine(canvas: HTMLCanvasElement, opts: { quality: Q
     forceWebGL,
     reversedDepthBuffer: reversed,
     outputBufferType: hdr ? THREE.HalfFloatType : THREE.UnsignedByteType,
-    powerPreference: 'high-performance',
+    powerPreference: windows ? undefined : 'high-performance',
     trackTimestamp: opts.gpuTiming === true,
   };
   const renderer = new THREE.WebGPURenderer(params as any);

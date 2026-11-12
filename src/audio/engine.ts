@@ -6,7 +6,8 @@
 //   bus.ambience + bus.sfx + reverb returns -> body filter (cold) -> width -> duck -> sum
 //   bus.music -> duck (less) -> sum          bus.ui -> sum
 //   sum -> compressor -> make-up -> soft limiter -> master volume -> out
-import { type Ctx, type Kit, type Space, Scope, clamp, lerp, limiterCurve, makeBuffers, makeIR, makeWaves, mulberry, smooth, xlerp } from './dsp';
+import { type Ctx, type Kit, type Space, Scope, clamp, dB, lerp, limiterCurve, makeBuffers, makeIR, makeWaves, mulberry, smooth, xlerp } from './dsp';
+import { MIX } from './mix';
 
 /** body: the listener's own breath, heart and teeth. It bypasses the cold filter: as the world dulls, the body is what is left. */
 export type BusName = 'sfx' | 'ui' | 'ambience' | 'body';
@@ -92,7 +93,10 @@ interface Voice {
   end: number;
   born: number;
   pri: number;
+  /** caller's gain times the mix trim */
   level: number;
+  /** the mix table's level for this sound (linear) */
+  trim: number;
   pos: Vec3 | null;
   loop: boolean;
   /** taken by the voice cap before it was done */
@@ -108,7 +112,10 @@ export interface EngineLoop {
   readonly spatial: boolean;
 }
 
-const COMP = { threshold: -15, knee: 10, ratio: 6, attack: 0.004, release: 0.22 };
+// Glue and safety, not loudness: below about -15 dBFS the master is untouched, so the bed and the
+// small close sounds keep their dynamics; a shot or a stack of voices is held down and the soft
+// limiter after it catches what the 3 ms attack lets through.
+const COMP = { threshold: -12, knee: 6, ratio: 4, attack: 0.003, release: 0.25 };
 
 function setupComp(c: DynamicsCompressorNode): void {
   c.threshold.value = COMP.threshold;
@@ -124,7 +131,8 @@ function setupComp(c: DynamicsCompressorNode): void {
  */
 export async function measureCompGain(sampleRate: number): Promise<number> {
   try {
-    const n = Math.floor(sampleRate * 0.4);
+    // the node settles over the first ~0.3 s of a context: measure the last third of 0.75 s
+    const n = Math.floor(sampleRate * 0.75);
     const oc = new OfflineAudioContext(1, n, sampleRate);
     const o = oc.createOscillator();
     o.frequency.value = 440;
@@ -136,7 +144,7 @@ export async function measureCompGain(sampleRate: number): Promise<number> {
     o.start();
     const d = (await oc.startRendering()).getChannelData(0);
     let s = 0;
-    const from = Math.floor(n * 0.6);
+    const from = Math.floor(n * 0.66);
     for (let i = from; i < n; i++) s += d[i] * d[i];
     const rms = Math.sqrt(s / (n - from));
     const k = rms / (0.02 * Math.SQRT1_2);
@@ -247,6 +255,12 @@ export class Engine {
     this.musicVol.connect(this.raw);
     uiVol.connect(this.raw);
 
+    // nothing under 25 Hz reaches the dynamics: thumps and shaped pulses carry subsonic energy and
+    // offsets that no speaker plays and that would only pump the compressor
+    const hpf = ctx.createBiquadFilter();
+    hpf.type = 'highpass';
+    hpf.frequency.value = 25;
+    hpf.Q.value = 0.707;
     const comp = ctx.createDynamicsCompressor();
     setupComp(comp);
     this.makeup = G(1 / (o.compGain ?? 1.6));
@@ -255,7 +269,7 @@ export class Engine {
     const lim = ctx.createWaveShaper();
     lim.curve = limiterCurve();
     this.masterVol = G();
-    this.raw.connect(comp).connect(this.makeup).connect(half).connect(lim).connect(this.masterVol);
+    this.raw.connect(hpf).connect(comp).connect(this.makeup).connect(half).connect(lim).connect(this.masterVol);
     this.masterVol.connect(o.dest ?? ctx.destination);
     if (!this.offline) {
       this.analyser = ctx.createAnalyser();
@@ -264,10 +278,14 @@ export class Engine {
       this.meterBuf = new Float32Array(this.analyser.fftSize);
     }
 
-    // reverbs: sends are mono taps of each voice, returns land on the sfx bus
+    // reverbs: sends are mono taps of each voice, returns land on the sfx bus. The impulse
+    // responses carry unit energy, so a send of 1 into a return of 1 gives back as much power as
+    // went in: the returns here set the wet level of a send of 1.
     this.localIn = G();
     this.farIn = G();
-    const ret: Record<Space, number> = { room: 0.55, cave: 0.8, mountain: 1 };
+    this.wet = G();
+    this.wet.connect(this.bus.sfx);
+    const ret: Record<Space, number> = { room: 0.45, cave: 0.6, mountain: 0.5 };
     for (const k of ['room', 'cave', 'mountain'] as Space[]) {
       const conv = ctx.createConvolver();
       conv.normalize = false;
@@ -275,7 +293,7 @@ export class Engine {
       const far = G(0);
       this.localIn.connect(local).connect(conv);
       this.farIn.connect(far).connect(conv);
-      conv.connect(G(ret[k])).connect(this.bus.sfx);
+      conv.connect(G(ret[k])).connect(this.wet);
       this.spaces[k] = { conv, local, far };
     }
     this.setEnv(0, 0, 0, 0);
@@ -283,6 +301,13 @@ export class Engine {
   }
 
   private sfxVolUi: GainNode;
+  /** every reverb return passes through here */
+  private wet: GainNode;
+
+  /** Scale all reverb returns (1 normal, 0 dry: the check tool measures voices without their space). */
+  setWet(k: number): void {
+    this.wet.gain.value = Math.max(0, k);
+  }
 
   /** Impulse responses take a moment to compute: live, do them one per task after the unlock gesture. */
   buildSpaces(): void {
@@ -554,7 +579,8 @@ export class Engine {
     const pos = spatial ? ([o.pos![0], o.pos![1], o.pos![2]] as Vec3) : null;
     const dist = pos ? Math.hypot(pos[0] - this.L.x, pos[1] - this.L.y, pos[2] - this.L.z) : 0;
     const bus = this.bus[def.bus ?? 'sfx'];
-    const v: Voice = { name, def, strip, scope, bus, end: Infinity, born: now, pri: def.pri ?? 1, level: Math.max(0, o.gain ?? 1), pos, loop, stolen: false };
+    const trim = dB(MIX[name] ?? 0);
+    const v: Voice = { name, def, strip, scope, bus, end: Infinity, born: now, pri: def.pri ?? 1, level: Math.max(0, o.gain ?? 1) * trim, trim, pos, loop, stolen: false };
     let dur: number;
     try {
       dur = build(scope, { dist, spatial, a: o.a ?? 0, b: o.b ?? 0 });
@@ -572,8 +598,11 @@ export class Engine {
     return v;
   }
 
-  play(name: string, def: SoundDef, o: PlayOpts = {}): void {
-    this.start(name, def, o, false, (s, x) => def.build(s, x));
+  /** Returns the length the builder asked for (seconds), or null when the voice cap or de-duplication dropped it. */
+  play(name: string, def: SoundDef, o: PlayOpts = {}): number | null {
+    let dur: number | null = null;
+    this.start(name, def, o, false, (s, x) => (dur = def.build(s, x)));
+    return dur;
   }
 
   loop(name: string, def: LoopDef, o: PlayOpts & { param?: number } = {}): EngineLoop | null {
@@ -601,7 +630,7 @@ export class Engine {
           v.pos[1] = p.pos[1];
           v.pos[2] = p.pos[2];
         }
-        if (p.gain !== undefined) v.level = Math.max(0, p.gain);
+        if (p.gain !== undefined) v.level = Math.max(0, p.gain) * v.trim;
         if (p.pos || p.gain !== undefined) this.place(v, now, 0.06);
         if (p.pitch !== undefined) {
           const cents = 1200 * Math.log2(clamp(p.pitch, 0.25, 4));

@@ -41,6 +41,7 @@ const TEXT = `
 mood title
 tempo 44
 fade 5
+level -2
 order call answer echo full
 
 phrase call rest 5..7
@@ -64,24 +65,25 @@ phrase full rest 12..16
 mood calm
 tempo 40
 fade 5
+level 1.5
 order a b c d e
 
-phrase a rest 18..26
+phrase a rest 22..30
   piano  p  D3:2 A3:2 E4:6
 
-phrase b rest 20..28
+phrase b rest 24..32
   glass  pp D3+A3:10
   piano  pp -:4 A4:2 D5:6
 
-phrase c rest 20..28
+phrase c rest 24..32
   piano  p  A2:2 E4:3 D5:7
   ice    @0.6 pp -:6 A6:6
 
-phrase d rest 18..26
+phrase d rest 22..30
   cello  pp D2:10
   piano  p  -:3 F4:2 E4:2 A4:5
 
-phrase e rest 22..30
+phrase e rest 26..34
   piano  pp D5:3 A3:7
 
 # ---------------------------------------------------------------------------------------------
@@ -90,6 +92,7 @@ phrase e rest 22..30
 mood cold
 tempo 42
 fade 5
+level -1
 order frag1 pull1 frag2 pull2 pull3
 
 phrase frag1 rest 8..11
@@ -105,7 +108,7 @@ phrase frag2 rest 10..14
 
 phrase pull2 rest 9..13
   cello  p  F3:2 E3:6
-  glass  pp -:2 A2+E3:8
+  glass  pp -:2 A3+E4:8
 
 phrase pull3 rest 12..17
   cello  mp Eb3:3 D3:7
@@ -116,22 +119,23 @@ phrase pull3 rest 12..17
 mood night
 tempo 36
 fade 6
+level 6
 order a b c d e
 
-phrase a rest 16..24
+phrase a rest 22..30
   ice    pp A6:4 D7:6
 
-phrase b rest 18..26
+phrase b rest 24..32
   ice    pp D6:8
 
-phrase c rest 20..28
+phrase c rest 26..34
   ice    pp E7:2 D7:2 A6:6
   glass  @0.5 ppp -:4 D4:8
 
-phrase d rest 18..26
+phrase d rest 24..32
   ice    pp A6:3 -:3 Bb6:1 A6:5
 
-phrase e rest 22..30
+phrase e rest 28..36
   ice    pp D7:8
   piano  @0.7 pp -:3 D5:5
 
@@ -142,6 +146,7 @@ mood stalked
 tempo 60
 fade 3
 wait 5
+level -2
 order in p1 | p2 p1 p3 p1 p4 p1
 
 phrase in len 8
@@ -152,11 +157,11 @@ phrase p1 len 8
 
 phrase p2 len 8
   drum   [ mp D2:.32 p D2:.68 ]*8
-  cello.pont pp -:1 A3:6
+  cello.pont p  -:1 A3:6
 
 phrase p3 len 8
   drum   [ mp D2:.32 p D2:.68 ]*8
-  cello.pont pp -:1 A3+Bb3:6
+  cello.pont p  -:1 A3+Bb3:6
   cello  @0.6 pp D2:8
 
 phrase p4 len 8
@@ -166,39 +171,44 @@ phrase p4 len 8
 
 # ---------------------------------------------------------------------------------------------
 # attack: the pulse doubles. Clusters of the two semitones (D Eb, A Bb), short and loud.
-# Then it cuts out; if the fight goes on, only the pulse comes back.
+# Then it cuts out; if the fight goes on, only the pulse comes back. The grinding seconds are
+# kept in the middle of the range; underneath them the bass is a bare fifth, so the low end hits
+# instead of turning to mud.
 mood attack
 tempo 120
 enter now 0.3
 leave now
 fade 0.35
+level -6
 order hit drive hit2 drive cut | drive cut
 
 phrase hit len 16
-  drum   [ f D2:1 mf D2:1 mf D2:1 mf D2:1 ]*4
-  cello.pont ff D3+Eb3+A3+Bb3:3 -:5 f D3+Eb3:3
-  piano  f  D2+Eb2+A2:1 -:7 mf D2+Eb2:1
-  brass  f  A2+Bb2:4
+  drum   [ f D2:1 mp D2:1 mf D2:1 mp D2:1 ]*4
+  cello.pont ff D3+Eb3+A3+Bb3:3 -:5 f D4+Eb4:3
+  piano  mp D2+A2+D4+Eb4:1 -:7 p D2+A3+Bb3:1
+  brass  f  D3+A3+Bb3:4
 
 phrase drive len 16
-  drum   [ f D2:1 mf D2:1 ]*8
+  drum   [ f D2:1 mp D2:1 ]*8
   cello.pont mf -:4 A3+Bb3:4 -:4 E4+F4:4
 
 phrase hit2 len 16
-  drum   [ ff D2:1 mf D2:.5 mf D2:.5 f D2:1 mf D2:1 ]*4
-  brass  f  D3+Eb3:3 -:5 f A2+Bb2+Eb3:4
-  piano  ff D2+Eb2+Bb2:1 -:7 f D2+A2+Bb2:1
+  drum   [ ff D2:1 mp D2:.5 mp D2:.5 mf D2:1 mp D2:1 ]*4
+  brass  f  D3+A3+Eb4:3 -:5 f A2+E3+Bb3:4
+  piano  mf D2+Bb2+Eb4:1 -:7 mp D2+A2+Bb3:1
   cello.pont f -:8 D4+Eb4+A4:4
 
 phrase cut len 24
 
 # ---------------------------------------------------------------------------------------------
 # whiteout: a wall. Three voices in close position move one at a time by step, very slowly;
-# something always holds while something else gives way. It never rests.
+# something always holds while something else gives way. It never rests. The cello holds a
+# pedal on its lowest string: D, then the motif's semitone (Bb falling to A) an octave up.
 mood whiteout
 tempo 40
 fade 7
 wait 6
+level -4.5
 order w1 w2 w3 w2
 
 phrase w1 len 24
@@ -206,15 +216,15 @@ phrase w1 len 24
   glass  p  -:3 F3:8 E3:8 F3:5
   glass  p  -:5 D3:11 C3:8
   glass  @0.5 pp -:8 A4:8 G4:8
-  cello  pp D2:12 A1:12
+  cello  pp D2:12 A2:12
   brass  @0.7 pp -:8 D3+A3:10
 
 phrase w2 len 24
   glass  p  G3:8 A3:8 Bb3:8
   glass  p  E3:5 F3:8 G3:8 F3:3
-  glass  p  C3:3 D3:10 D3:8 E3:3
+  glass  p  D3:13 D3:8 E3:3
   glass  @0.5 pp -:4 G4:8 A4:8
-  cello  pp Bb1:12 A1:12
+  cello  pp Bb2:12 A2:12
   brass  @0.7 pp -:10 Bb2+F3:10
 
 phrase w3 len 24
@@ -230,6 +240,7 @@ phrase w3 len 24
 mood shelter
 tempo 50
 fade 5
+level 2
 order a b c d
 
 phrase a rest 10..14
@@ -254,6 +265,7 @@ phrase d rest 14..18
 mood tower
 tempo 48
 fade 5
+level -2.5
 order t1 t2 t3 t4
 
 phrase t1 rest 5..8
@@ -284,6 +296,7 @@ mood holdout
 tempo 60
 fade 3
 wait 5
+level -6
 order s1a s1b s2a s2b s3a s3b s4a s4b
 
 phrase s1a len 16 when 0..0.25
@@ -292,7 +305,7 @@ phrase s1a len 16 when 0..0.25
 
 phrase s1b len 16 when 0..0.25
   drum   [ p D2:.32 pp D2:1.68 ]*8
-  cello  pp A1:14
+  cello  pp A2:14
 
 phrase s2a len 16 when 0.25..0.5
   drum   [ mp D2:.32 p D2:1.68 ]*8
@@ -302,7 +315,7 @@ phrase s2a len 16 when 0.25..0.5
 phrase s2b len 16 when 0.25..0.5
   drum   [ mp D2:.32 p D2:1.68 ]*8
   brass  p  -:2 F3+C4:10
-  cello  p  Bb1:8 A1:7
+  cello  p  Bb2:8 A2:7
 
 phrase s3a len 16 when 0.5..0.75
   drum   [ mf D2:.32 mp D2:.68 ]*16
@@ -314,18 +327,20 @@ phrase s3b len 16 when 0.5..0.75
   brass  mp G3+D4:8 A3+E4:8
   cello  mp F3:3 C4:3 | D4:1 C4:5
 
+# At the top step every player has a register of its own: the drum below, the brass and the
+# cello in the middle, the glass above them, and the piano striking bells over everything.
 phrase s4a len 16 when 0.75..1.01
   drum   [ f D2:.5 mp D2:.5 ]*16
   brass  mf D3+A3+D4:8 F3+C4+F4:8
   cello  mf D3:3 A3:3 | Bb3:1 A3:3 F3:2 | E3:4
-  piano  mf D2+D3:8 Bb2+Bb3:8
+  piano  mf D5+A5:8 F5+C6:8
   glass  p  A4:16
 
 phrase s4b len 16 when 0.75..1.01
   drum   [ f D2:.5 mp D2:.5 ]*16
   brass  f  G3+D4+G4:8 A3+E4+A4:8
   cello  mf A3:3 E4:3 | F4:1 E4:3 D4:2 | E4:4
-  piano  mf G2+G3:8 A2+A3:8
+  piano  mf G5+D6:8 A5+E6:8
   glass  p  D5:16
 
 # ---------------------------------------------------------------------------------------------
@@ -333,6 +348,7 @@ phrase s4b len 16 when 0.75..1.01
 mood rescue
 tempo 52
 fade 6
+level -5
 order r1 r2 | r3 r2
 
 phrase r1 rest 4..6
@@ -376,6 +392,11 @@ export interface ScoreNote {
   vel: number;
   /** Index inside a chord (0 for the lowest); a piano rolls its chords slightly. */
   chord: number;
+  /**
+   * Beats after its onset at which a piano's damper falls on it (Infinity: it rings on with the
+   * pedal). See `pedal` below.
+   */
+  damp: number;
 }
 
 export interface ScoreLine {
@@ -495,11 +516,40 @@ function parseLine(words: string[], where: string): { line: ScoreLine; len: numb
         return midi;
       });
       pitches.sort((a, b) => a - b);
-      pitches.forEach((midi, chord) => notes.push({ beat, dur, midi, vel, chord }));
+      pitches.forEach((midi, chord) => notes.push({ beat, dur, midi, vel, chord, damp: Infinity }));
     }
     beat += dur;
   }
+  pedal(notes);
   return { line: { player: who as Player, colour, min, max, notes }, len: beat };
+}
+
+/** Below this (C3) overlapping notes turn to mud: the pedal is changed at every new note. */
+const BASS = 48;
+
+/**
+ * How a pianist pedals a line: notes ring on into each other (the felt piano's wash) until the
+ * line moves by step from one, or repeats it, or anything at all follows a note in the bass;
+ * then the damper falls on it as the next note is struck. Leaps and chords may overlap; a step
+ * or a bass line held under the pedal would smear into a cluster.
+ */
+function pedal(notes: ScoreNote[]): void {
+  for (let i = 0; i < notes.length; ) {
+    let j = i;
+    while (j < notes.length && notes[j].beat === notes[i].beat) j++;
+    if (j === notes.length) break;
+    let k = j;
+    while (k < notes.length && notes[k].beat === notes[j].beat) k++;
+    for (let a = i; a < j; a++) {
+      for (let b = j; b < k; b++) {
+        if (notes[a].midi < BASS || Math.abs(notes[a].midi - notes[b].midi) <= 2) {
+          notes[a].damp = notes[j].beat - notes[a].beat;
+          break;
+        }
+      }
+    }
+    i = j;
+  }
 }
 
 export function parseScore(text: string): Map<MusicMood, MoodScore> {

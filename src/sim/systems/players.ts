@@ -31,10 +31,18 @@ export const players: System = {
   name: 'players',
 
   join(_ctx, p) {
-    // What everyone crawls out of the fuselage with.
+    // What everyone crawls out of the fuselage with. (join runs only for a new body: a client that
+    // takes back a player from a save is handed the existing entity, pack and all.)
     p.inv.flashlight = 1;
     p.inv.matches = 6;
     p.held = 'hands';
+  },
+
+  leave(ctx, p) {
+    const k = keysOf(p.id);
+    delete ctx.state.vars[k.stride];
+    delete ctx.state.vars[k.foot];
+    keyCache.delete(p.id);
   },
 
   step(ctx) {

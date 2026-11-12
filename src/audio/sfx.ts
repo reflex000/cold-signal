@@ -82,32 +82,42 @@ function grunt(s: Scope, t: number, f0: number, f1: number, dur: number, g: numb
   });
 }
 
-/** A wolf's howl: quick rise, a long hold that drifts and sometimes breaks upward, a falling end. */
+/**
+ * A wolf's howl: a slow rise, a long hold that is never still (it wanders a few percent and tends
+ * to climb), often a break where the voice flips up and sometimes back, then the fall. Close to a
+ * pure tone: the fundamental carries it, a few harmonics colour it, nothing buzzes above 2.5 kHz.
+ */
 function howlCall(s: Scope, t: number, f0: number, dur: number, g: number, to?: Dest): void {
-  const f: [number, number][] = [[0, f0 * 0.6], [0.07, f0 * 0.86], [0.17, f0]];
-  let u = 0.17;
+  const f: [number, number][] = [[0, f0 * 0.58], [0.06, f0 * 0.8], [0.16, f0 * 0.97]];
   let cur = f0;
-  if (s.rnd() < 0.65) {
-    const b = s.rr(0.3, 0.52);
-    f.push([b, cur * s.rr(0.99, 1.03)]);
-    cur *= s.rr(1.1, 1.22);
-    f.push([b + 0.012, cur]);
-    u = b + 0.012;
-    if (s.rnd() < 0.5) {
-      const e = u + s.rr(0.1, 0.18);
-      f.push([e, cur * 0.99]);
-      cur = f0 * s.rr(0.97, 1.02);
-      f.push([e + 0.015, cur]);
-      u = e + 0.015;
+  let breakAt = s.rnd() < 0.65 ? s.rr(0.3, 0.5) : 9;
+  let backAt = 9;
+  for (let u = 0.22; u < 0.7; u += s.rr(0.06, 0.09)) {
+    if (u >= breakAt) {
+      f.push([u, cur]);
+      cur *= s.rr(1.1, 1.2);
+      f.push([u + 0.012, cur]);
+      breakAt = 9;
+      if (s.rnd() < 0.5) backAt = u + s.rr(0.1, 0.18);
+    } else if (u >= backAt) {
+      f.push([u, cur]);
+      cur /= s.rr(1.08, 1.15);
+      f.push([u + 0.015, cur]);
+      backAt = 9;
+    } else {
+      cur *= 1 + s.rr(-0.022, 0.032);
+      f.push([u, cur]);
     }
   }
-  f.push([Math.max(u + 0.05, 0.72), cur * s.rr(0.94, 1.0)], [0.88, cur * 0.82], [1, cur * 0.55]);
+  f.push([0.74, cur * s.rr(0.96, 1.01)], [0.88, cur * 0.83], [1, cur * 0.55]);
+  const lp = s.filt('lowpass', 2500, 0.6);
+  lp.connect((to as AudioNode) ?? s.out);
   s.voice({
     t, dur, f,
-    formants: [[520, 2.5, 1], [1150, 4, 0.55], [2350, 5, 0.3], [3400, 6, 0.1]],
-    chest: 0.35, chestHz: 900, breath: 0.03, breathHz: 2200,
+    formants: [[520, 2.5, 1], [1150, 4, 0.32], [2350, 5, 0.12], [3400, 6, 0.04]],
+    chest: 0.45, chestHz: 800, breath: 0.03, breathHz: 2200,
     vibRate: s.rr(4.8, 6), vibDepth: f0 * 0.007, jitter: f0 * 0.012,
-    amp: [[0, 0], [0.06, 0.55], [0.2, 1], [0.7, 0.9], [0.9, 0.4], [1, 0]], g, to,
+    amp: [[0, 0], [0.06, 0.55], [0.2, 1], [0.7, 0.9], [0.9, 0.4], [1, 0]], g, to: lp,
   });
 }
 
@@ -422,11 +432,12 @@ const defs = {
     s.tone({ t, f: 170, f1: 40, ft: 0.1, a: 0.001, d: 0.3, g: 1.1, to: sh });
     s.burst({ t, kind: 'pink', type: 'lowpass', f: 2600, f1: 220, ft: 0.25, a: 0.001, d: 0.4, g: 2.4, to: sh });
     s.modes({ t, f: [2350, 3700, 5200], d: 0.05, gain: 0.05 * (1 - far) });
-    // then the mountain answers: the slope across the valley, the far wall, the ridge
+    // then the mountain answers. The far send carries the distinct echoes (the impulse response's
+    // far walls); under them, a faint low roll of the sound going round the valley
     const roll: Pts = [[0, 0], [0.32, 0], [0.5, 0.3], [0.75, 0.12], [0.95, 0.26], [1.3, 0.08], [1.6, 0.18], [2.2, 0.05], [2.7, 0.1], [3.6, 0.02], [4.5, 0]];
-    s.nz({ t, kind: 'brown', type: 'lowpass', f: [[0, 700], [4.5, 140]], q: 0.6, amp: scale(roll, 1.5) });
-    s.nz({ t, kind: 'pink', f: [[0, 900], [4.5, 300]], q: 0.6, amp: scale(roll, 0.35) });
-    s.far = 1.6 + far;
+    s.nz({ t, kind: 'brown', type: 'lowpass', f: [[0, 600], [4.5, 160]], q: 0.6, amp: scale(roll, 0.55) });
+    s.nz({ t, kind: 'pink', f: [[0, 800], [4.5, 300]], q: 0.6, amp: scale(roll, 0.22) });
+    s.far = 1.8 + far;
     return 4.6;
   } },
   rifle_bolt: { pri: 2, ref: 2.5, build(s) {
@@ -523,7 +534,8 @@ const defs = {
     s.nz({ kind: 'crunch', f: [[0, 2600], [0.13, 4600]], q: 1.2, amp: [[0, 0], [0.02, 0.8], [0.11, 1.2], [0.14, 0.2], [0.16, 0]], rate: 1.5 });
     s.nz({ t: s.t + 0.12, type: 'highpass', f: [[0, 1500], [0.08, 2600], [0.5, 3600]], amp: [[0, 0], [0.03, 0.75], [0.15, 0.3], [0.55, 0]] });
     s.nz({ t: s.t + 0.12, kind: 'pink', f: [[0, 500], [0.1, 900], [0.4, 600]], q: 0.8, amp: [[0, 0], [0.04, 0.9], [0.4, 0]] });
-    s.nz({ t: s.t + 0.14, kind: 'crackle', type: 'highpass', f: 1800, amp: [[0, 3], [0.5, 0]] });
+    // the head spits as it burns down (the crackle texture peaks at full scale: keep it small)
+    s.nz({ t: s.t + 0.14, kind: 'crackle', type: 'highpass', f: 1800, amp: [[0, 0.9], [0.5, 0]] });
     return 0.75;
   } },
   match_fail: { pri: 2, ref: 2, build(s) {
@@ -568,15 +580,17 @@ const defs = {
   } },
 
   // ---------------------------------------------------------------- wolves
-  howl: { pri: 3, ref: 30, local: 0.4, far: 1.1, build(s, x) {
+  howl: { pri: 3, ref: 30, local: 0.2, far: 0.6, build(s, x) {
     const dur = s.rr(3.2, 5.2);
     const far = smooth(120, 350, x.dist);
     howlCall(s, s.t, s.rr(330, 470), dur, 0.42);
-    s.far = 1.1 + far * 1.2;
+    // a held tone into the far walls comes back strong (each echo is a copy of the hold): keep the
+    // near send modest, and let distance turn it into mostly echo
+    s.far = 0.6 + far * 1.4;
     return dur + 0.2;
   } },
   /** The pack somewhere on the mountain: several voices at different pitches, dulled by the air and answered by the far walls. */
-  howl_far: { pri: 2, ref: 60, far: 2.6, air: 0.3, build(s) {
+  howl_far: { pri: 2, ref: 60, far: 1.6, air: 0.3, build(s) {
     const lp = s.filt('lowpass', 1500, 0.6);
     s.chain(lp, s.filt('highpass', 240, 0.7)).connect(s.out);
     const n = s.pick([2, 3, 3, 4]);

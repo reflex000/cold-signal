@@ -28,7 +28,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { ATMOS, U } from '../src/gfx/shared';
 import type { PropInst } from '../src/world/types';
 import { createPropsSystem } from '../src/models/instances';
-import { PAL, type ModelDef } from '../src/models/kit';
+import { PAL, fbm3, type ModelDef } from '../src/models/kit';
 import { PROP_U } from '../src/models/material';
 import { getModel, hasModel, listModels, modelKey, modelMeta, type ModelOpts } from '../src/models/registry';
 
@@ -88,8 +88,12 @@ function parseViews(s: string): { az: number; el: number }[] {
 }
 
 // ------------------------------------------------------------------------------------------
-// Light presets. Units and values follow dev/bench.ts (ENGINE) so a model judged here looks the
-// same in the game: a white surface facing a light of colour 3.14 has radiance 1; AgX tone map.
+// Light presets. Units follow dev/bench.ts (ENGINE): a white surface facing a light of colour
+// 3.14 has radiance 1; AgX tone map. Sun, sky gradient, fog and exposure are the bench's. The
+// hemisphere is not: over sunlit snow the ground bounce is the strongest ambient there is
+// (snow albedo 0.85 times the sun on a horizontal surface), so `ground` here is that bounce and
+// `sky` the open-sky irradiance. Without it every face turned from the sun reads black, which
+// is wrong for a snowfield (real sun : shade on snow is about 5 : 1, not 15 : 1).
 // ------------------------------------------------------------------------------------------
 
 type LightName = 'day' | 'dusk' | 'night' | 'storm';
@@ -115,21 +119,21 @@ const LIGHTS: Record<LightName, LightPreset> = {
   // Clear winter afternoon, low sun from the front left of the models.
   day: {
     sunAz: 215, sunEl: 24, sun: [10.5, 8.9, 6.9], moon: false,
-    sky: [0.5, 0.72, 1.15], ground: [0.5, 0.55, 0.66],
+    sky: [0.8, 1.05, 1.55], ground: [2.0, 1.88, 1.8],
     zenith: [0.1, 0.24, 0.62], horizon: [0.62, 0.78, 1.02], glow: [1.6, 1.25, 0.8],
     fog: [0.6, 0.75, 0.98], fogDensity: 0.00035, exposure: 0.62, night: 0, storm: 0, snowfall: 0, wind: 3,
   },
   // Sun on the horizon: cream light, long blue shadows.
   dusk: {
     sunAz: 236, sunEl: 7, sun: [5.2, 2.7, 1.25], moon: false,
-    sky: [0.2, 0.3, 0.6], ground: [0.16, 0.19, 0.3],
+    sky: [0.24, 0.34, 0.66], ground: [0.55, 0.45, 0.5],
     zenith: [0.035, 0.07, 0.24], horizon: [0.6, 0.36, 0.3], glow: [2.6, 1.1, 0.4],
     fog: [0.32, 0.31, 0.43], fogDensity: 0.0006, exposure: 1.5, night: 0.25, storm: 0, snowfall: 0, wind: 4,
   },
   // Clear night, half moon. Dark: fire and lamps are the light.
   night: {
     sunAz: 140, sunEl: 38, sun: [0.07, 0.095, 0.15], moon: true,
-    sky: [0.008, 0.012, 0.026], ground: [0.004, 0.005, 0.009],
+    sky: [0.008, 0.012, 0.026], ground: [0.03, 0.04, 0.066],
     zenith: [0.0015, 0.003, 0.009], horizon: [0.006, 0.01, 0.022], glow: [0.01, 0.014, 0.022],
     fog: [0.005, 0.008, 0.017], fogDensity: 0.0009, exposure: 4.2, night: 1, storm: 0, snowfall: 0, wind: 2,
   },
@@ -343,24 +347,43 @@ async function main(): Promise<void> {
     scene.fogNode = fog(U.fogColor, float(1).sub(dist.mul(U.fogDensity).mul(h.mul(U.fogHeight).negate().exp()).negate().exp()));
   }
 
-  // snowy ground: never white, a little uneven so shadows have something to fall on
+  // snowy ground: never white. Flat where the models stand, wind-drifted around them so the
+  // light has something to roll over, a far disc for the horizon.
   {
     const mat = new THREE.MeshStandardNodeMaterial({ roughness: 0.9, metalness: 0 });
     const n = mx_noise_float(positionWorld.xz.mul(0.6)).mul(0.5).add(mx_noise_float(positionWorld.xz.mul(4.3)).mul(0.3)).add(mx_noise_float(positionWorld.xz.mul(37)).mul(0.2));
     const sunFacing = max(dot(normalWorld, vec3(U.sunDir)), 0.0);
     mat.colorNode = vec3(0.86, 0.885, 0.93).mul(float(0.95).add(n.mul(0.05))).mul(mix(vec3(0.84, 0.91, 1.0), vec3(1.0, 0.985, 0.95), sunFacing));
     mat.fog = true;
-    const g = new THREE.Mesh(new THREE.CircleGeometry(900, 64).rotateX(-Math.PI / 2), mat);
+    const size = Math.max(24, radius * 10);
+    const geo = new THREE.PlaneGeometry(size, size, 192, 192).rotateX(-Math.PI / 2).translate(centre.x, 0, centre.z);
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const flatR = radius * 1.05 + 0.3;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), z = pos.getZ(i);
+      const d = Math.hypot(x - centre.x, z - centre.z);
+      const k = Math.min(1, Math.max(0, (d - flatR) / (1.5 + radius)));
+      const edge = Math.min(1, Math.max(0, (size * 0.5 - Math.max(Math.abs(x - centre.x), Math.abs(z - centre.z))) / (size * 0.08)));
+      // drifts stretched across the wind (windDir is roughly +X), small ripples on top
+      const h = fbm3(11, x * 0.16, 0, z * 0.32, 3) * 0.55 + fbm3(5, x * 1.3, 0, z * 2.2, 2) * 0.05;
+      pos.setY(i, h * k * edge - 0.02 * (1 - edge));
+    }
+    geo.computeVertexNormals();
+    const g = new THREE.Mesh(geo, mat);
     g.receiveShadow = true;
     g.name = 'ground';
-    scene.add(g);
+    const far = new THREE.Mesh(new THREE.CircleGeometry(900, 48).rotateX(-Math.PI / 2).translate(centre.x, -0.02, centre.z), mat);
+    far.receiveShadow = true;
+    scene.add(g, far);
   }
 
   // stand-in fire and lamp light, so a model can be judged by its own glow
   if (flag('fire', true)) {
+    // about 2 lux-equivalents at a metre from a full campfire: a warm pool, not a second sun
     for (const e of props.emitters('fire')) {
       if (e.def.lit === false) continue;
-      const p = new THREE.PointLight(new THREE.Color(PAL.fire[0], PAL.fire[1], PAL.fire[2]), 9 * Math.max(0.4, Math.min(3, e.size / 0.2)), 9, 2);
+      const k = Math.max(0.3, Math.min(2, e.size / 0.2)) * (typeof e.def.strength === 'number' ? Math.max(0.2, e.def.strength) : 1);
+      const p = new THREE.PointLight(new THREE.Color(PAL.fire[0], PAL.fire[1], PAL.fire[2]), 2.2 * k, 7, 2);
       p.position.copy(e.position).addScaledVector(e.dir, 0.12 + e.size);
       scene.add(p);
     }

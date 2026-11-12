@@ -10,8 +10,12 @@
 // music_journey.png, music_holdout.png, music_attack.png.
 // --wav 1 also writes shots/music_<name>.wav to listen to.
 //
-// Exit code 1 when anything clips, exceeds the level the score is meant to sit at, is silent
-// when it should not be, or the page logs an error.
+// Each row also gives where the energy sits (low = below 250 Hz, body = 250-800 Hz, bright =
+// above 2.5 kHz, as shares of the total) and the most notes written to sound at once.
+//
+// Exit code 1 when anything clips, exceeds the level the score is meant to sit at, is too quiet
+// to be heard under the wind, is silent when it should not be, leaves too little silence in the
+// sparse moods (calm, night), or the page logs an error.
 import fs from 'node:fs';
 import path from 'node:path';
 import { startServer, root } from './serve.mjs';
@@ -27,8 +31,12 @@ const intensity = Number(args.intensity || 0.5);
 const wav = args.wav === '1';
 const only = args.only || (args.moods ? 'moods' : 'all');
 
-/** The score should peak near -14 dBFS; the ceiling in the mixer stops at -10.5. */
-const PEAK_MAX_DB = -12;
+/** The score should peak near -14 dBFS (where the mixer's ceiling starts to bend); it stops at -10.5. */
+const PEAK_MAX_DB = -12.5;
+/** Quieter than this at its peak, a mood is lost under the wind. */
+const PEAK_MIN_DB = -32;
+/** calm and night: most of the time is silence. */
+const SPARSE = { calm: 0.6, night: 0.6 };
 
 const JOURNEYS = [
   {
@@ -86,18 +94,23 @@ function row(name, r) {
   const players = Object.entries(r.byPlayer)
     .map(([k, v]) => `${k} ${v}`)
     .join(', ');
+  const pct = (x) => `${Math.round(x * 100)}`.padStart(3) + '%';
+  const b = r.bands;
   return (
     name.padEnd(10) +
-    `peak ${r.peakDb.toFixed(1).padStart(6)} dBFS  rms ${r.rmsDb.toFixed(1).padStart(6)} dBFS  silence ${(r.silence * 100).toFixed(0).padStart(3)}%  notes ${String(r.notes).padStart(3)}  ` +
+    `peak ${r.peakDb.toFixed(1).padStart(6)} dBFS  rms ${r.rmsDb.toFixed(1).padStart(6)} dBFS  silence ${pct(r.silence)}  notes ${String(r.notes).padStart(3)}  ` +
+    `low ${pct(b.sub + b.low)} body ${pct(b.lowmid)} bright ${pct(b.high + b.air)}  poly ${String(r.poly).padStart(2)}  ` +
     `(${players || 'none'})`
   );
 }
 
-function judge(name, r, { mustSound = true } = {}) {
+function judge(name, r, { mustSound = true, mood = '' } = {}) {
   const bad = [];
   if (r.peak >= 0.999) bad.push('CLIPS');
   if (r.peakDb > PEAK_MAX_DB) bad.push(`peak above ${PEAK_MAX_DB} dBFS`);
   if (mustSound && (r.notes === 0 || r.peakDb < -50)) bad.push('silent');
+  else if (mustSound && r.peakDb < PEAK_MIN_DB) bad.push(`peak under ${PEAK_MIN_DB} dBFS: lost under the wind`);
+  if (SPARSE[mood] !== undefined && r.silence < SPARSE[mood]) bad.push(`only ${Math.round(r.silence * 100)}% silence, wants ${SPARSE[mood] * 100}%`);
   if (!Number.isFinite(r.rmsDb)) bad.push('not a number');
   if (bad.length) {
     failed = true;
@@ -116,7 +129,7 @@ try {
       const r = await page.evaluate(([m, s, i, w]) => window.MUSIC.render([{ t: 0, mood: m, intensity: i }], s, { wav: w, title: `${m}  intensity ${i}` }), [mood, secs, intensity, wav]);
       save(mood, r);
       console.log(row(mood, r));
-      judge(mood, r);
+      judge(mood, r, { mood });
     }
     const loud = ['attack', 'holdout', 'rescue', 'tower', 'whiteout', 'stalked'].filter((m) => moods.includes(m));
     if (loud.length) console.log('\nfull intensity (level check only)');

@@ -40,6 +40,13 @@ interface RenderResult {
   silence: number;
   notes: number;
   byPlayer: Record<string, number>;
+  /**
+   * Share of the energy (0..1) by band: sub < 60 Hz, low < 250, lowmid < 800, mid < 2.5k,
+   * high < 6k, air above. Mud shows in low + lowmid, harshness in high + air.
+   */
+  bands: Record<'sub' | 'low' | 'lowmid' | 'mid' | 'high' | 'air', number>;
+  /** Most notes written to sound at once. */
+  poly: number;
   /** PNG data URL: note lanes over a log-frequency spectrogram. */
   image: string;
   /** Base64 16-bit stereo WAV when asked for. */
@@ -112,8 +119,19 @@ const F_LO = 30;
 const F_HI = 15000;
 const DB_LO = -100;
 const DB_HI = -24;
+const BAND_EDGES: [keyof RenderResult['bands'], number][] = [
+  ['sub', 60],
+  ['low', 250],
+  ['lowmid', 800],
+  ['mid', 2500],
+  ['high', 6000],
+  ['air', Infinity],
+];
 
-function drawAnalysis(mono: Float32Array, sr: number, notes: MusicNote[], cues: Cue[], title: string): string {
+/** A drum stroke is drawn as a short mark, so a pulse reads as a pulse and not as one long bar. */
+const markSeconds = (n: MusicNote): number => (n.player === 'drum' ? Math.min(n.dur, 0.12) : n.dur);
+
+function drawAnalysis(mono: Float32Array, sr: number, notes: MusicNote[], cues: Cue[], title: string): { image: string; bands: RenderResult['bands'] } {
   const W = 1500;
   const laneH = 14;
   const lanes = PLAYERS.length * laneH + 8;
@@ -137,6 +155,15 @@ function drawAnalysis(mono: Float32Array, sr: number, notes: MusicNote[], cues: 
   const img = g.createImageData(W, specH);
   const rowBin = new Float32Array(specH + 1);
   for (let y = 0; y <= specH; y++) rowBin[y] = (F_LO * Math.pow(F_HI / F_LO, 1 - y / specH) * N) / sr;
+  // Which band each FFT bin falls in, and the energy summed per band over every column.
+  const binBand = new Uint8Array(N / 2);
+  for (let i = 0; i < N / 2; i++) {
+    const f = (i * sr) / N;
+    let b = 0;
+    while (f >= BAND_EDGES[b][1]) b++;
+    binBand[i] = b;
+  }
+  const energy = new Float64Array(BAND_EDGES.length);
   for (let x = 0; x < W; x++) {
     const centre = Math.floor(((x + 0.5) / W) * mono.length);
     for (let i = 0; i < N; i++) {
@@ -145,6 +172,7 @@ function drawAnalysis(mono: Float32Array, sr: number, notes: MusicNote[], cues: 
       im[i] = 0;
     }
     fft(re, im);
+    for (let i = 1; i < N / 2; i++) energy[binBand[i]] += re[i] * re[i] + im[i] * im[i];
     for (let y = 0; y < specH; y++) {
       const b1 = rowBin[y];
       const b0 = rowBin[y + 1];
@@ -178,7 +206,7 @@ function drawAnalysis(mono: Float32Array, sr: number, notes: MusicNote[], cues: 
     for (const n of notes) {
       if (n.player !== p) continue;
       const x0 = left + (n.t / seconds) * W;
-      const w = Math.max(1.5, (n.dur / seconds) * W);
+      const w = Math.max(1.5, (markSeconds(n) / seconds) * W);
       g.fillStyle = `rgba(${r},${gg},${b},${0.35 + 0.65 * n.vel})`;
       g.fillRect(x0, y + 3, Math.min(w, left + W - x0), laneH - 6);
     }
@@ -212,7 +240,22 @@ function drawAnalysis(mono: Float32Array, sr: number, notes: MusicNote[], cues: 
   g.fillStyle = '#dfe3e6';
   g.textAlign = 'right';
   g.fillText(title, left + W, 10);
-  return canvas.toDataURL('image/png');
+  let total = 0;
+  for (const e of energy) total += e;
+  const bands = {} as RenderResult['bands'];
+  BAND_EDGES.forEach(([name], i) => (bands[name] = total > 0 ? energy[i] / total : 0));
+  return { image: canvas.toDataURL('image/png'), bands };
+}
+
+/** The most notes whose written lengths overlap at any moment. */
+function polyphony(notes: MusicNote[]): number {
+  const edges: [number, number][] = [];
+  for (const n of notes) edges.push([n.t, 1], [n.t + n.dur, -1]);
+  edges.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let now = 0;
+  let most = 0;
+  for (const [, d] of edges) most = Math.max(most, (now += d));
+  return most;
 }
 
 function wavBase64(l: Float32Array, r: Float32Array, sr: number): string {
@@ -247,11 +290,15 @@ function wavBase64(l: Float32Array, r: Float32Array, sr: number): string {
  * Render `seconds` of the score offline. `script` is a list of mood changes; the conductor is
  * updated every 0.1 s of audio time, as a game running at a poor frame rate would.
  */
-async function render(script: Cue[], seconds: number, o: { wav?: boolean; title?: string; sampleRate?: number } = {}): Promise<RenderResult> {
+async function render(
+  script: Cue[],
+  seconds: number,
+  o: { wav?: boolean; title?: string; sampleRate?: number; mute?: Player[]; image?: boolean; raw?: boolean } = {},
+): Promise<RenderResult> {
   const sr = o.sampleRate ?? 48000;
   const ctx = new OfflineAudioContext(2, Math.ceil(seconds * sr), sr);
   const notes: MusicNote[] = [];
-  const music = createMusic(ctx, ctx.destination, { onNote: (n) => notes.push(n) });
+  const music = createMusic(ctx, ctx.destination, { onNote: (n) => notes.push(n), mute: o.mute, raw: o.raw });
   const cues = [...script].sort((a, b) => a.t - b.t);
   let next = 0;
   const tick = (now: number): void => {
@@ -302,6 +349,7 @@ async function render(script: Cue[], seconds: number, o: { wav?: boolean; title?
   }
   const heard = notes.filter((n) => n.t < seconds);
   const title = o.title ?? cues.map((c) => c.mood).join(' > ');
+  const pic = drawAnalysis(mono, sr, heard, cues, title);
   return {
     seconds,
     peak,
@@ -310,7 +358,9 @@ async function render(script: Cue[], seconds: number, o: { wav?: boolean; title?
     silence: wins ? quiet / wins : 1,
     notes: heard.length,
     byPlayer,
-    image: drawAnalysis(mono, sr, heard, cues, title),
+    bands: pic.bands,
+    poly: polyphony(heard),
+    image: o.image === false ? '' : pic.image,
     wav: o.wav ? wavBase64(l, r, sr) : undefined,
   };
 }
@@ -436,7 +486,8 @@ function paint(): void {
   const nameW = 64 * dpr;
   const meterW = 46 * dpr;
   const x0 = nameW + meterW + 14 * dpr;
-  const nowX = w - 40 * dpr;
+  // Room right of the now line for what is sounding (a chord's names) and the notes' written ends.
+  const nowX = w - 120 * dpr;
   const pxPerS = (nowX - x0) / SPAN;
   const rowH = h / PLAYERS.length;
   g2.font = `300 ${13 * dpr}px "Segoe UI", "Helvetica Neue", Arial, sans-serif`;
@@ -456,10 +507,13 @@ function paint(): void {
     g2.fillStyle = '#161a1f';
     g2.fillRect(x0, y + rowH - dpr, w - x0, dpr);
     // Notes of this player: pitch maps to height inside the row (low notes low).
+    const names = new Map<number, string>();
+    let topY = Infinity;
     for (const n of roll) {
-      if (n.player !== p || n.t + n.dur < now - SPAN) continue;
+      const len = markSeconds(n);
+      if (n.player !== p || n.t + len < now - SPAN) continue;
       const xa = Math.max(x0, nowX + (n.t - now) * pxPerS);
-      const xb = Math.min(w, nowX + (n.t + n.dur - now) * pxPerS);
+      const xb = Math.min(w, nowX + (n.t + len - now) * pxPerS);
       if (xb <= xa) continue;
       const pitch = Math.min(1, Math.max(0, (n.midi - 30) / 72));
       const ny = y + rowH - 6 * dpr - pitch * (rowH - 12 * dpr);
@@ -467,10 +521,19 @@ function paint(): void {
       g2.fillStyle = `rgba(${r},${gg},${b},${(sounding ? 0.55 : 0.25) + 0.45 * n.vel})`;
       g2.fillRect(xa, ny - 1.5 * dpr, Math.max(2 * dpr, xb - xa), 3 * dpr);
       if (sounding) {
-        g2.textAlign = 'left';
-        g2.fillStyle = '#7d8791';
-        g2.fillText(midiName(n.midi), nowX + 6 * dpr, ny);
+        names.set(n.midi, midiName(n.midi));
+        topY = Math.min(topY, ny);
       }
+    }
+    if (names.size) {
+      // What the player is sounding now, low to high, just above its highest bar past the now line.
+      const text = [...names.entries()]
+        .sort((a, b2) => a[0] - b2[0])
+        .map((e) => e[1])
+        .join(' ');
+      g2.textAlign = 'left';
+      g2.fillStyle = '#7d8791';
+      g2.fillText(text, nowX + 6 * dpr, Math.max(y + 8 * dpr, topY - 9 * dpr));
     }
   });
   g2.fillStyle = '#e6a84a';

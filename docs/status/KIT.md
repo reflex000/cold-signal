@@ -7,36 +7,34 @@ Module: the model toolkit and the first models. Owner files: `src/models/kit.ts`
 
 ## State (update after every step)
 
-- [x] kit.ts (Builder, Part, Group, Path, PAL, MAT, build() with AO / sky exposure / snow push bake) — written, type-checks, NOT yet run
-- [x] registry.ts — written, type-checks
-- [x] material.ts — written; 2 type errors at line 90 (floor() result typing); NOT yet run
-- [x] instances.ts — written, type-checks, NOT yet run
-- [x] dev/models.html — written
-- [ ] dev/models.ts — the viewer (in progress)
-- [ ] tools/shot-models.mjs
-- [ ] src/models/props/: crate, barrel, luggage, campfire, stick_bundle, log_heavy, trail_marker, jerrycan, toolbox (+ index.ts importing all)
+- [x] kit.ts, registry.ts, material.ts, instances.ts RUN clean on WebGPU and WebGL2 (session 3)
+- [x] dev/models.html + dev/models.ts viewer runs on both backends; tools/shot-models.mjs works
+- [x] kit additions (session 3): Builder.each, VertexRef.mat, Paint.pith, lathe `arc`, `pillow()`, `log()`
+- [x] material (session 3): fissured bark with wear-driven peeling, growth rings for wood, AA'd thin
+      lines (`line()` / `edge()` helpers), bump slope clamp, rust that follows the vertex albedo
+- [x] all nine models written, registered, render on both backends: crate, barrel, luggage, campfire,
+      stick_bundle, log_heavy, trail_marker, jerrycan, toolbox (+ props/index.ts imports them all)
 - [ ] docs/THREE_NOTES.md section
-
-## Order of work
-
-1. viewer + shot tool + crate on screen on WebGPU and WebGL2 (`?webgl=1`); fix kit / material until clean
-2. the other eight models
-3. look: day and dusk, snow 0 and 0.8, both backends; judge harshly; iterate
-4. THREE_NOTES section; final report
+- [ ] polish pass: close-ups per model, day/dusk, snow 0/0.8, both backends; console clean
+- [ ] final report (append under "## Final report")
 
 ## Decisions / facts a successor needs
 
-- Light units follow dev/bench.ts (ENGINE): DirectionalLight colour is premultiplied irradiance
-  (day sun about [10.5, 8.9, 6.9]), exposure day 0.62 / dusk 1.5 / night 4.2 / storm 0.85, AgX.
-  The viewer copies those presets so the look matches the engine; it does not import the engine.
-- CrateEnt has `open`: crate / toolbox / suitcase models carry a named part `lid` with its hinge pivot.
-- Campfire `opts.stage`: 0 laid (unlit), 1 burning, 2 embers (collapsed, glowing), 3 dead (cold char and ash).
-- r187 instancing: `instancedMesh()` runs before `positionNode`; geometry must have at most 6
-  attributes so instance matrix (+ previous matrix for motion vectors) stays within 8 vertex buffers
-  and the shared (non object-specific) program path is used (three/src/nodes/accessors/Instance.js).
+- Viewer light: sun/sky/fog/exposure follow dev/bench.ts; the hemisphere `ground` is a snow bounce
+  (day [2.0,1.88,1.8]) — without it faces turned from the sun read black. Stand-in fire lights are
+  2.2 cd * size (dev only; the game's fire light is gfx/fx).
+- CrateEnt has `open`: crate / toolbox / luggage (variants 0,1,3) carry a named part `lid` hinged on
+  the back edge (axis +X, negative open angle). Duffel (luggage variant 2) has no lid.
+- Campfire `opts.stage`: 0 laid, 1 burning, 2 embers, 3 dead. Barrel `opts.lit` (default true).
+- Material ids are interpolated across triangles: per-vertex `mat` may only join neighbouring ids
+  (BARK-WOOD, PAINT-METAL, CLOTH-PLASTIC). Charred wood is all MAT.CHAR painted bark-brown where unburnt.
+- Wear as stored = wear * (0.4 + edge). Bark is lost above stored 0.35 (log() `peel` sets it).
+- r187 instancing: `instancedMesh()` runs before `positionNode`; geometry has 6 attributes so instance
+  matrix stays within 8 vertex buffers (three/src/nodes/accessors/Instance.js).
 
 ## Test commands
 
 - `npx tsc --noEmit -p . 2>&1 | grep -E "src/models|dev/models"`
-- `node tools/shot-models.mjs --m crate --seed 1-4 --light dusk --views "30,20;200,35" --snow 0.8 --out crate_dusk` (then Read shots/crate_dusk.jpg)
-- add `--backend webgl` for the WebGL2 path
+- `node tools/shot-models.mjs --m crate --seed 0-3 --light dusk --views "30,20;200,35" --snow 0.8 --out crate_dusk` (then Read shots/crate_dusk.jpg)
+- add `--backend webgl` for the WebGL2 path; `--debug 1` anchors/emitters/parts; `--open 0.7` lids; `--zoom 2` closer; `--fire 0` no stand-in fire light
+- model options: `--m "campfire:stage=2,barrel:lit=false"`

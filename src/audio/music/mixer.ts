@@ -44,7 +44,7 @@ const STRIPS: Record<Player, StripSpec> = {
   },
   glass: { level: 0.55, pan: 0, send: 0.7, body: [] },
   drum: { level: 1, pan: 0, send: 0.14, body: [['lowpass', 900, 0.7, 0]] },
-  ice: { level: 0.3, pan: 0, send: 0.8, body: [] },
+  ice: { level: 0.4, pan: 0, send: 0.8, body: [] },
   brass: {
     level: 0.6,
     pan: 0.28,
@@ -146,7 +146,8 @@ export interface Mixer {
   dispose(): void;
 }
 
-export function makeMixer(ctx: Ctx, out: AudioNode): Mixer {
+/** `raw`: leave the ceiling out, so level analysis sees the true peaks it would have bent. */
+export function makeMixer(ctx: Ctx, out: AudioNode, o: { raw?: boolean } = {}): Mixer {
   const nodes: AudioNode[] = [];
   const keep = <T extends AudioNode>(n: T): T => {
     nodes.push(n);
@@ -159,8 +160,8 @@ export function makeMixer(ctx: Ctx, out: AudioNode): Mixer {
   };
 
   const sum = gainNode(MASTER);
-  const top = keep(ceiling(ctx));
-  sum.connect(top).connect(out);
+  if (o.raw) sum.connect(out);
+  else sum.connect(keep(ceiling(ctx))).connect(out);
 
   const room = gainNode(1);
   const pre = keep(ctx.createDelay(0.1));

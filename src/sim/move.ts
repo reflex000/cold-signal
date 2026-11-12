@@ -212,6 +212,15 @@ export function stepPlayerMove(p: PlayerEnt, cmd: InputCmd, world: World, dt: nu
   p.yaw = wrapAngle(cmd.yaw);
   p.pitch = clamp(cmd.pitch, -PITCH_LIMIT, PITCH_LIMIT);
 
+  if (p.life === 'rescued') {
+    // On the winch or aboard: the helicopter owns the position. Only the look moves.
+    p.vx = 0;
+    p.vy = 0;
+    p.vz = 0;
+    p.sprint = false;
+    return;
+  }
+
   const alive = p.life === 'alive';
   const downed = p.life === 'downed';
   const b = alive || downed ? cmd.b : 0;

@@ -219,15 +219,26 @@ export interface Paint {
   grain?: 'x' | 'y' | 'z';
   /** Scale on the detail coordinates: > 1 makes the procedural detail finer on this part. */
   detailScale?: number;
+  /**
+   * Wood only: where the growth rings centre, as [x, z] across the grain in the part's own frame
+   * at paint time. Logs and sticks pass [0, 0] (rings round the heart); by default the heart lies
+   * far outside the part, so sawn boards show long straight grain.
+   */
+  pith?: P2;
 }
 
-/** A read / write view of one vertex for Part.each(). */
+/**
+ * A read / write view of one vertex for Part.each(). `mat` may be changed per vertex, but a
+ * triangle must never join two ids that are not neighbours (BARK-WOOD is fine, WOOD-CHAR is not):
+ * the id is interpolated across the triangle, so the ids in between would show as bands.
+ */
 export interface VertexRef {
   readonly i: number;
   readonly x: number; readonly y: number; readonly z: number;
   readonly nx: number; readonly ny: number; readonly nz: number;
   readonly edge: number;
   r: number; g: number; b: number;
+  mat: number;
   rough: number; metal: number; emissive: number; wear: number; snow: number; ao: number;
 }
 
@@ -578,9 +589,12 @@ export class Part extends Xf<Part> {
     const first = this.m.length !== nv;
     if (first) {
       const seed = this.b._nextSeed();
-      const ox = (hash32(seed, 1) / 4294967296) * 7, oy = (hash32(seed, 2) / 4294967296) * 31, oz = (hash32(seed, 3) / 4294967296) * 7;
       const g = o.grain ?? 'y';
       const ds = o.detailScale ?? 1;
+      // a random offset decorrelates the procedural detail of parts; across the grain it also
+      // puts the heart of the tree (the ring centre) 1.5 to 6 m away unless `pith` says where
+      const pa = (hash32(seed, 1) / 4294967296) * Math.PI * 2, pr = 1.5 + (hash32(seed, 3) / 4294967296) * 4.5;
+      const ox = o.pith ? -o.pith[0] * ds : Math.cos(pa) * pr, oy = (hash32(seed, 2) / 4294967296) * 31, oz = o.pith ? -o.pith[1] * ds : Math.sin(pa) * pr;
       this.d.length = nv * 3;
       for (let i = 0; i < nv; i++) {
         let x = this.p[i * 3], y = this.p[i * 3 + 1], z = this.p[i * 3 + 2];
@@ -636,6 +650,7 @@ export class Part extends Xf<Part> {
       get r() { return self.c[i * 3]; }, set r(x) { self.c[i * 3] = x; },
       get g() { return self.c[i * 3 + 1]; }, set g(x) { self.c[i * 3 + 1] = x; },
       get b() { return self.c[i * 3 + 2]; }, set b(x) { self.c[i * 3 + 2] = x; },
+      get mat() { return self.m[i]; }, set mat(x) { self.m[i] = x; },
       get rough() { return self.ro[i]; }, set rough(x) { self.ro[i] = x; },
       get metal() { return self.me[i]; }, set metal(x) { self.me[i] = x; },
       get emissive() { return self.em[i]; }, set emissive(x) { self.em[i] = x; },
@@ -1068,7 +1083,16 @@ export interface BuildOpts {
 
 export interface BoxOpts { bevel?: number; seg?: number; top?: boolean; bottom?: boolean; rows?: number }
 export interface CylOpts { sides?: number; bevel?: number; seg?: number; top?: boolean; bottom?: boolean; rows?: number }
-export interface LatheOpts { sides?: number; bevel?: number; seg?: number; crease?: number; smooth?: boolean; closed?: boolean }
+export interface LatheOpts {
+  sides?: number;
+  bevel?: number;
+  seg?: number;
+  crease?: number;
+  smooth?: boolean;
+  closed?: boolean;
+  /** Partial revolution [from, to] in radians (angle 0 is +X, turning toward +Z): gutters, half pipes, the wall between two vents. Open at the cut. */
+  arc?: P2;
+}
 export interface ExtrudeOpts { bevel?: number; seg?: number; capBevel?: number; top?: boolean; bottom?: boolean; rows?: number; crease?: number; smooth?: boolean }
 export interface SweepOpts {
   /** Sides when the profile is a radius. */
@@ -1100,6 +1124,39 @@ export interface ClothOpts {
   tearEdges?: ('bottom' | 'top' | 'left' | 'right')[];
   /** Sheet thickness in metres (the two faces are this far apart). */
   thickness?: number;
+}
+export interface PillowOpts {
+  /** Edge radius in metres (default 20 % of the smallest size). */
+  round?: number;
+  /** How far the middle of each face swells out, metres. */
+  bulge?: number;
+  seg?: number;
+  ring?: number;
+}
+/** How a log end looks: sawn flat, snapped into splinters, or a twig's tip. */
+export type LogEnd = 'saw' | 'break' | 'taper';
+export interface LogOpts {
+  /** Radius at the top (+Y) end; default 0.85 r. */
+  r2?: number;
+  sides?: number;
+  /** Rings along the length (default about one per 2.5 radii). */
+  rows?: number;
+  /** [bottom, top]; default both sawn. */
+  ends?: [LogEnd, LogEnd];
+  /** Total bend over the length, radians, in the direction `bendDir` (radians about Y; random if not given). */
+  bend?: number;
+  bendDir?: number;
+  /** Bark lumpiness in metres (default 6 % of r). */
+  gnarl?: number;
+  /** 0..1 of the bark fallen away, showing bleached wood. */
+  peel?: number;
+  /** Number of cut branch stubs. */
+  knots?: number;
+  bark?: RGB;
+  /** End-grain colour (default PAL.heartwood). */
+  wood?: RGB;
+  /** Bleached wood under peeled bark (default PAL.deadwood). */
+  deadwood?: RGB;
 }
 export interface RockOpts {
   /** Subdivision 1..3 (80, 320, 1280 triangles). */
@@ -1292,22 +1349,24 @@ export class Builder {
   /** A solid of revolution about Y from a profile of [radius, y] points, bottom to top (outside on the right). */
   lathe(profile: readonly P2[], o: LatheOpts = {}): Part {
     const part = new Part(this);
-    const sides = Math.max(3, o.sides ?? 16);
+    const sides = Math.max(o.arc ? 1 : 3, o.sides ?? 16);
     const pts = o.closed ? ccw(profile) : profile;
     const runs = outline2(pts, !!o.closed, o.bevel ?? 0, o.seg ?? 1, o.crease, o.smooth);
+    const a0 = o.arc ? o.arc[0] : 0, span = o.arc ? o.arc[1] - o.arc[0] : Math.PI * 2;
+    const ringN = o.arc ? sides + 1 : sides;
     for (const run of runs) {
       const rings: number[][] = [];
       for (const v of run) {
         const ring: number[] = [];
-        for (let s = 0; s < sides; s++) {
-          const a = (s / sides) * Math.PI * 2;
+        for (let s = 0; s < ringN; s++) {
+          const a = a0 + (s / sides) * span;
           const c = Math.cos(a), sn = Math.sin(a);
           ring.push(part.vert(v.x * c, v.y, v.x * sn, v.nx * c, v.ny, v.nx * sn, v.e));
         }
         rings.push(ring);
       }
       for (let i = 0; i + 1 < rings.length; i++) for (let s = 0; s < sides; s++) {
-        const t = (s + 1) % sides;
+        const t = (s + 1) % ringN;
         part.quad(rings[i][s], rings[i][t], rings[i + 1][t], rings[i + 1][s]);
       }
     }
@@ -1368,6 +1427,156 @@ export class Builder {
   /** A low dome: rivet heads, bolt caps, buttons. Base on y = 0, bulging toward +Y. */
   dome(r: number, h = r * 0.5, sides = 6): Part {
     return this.lathe([[r, 0], [r * 0.7, h * 0.75], [0, h]], { sides, smooth: true });
+  }
+
+  /**
+   * A soft box w x h x d, centred: edges rounded with radius `round`, every face bulging out by
+   * `bulge` metres at its centre. Bags, cushions, seat pads, sandbags, mattresses, soft cases.
+   * `seg` grid steps across the flat middle of a face (default 3), `ring` steps per half of a
+   * rounded edge (default 2). Smooth shaded and welded, so crumple() and dent() never open it.
+   */
+  pillow(w: number, h: number, d: number, o: PillowOpts = {}): Part {
+    const part = new Part(this);
+    const half = [w / 2, h / 2, d / 2];
+    const r = Math.min(o.round ?? Math.min(w, h, d) * 0.2, half[0] * 0.98, half[1] * 0.98, half[2] * 0.98);
+    const hi = half.map((x) => x - r);
+    const bulge = o.bulge ?? 0;
+    const seg = Math.max(1, o.seg ?? 3), ring = Math.max(1, o.ring ?? 2);
+    // coordinates across a face: equal angle steps over the rounded border, even steps in the middle
+    const axis = (k: number): number[] => {
+      const out: number[] = [];
+      for (let i = 0; i < ring; i++) out.push(-(hi[k] + r * Math.tan((Math.PI / 4) * (1 - i / ring))));
+      for (let i = 0; i <= seg; i++) out.push(-hi[k] + (2 * hi[k] * i) / seg);
+      for (let i = ring - 1; i >= 0; i--) out.push(hi[k] + r * Math.tan((Math.PI / 4) * (1 - i / ring)));
+      return out;
+    };
+    const A = [axis(0), axis(1), axis(2)];
+    const ids = new Map<string, number>();
+    const p = [0, 0, 0], q = [0, 0, 0];
+    for (let k = 0; k < 3; k++) for (const s of [-1, 1]) {
+      const u = (k + 1) % 3, v = (k + 2) % 3;
+      const grid: number[][] = [];
+      for (let i = 0; i < A[u].length; i++) {
+        const row: number[] = [];
+        for (let j = 0; j < A[v].length; j++) {
+          p[k] = s * half[k]; p[u] = A[u][i]; p[v] = A[v][j];
+          for (let c = 0; c < 3; c++) q[c] = Math.max(-hi[c], Math.min(hi[c], p[c]));
+          let nx = p[0] - q[0], ny = p[1] - q[1], nz = p[2] - q[2];
+          const l = Math.hypot(nx, ny, nz) || 1;
+          nx /= l; ny /= l; nz /= l;
+          const fu = Math.max(0, 1 - (p[u] / half[u]) ** 2), fv = Math.max(0, 1 - (p[v] / half[v]) ** 2);
+          const bl = bulge * fu * fv;
+          const x = q[0] + nx * r + (k === 0 ? s * bl : 0), y = q[1] + ny * r + (k === 1 ? s * bl : 0), z = q[2] + nz * r + (k === 2 ? s * bl : 0);
+          const key = Math.round(x * 1e5) + ',' + Math.round(y * 1e5) + ',' + Math.round(z * 1e5);
+          let id = ids.get(key);
+          if (id === undefined) {
+            id = part.vert(x, y, z, nx, ny, nz, sat((1 - Math.max(Math.abs(nx), Math.abs(ny), Math.abs(nz))) * 3.5));
+            ids.set(key, id);
+          }
+          row.push(id);
+        }
+        grid.push(row);
+      }
+      for (let i = 0; i + 1 < grid.length; i++) for (let j = 0; j + 1 < grid[i].length; j++) part.quad(grid[i][j], grid[i + 1][j], grid[i + 1][j + 1], grid[i][j + 1]);
+    }
+    part.recalcNormals(0.25);
+    return part.finish();
+  }
+
+  /**
+   * A log, branch or stick along Y, centred: bark round the sides (MAT.BARK), end grain with its
+   * rings round the heart on the ends (MAT.WOOD). Radius r at the bottom, o.r2 at the top. Bent,
+   * lumpy, peeled and broken by the options; randomness from b.rng. Paints with the current ink's
+   * wear and snow; bark and wood colours from the options.
+   */
+  log(len: number, r: number, o: LogOpts = {}): Part {
+    const rng = this.rng;
+    const r2 = o.r2 ?? r * 0.85;
+    const sides = o.sides ?? Math.max(5, Math.min(14, Math.round(r * 80 + 5)));
+    const rows = o.rows ?? Math.max(1, Math.round(len / Math.max(0.05, r * 2.5)));
+    const ends = o.ends ?? ['saw', 'saw'];
+    const bark = o.bark ?? PAL.bark, wood = o.wood ?? PAL.heartwood, dead = o.deadwood ?? PAL.deadwood;
+    const seed = this._nextSeed();
+    const prev = this.ink({ ...this.inkNow, mat: MAT.BARK, color: bark, pith: [0, 0], grain: 'y', detailScale: 1 });
+    const p = this.cyl(r, len, { r2, sides, rows, bevel: Math.min(Math.min(r, r2) * 0.15, 0.006) });
+    this.ink(prev);
+    const half = len / 2;
+    // ends: sawn flat (rings), broken (splinters), or a twig tip
+    p.each((v) => {
+      if (Math.abs(v.ny) < 0.7) return;
+      v.mat = MAT.WOOD;
+      const rr = Math.hypot(v.x, v.z) / Math.max(1e-4, v.y > 0 ? r2 : r);
+      const c = mixRGB(wood, dead, 0.35 + 0.4 * rr);
+      v.r = c[0]; v.g = c[1]; v.b = c[2];
+    });
+    const peel = o.peel ?? 0, gnarl = o.gnarl ?? r * 0.06;
+    // Peeling: the material bares the wood where bark wear (as stored: wear * (0.4 + edge)) is
+    // above 0.35, in ragged patches of its own. Here only how much, varying along the log.
+    if (peel > 0) p.each((v) => {
+      if (v.mat !== MAT.BARK) return;
+      const n = fbm3(seed + 3, v.x * 5, v.y * 1.2, v.z * 5, 2) * 0.5 + 0.5;
+      const loss = sat(peel * (0.35 + 1.3 * n));
+      v.wear = Math.max(v.wear, (0.35 + 0.65 * loss) / (0.4 + v.edge));
+    });
+    p.warp((q) => {
+      const rad = Math.hypot(q.x, q.z);
+      if (rad < 1e-6) return;
+      const a = Math.atan2(q.z, q.x);
+      // bark ridges along the log, lumps, the swelling where it met the ground or the trunk
+      const k = 1 + (gnarl / Math.max(r, 1e-3)) * (fbm3(seed, Math.cos(a) * 2.2, q.y * 3.1, Math.sin(a) * 2.2, 3) + 0.35 * Math.sin(a * Math.max(5, sides) + q.y * 6));
+      q.x *= k; q.z *= k;
+    });
+    for (const [end, sign] of [[ends[0], -1], [ends[1], 1]] as [LogEnd, number][]) {
+      if (end === 'saw') continue;
+      const R = sign > 0 ? r2 : r;
+      p.warp((q) => {
+        if (q.y * sign < half - R * 0.25 - 1e-4) return;
+        const a = Math.atan2(q.z, q.x), rad = Math.hypot(q.x, q.z) / Math.max(R, 1e-4);
+        if (end === 'break') {
+          // splinters: the rim stands in ragged teeth, the heart pulls out further
+          const tooth = 0.5 + 0.5 * noise3(seed + 11 + sign, Math.cos(a) * 3, Math.sin(a) * 3, 0);
+          q.y += sign * R * (0.7 * tooth * rad + 0.55 * (1 - rad) * (0.3 + tooth));
+        } else {
+          // a twig tip: pinch to a point
+          const t = Math.min(1, (q.y * sign - (half - R * 0.25)) / (R * 0.25 + 1e-4));
+          q.x *= 1 - 0.8 * t; q.z *= 1 - 0.8 * t;
+          q.y += sign * R * 1.5 * t;
+        }
+      });
+    }
+    if (o.bend) {
+      const bd = o.bendDir ?? rng.range(0, Math.PI * 2);
+      p.rotY(bd).bend(o.bend).rotY(-bd);
+    }
+    p.recalcNormals(0.5);
+    p.refit();
+    // branch stubs: a collar swelling out of the bark, narrowing to a weathered cut face
+    const knots = o.knots ?? 0;
+    for (let i = 0; i < knots; i++) {
+      const y = rng.range(-half * 0.8, half * 0.8);
+      const rr = r + (r2 - r) * ((y + half) / len);
+      const kr = Math.max(0.004, rr * rng.range(0.09, 0.17));
+      const a = rng.range(0, Math.PI * 2);
+      // from half way into the log out past the bark, leaning toward the top end like the branch grew
+      const up = rng.range(0.25, 0.7);
+      const hc = 1 / Math.hypot(1, up); // horizontal share of the stub's direction
+      const sIn = (rr * 0.5) / hc; // base to bark surface, along the stub
+      const kl = sIn + kr * rng.range(1.2, 2.6);
+      const y0 = -kl / 2, ys = y0 + sIn;
+      const prevK = this.ink({ ...this.inkNow, mat: MAT.BARK, color: bark, pith: [0, 0], grain: 'y', detailScale: 1 });
+      const stub = this.lathe([[0, y0], [kr * 2.1, y0], [kr * 2.0, ys - kr * 0.3], [kr * 1.2, ys + kr * 1.2], [kr, kl / 2], [0, kl / 2]], { sides: 7, bevel: kr * 0.2, crease: 40 * DEG });
+      this.ink(prevK);
+      const cut = mixRGB(dead, bark, 0.35);
+      stub.each((v) => {
+        if (v.ny > 0.7) { v.mat = MAT.WOOD; v.r = cut[0]; v.g = cut[1]; v.b = cut[2]; }
+      });
+      stub.crumple(kr * 0.12, 0.12 / Math.max(kr, 0.01));
+      const d: V3 = [Math.cos(a) * hc, up * hc, Math.sin(a) * hc];
+      const base: V3 = [Math.cos(a) * rr * 0.5, y, Math.sin(a) * rr * 0.5];
+      stub.aim(d, [base[0] + (d[0] * kl) / 2, base[1] + (d[1] * kl) / 2, base[2] + (d[2] * kl) / 2]);
+      p.merge(stub);
+    }
+    return p;
   }
 
   /**
@@ -1642,6 +1851,12 @@ export class Builder {
       }
     }
     return part.finish();
+  }
+
+  /** Edit every vertex of every part made so far: weathering passes over the whole model (grime from the ground, soot from a fire). */
+  each(fn: (v: VertexRef, part: Part) => void): this {
+    for (const p of this.all) if (!p.removed) p.each((v) => fn(v, p));
+    return this;
   }
 
   /** Copies of a part or group: fn places copy i (0 is the original). */

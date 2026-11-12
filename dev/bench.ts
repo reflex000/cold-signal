@@ -13,7 +13,7 @@
 //   ?t=12.5                       freeze the clock at this time (stable screenshots)
 //   ?frames=8                     frames rendered before window.DONE is set
 //   ?hud=1                        show fps / draw calls / backend in a corner
-//   ?exp=1.2                      multiply the exposure       ?tm=aces   tone mapper (default agx)
+//   ?exp=1.2                      multiply the exposure       ?tm=agx    tone mapper (default aces)
 //   ?dyn=1                        dynamic resolution          ?ldr=1 ?depth=standard   fallback paths
 //   ?gpu=0                        no GPU timestamp queries
 //
@@ -85,7 +85,8 @@ const LIGHTS: Record<LightName, LightPreset> = {
   // Clear winter afternoon, low sun.
   day: {
     sunAz: 215, sunEl: 21, sun: [10.5, 8.9, 6.9], moon: false,
-    sky: [0.5, 0.72, 1.15], ground: [0.5, 0.55, 0.66],
+    // ground: light bounced off the sunlit snowfield onto anything that faces down or sideways
+    sky: [0.58, 0.78, 1.15], ground: [0.9, 0.9, 0.95],
     zenith: [0.1, 0.24, 0.62], horizon: [0.62, 0.78, 1.02], glow: [1.6, 1.25, 0.8],
     fog: [0.6, 0.75, 0.98], fogDensity: 0.00035, exposure: 0.62, night: 0, storm: 0, snowfall: 0, wind: 3,
   },
@@ -101,7 +102,7 @@ const LIGHTS: Record<LightName, LightPreset> = {
     sunAz: 140, sunEl: 38, sun: [0.07, 0.095, 0.15], moon: true,
     sky: [0.008, 0.012, 0.026], ground: [0.004, 0.005, 0.009],
     zenith: [0.0015, 0.003, 0.009], horizon: [0.006, 0.01, 0.022], glow: [0.01, 0.014, 0.022],
-    fog: [0.005, 0.008, 0.017], fogDensity: 0.0009, exposure: 4.2, night: 1, storm: 0, snowfall: 0, wind: 2,
+    fog: [0.005, 0.008, 0.017], fogDensity: 0.0009, exposure: 1.6, night: 1, storm: 0, snowfall: 0, wind: 2,
   },
   // Inside a blizzard by day: flat light, short sight.
   storm: {
@@ -148,7 +149,8 @@ export async function createBench(o: BenchOptions = {}): Promise<Bench> {
   });
   (window as any).BACKEND = engine.backend;
   (window as any).ENGINE = engine;
-  if (param('tm') === 'aces') engine.post.tonemap = 'aces';
+  const tm = param('tm');
+  if (tm === 'agx' || tm === 'aces') engine.post.tonemap = tm;
   const { scene, camera } = engine;
   camera.fov = num('fov', 55);
   camera.updateProjectionMatrix();

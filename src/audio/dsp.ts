@@ -211,9 +211,10 @@ export function makeIR(ctx: Ctx, kind: Space, lite: boolean, rnd: Rnd): AudioBuf
         const at = Math.floor(sr * (0.05 + rnd() * 0.16));
         d[at] += (rnd() < 0.5 ? -1 : 1) * 0.25 * rnd();
       }
-      // the diffuse wash builds, then decays, darkening
+      // the diffuse wash builds, then decays, darkening. Open air has no room to keep it: it is
+      // gone in about three seconds (RT60), leaving the far walls' echoes to carry the tail
       let s = 0;
-      const tau = lite ? 0.75 : 1.25;
+      const tau = lite ? 0.38 : 0.5;
       for (let i = Math.floor(sr * 0.08); i < n; i++) {
         const t = i / sr;
         const fc = 3600 * Math.exp(-t / 1.0) + 420;

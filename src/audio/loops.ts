@@ -65,7 +65,7 @@ const defs: Record<LoopName, LoopDef> = {
     const c2 = s.noise('crackle', s.t, INF, 1.31);
     c1.connect(res);
     c2.connect(res);
-    s.chain(c1, s.gain(0.25)).connect(pops);
+    s.chain(c1, s.gain(0.15)).connect(pops);
     const hiss = layer(s, 'dust', 'highpass', 3400, 0.7);
     return {
       param(h, at) {
@@ -75,10 +75,11 @@ const defs: Record<LoopName, LoopDef> = {
         glide(flame.g.gain, 0.02 + 0.3 * h, at, 0.4);
         glide(flut.gain, 0.15 * h, at, 0.4);
         glide(flame.f.frequency, 480 + 500 * h, at, 0.4);
-        // embers tick quietly; a good fire spits
-        glide(pops.gain, 1.5 + 5.5 * Math.sqrt(h), at, 0.4);
+        // embers tick quietly; a good fire spits. The crackle texture peaks at full scale with
+        // a 26 dB crest, so these stay small: pops about 12 dB over the roar's RMS
+        glide(pops.gain, 0.35 + 1.4 * Math.sqrt(h), at, 0.4);
         glide(c2.playbackRate, 0.7 + 0.9 * h, at, 0.4);
-        glide(hiss.g.gain, 0.4 + 2.2 * h, at, 0.4);
+        glide(hiss.g.gain, 0.12 + 0.7 * h, at, 0.4);
       },
     };
   } },
@@ -258,17 +259,21 @@ const defs: Record<LoopName, LoopDef> = {
 
   /** The cabin stove with its door shut: a muffled draw, soft crackle, the iron ticking as it heats. */
   stove: { pri: 2, ref: 3, local: 0.5, build(s) {
-    const draw = layer(s, 'brown', 'lowpass', 190, 0.7);
-    draw.g.gain.value = 0.5;
-    s.mod(draw.g.gain, 0.35, 0.15);
+    // a soft draw, not a rumble: the iron box keeps the roar in and lets the crackle through dulled
+    const draw = layer(s, 'brown', 'lowpass', 260, 0.7);
+    draw.g.gain.value = 0.16;
+    s.mod(draw.g.gain, 0.35, 0.06);
+    const roar = layer(s, 'pink', 'bandpass', 420, 0.8);
+    roar.g.gain.value = 0.09;
+    s.mod(roar.g.gain, 0.5, 0.04);
     // the flue is a pipe: it hums
-    const flue = layer(s, 'pink', 'bandpass', 96, 9);
-    flue.g.gain.value = 0.9;
+    const flue = layer(s, 'pink', 'bandpass', 104, 9);
+    flue.g.gain.value = 0.28;
     s.mod(flue.f.frequency, 0.3, 5);
     const crack = s.noise('crackle', s.t, INF, 0.62);
-    s.chain(crack, s.filt('lowpass', 1500, 0.7), s.gain(2.2)).connect(s.out);
+    s.chain(crack, s.filt('lowpass', 1800, 0.7), s.gain(1.1)).connect(s.out);
     const tick = s.noise('crackle', s.t, INF, 0.29);
-    const tk = s.gain(1.1);
+    const tk = s.gain(0.8);
     for (const f of [2300, 3650]) s.chain(tick, s.filt('bandpass', f, 12), tk);
     tk.connect(s.out);
     return {};

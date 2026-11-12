@@ -1,8 +1,9 @@
 // Table-driven gradient noise for world generation. core/noise is exact but hashes every
 // lattice corner; building a 1025 x 1025 mountain needs tens of millions of samples, so this
-// one uses a seeded permutation table. Pure: the same seed gives the same field everywhere
-// (only +, -, * on table values after construction).
+// one uses a seeded permutation table. Pure: the same seed gives the same field on every JS
+// engine (the gradient table uses the deterministic dcos / dsin; sampling is only + - * floor).
 import { hash32, rngStep } from '../core/rng';
+import { dcos, dsin } from './dmath';
 
 export class Noise {
   private readonly p = new Uint8Array(512);
@@ -24,9 +25,9 @@ export class Noise {
     for (let i = 0; i < 512; i++) this.p[i] = perm[i & 255];
     for (let i = 0; i < 256; i++) {
       // 256 evenly spread directions, shuffled: no axis-aligned bias, no trig per sample.
-      const a = ((perm[(i * 97 + 13) & 255] + 0.5) / 256) * Math.PI * 2;
-      this.gx[i] = Math.cos(a);
-      this.gy[i] = Math.sin(a);
+      const a = ((perm[(i * 97 + 13) & 255] + 0.5) / 256) * 6.283185307179586;
+      this.gx[i] = dcos(a);
+      this.gy[i] = dsin(a);
     }
   }
 

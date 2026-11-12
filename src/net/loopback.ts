@@ -41,7 +41,7 @@ class End<Out, In> implements Transport<Out, In> {
     if (this.closed) return;
     const link = this.link;
     const out = link.json ? (JSON.parse(JSON.stringify(msg)) as Out) : msg;
-    this.peer.receive(out as unknown as In, link.now + link.delay());
+    this.peer.receive(out, link.now + link.delay());
   }
 
   close(): void {

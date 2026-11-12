@@ -1,0 +1,163 @@
+// The interface: createUI(game) builds every screen once under #ui and keeps them in step with
+// view.mode. All input the UI owns (menus: keyboard, mouse, pad, touch; the on-screen touch
+// controls in play) goes out through game.actions and game.touch, never into game state.
+import type { Mode } from '../game/view';
+import type { HurtCause } from '../sim/types';
+import type { UiApi, UiGame } from './api';
+import { CSS } from './css';
+import { type Ctx, h, on } from './dom';
+import { createEnd } from './end';
+import { createHud } from './hud';
+import { icon } from './icons';
+import { createInventory } from './inventory';
+import { createMenu } from './menu';
+import { createNav } from './nav';
+import { createLoading, createTitle } from './title';
+import { createTouch } from './touch';
+
+export type { UiApi, UiGame } from './api';
+
+/** Modes in which a UI screen is up and owns the pointer, the menu keys and the pad. */
+const UI_MODES: readonly Mode[] = ['title', 'pause', 'inventory', 'dead', 'won'];
+
+export function createUI(game: UiGame): UiApi {
+  const view = game.view;
+  let host = document.getElementById('ui');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'ui';
+    document.body.appendChild(host);
+  }
+  const style = document.createElement('style');
+  style.dataset.owner = 'cold-signal-ui';
+  style.textContent = CSS;
+  document.head.appendChild(style);
+
+  const root = h('div', 'cs' + (view.touch ? ' touch' : ''), host);
+  const ctx: Ctx = {
+    game,
+    view,
+    root,
+    touch: view.touch,
+    device: view.touch ? 'touch' : 'kbm',
+    sfx: (name) => game.sfx?.(name),
+    disposers: [],
+  };
+  const nav = createNav(ctx);
+  const hud = createHud(ctx);
+  const touch = view.touch ? createTouch(ctx) : null;
+  const menu = createMenu(ctx, nav);
+  const title = createTitle(ctx, nav, menu);
+  menu.onClose = () => title.sub(false);
+  const inv = createInventory(ctx, nav);
+  const end = createEnd(ctx, nav);
+  const loading = createLoading(ctx);
+  const rot = h('div', 'rot', root);
+  icon('rotate', '', rot);
+  h('b', '', rot, 'Rotate your phone');
+  h('span', '', rot, 'Cold Signal is played in landscape.');
+  // paint order, bottom to top
+  for (const e of [hud.el, touch?.el, title.el, menu.el, inv.el, end.el, loading.el, rot]) if (e) root.appendChild(e);
+
+  // ---------------------------------------------------------------- modes
+  let mode: Mode | '' = '';
+  let modeAt = 0;
+  let lastCause: HurtCause | null = null;
+
+  function causeOfDeath(): HurtCause | 'unknown' {
+    const me = view.me;
+    if (lastCause) return lastCause;
+    if (me?.swim) return 'water';
+    if (me && me.core <= 31) return 'cold';
+    return 'unknown';
+  }
+
+  function applyMode(m: Mode): void {
+    if (m === mode) return;
+    const prev = mode;
+    mode = m;
+    modeAt = performance.now();
+    if (m === 'play' || m === 'boot' || m === 'photo') nav.open(null);
+    loading.show(m === 'boot');
+    hud.show(m === 'play');
+    touch?.show(m === 'play');
+    inv.show(m === 'inventory');
+    end.show(m === 'dead' ? 'dead' : m === 'won' ? 'won' : null, causeOfDeath());
+    title.show(m === 'title');
+    if (m === 'pause') menu.open('pause');
+    else if (menu.isOpen() && (prev === 'pause' || m !== 'title')) menu.close();
+    if (m === 'play' || m === 'title') lastCause = null;
+    root.classList.toggle('photo', m === 'photo');
+  }
+
+  // ---------------------------------------------------------------- bus
+  const bus = view.bus;
+  ctx.disposers.push(
+    bus.on('mode', (e) => applyMode(e.to)),
+    bus.on('loading', (e) => loading.set(e.progress, e.label)),
+    bus.on('toast', (e) => hud.toast(e)),
+    bus.on('place', (e) => hud.place(e)),
+    bus.on('sim', (e) => {
+      if (e.t === 'hurt' && e.id === view.myId) lastCause = e.cause;
+      hud.sim(e);
+    }),
+  );
+
+  // ---------------------------------------------------------------- keyboard and device
+  const owns = () => UI_MODES.includes(mode as Mode);
+  on(
+    ctx,
+    window,
+    'keydown',
+    (e: KeyboardEvent) => {
+      if (!owns() || !nav.scope) return;
+      // the key that opened this screen (handled by the game first) must not also act in it
+      if (e.timeStamp < modeAt) return;
+      if (nav.key(e)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    },
+    true,
+  );
+  on(
+    ctx,
+    window,
+    'keyup',
+    (e: KeyboardEvent) => {
+      if (owns() && (e.code === 'Space' || e.code === 'Enter' || e.code === 'Tab')) e.preventDefault();
+    },
+    true,
+  );
+  on(ctx, window, 'pointerdown', (e: PointerEvent) => {
+    ctx.device = e.pointerType === 'touch' ? 'touch' : e.pointerType === 'mouse' && !view.touch ? 'kbm' : ctx.device;
+  }, true);
+  // clicks never leave focus on a button (Enter would fire it a second time)
+  on(ctx, root, 'mousedown', (e: MouseEvent) => {
+    if ((e.target as HTMLElement).closest?.('button')) e.preventDefault();
+  });
+
+  applyMode(view.mode);
+
+  return {
+    update(dt) {
+      if (view.mode !== mode) applyMode(view.mode);
+      nav.update(dt);
+      hud.update(dt);
+      touch?.update(dt);
+      title.update(dt);
+      menu.update(dt);
+      inv.update(dt);
+    },
+    wantsPointer() {
+      return owns();
+    },
+    dispose() {
+      nav.open(null);
+      touch?.release();
+      for (const d of ctx.disposers.splice(0)) d();
+      root.remove();
+      style.remove();
+    },
+  };
+}

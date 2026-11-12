@@ -20,6 +20,7 @@
 // Floors are walkable rectangles at height y; World.groundAt lets a walker step up 0.5 m, so
 // thresholds are built as stacked floors no more than 0.3 m apart.
 import type { Surface } from '../sim/types';
+import { datan2, dcos, dlen, dsin } from './dmath';
 import type { Collider, Floor, PoiId, ShelterVol } from './types';
 
 export type SolidKind = 'wall' | 'furniture' | 'rock';
@@ -65,9 +66,9 @@ function box(tag: string, x: number, z: number, hx: number, hz: number, y0: numb
  */
 function run(tag: string, x0: number, z0: number, x1: number, z1: number, t: number, y0: number, y1: number, kind: SolidKind = 'wall', gaps: [number, number][] = []): BpBox[] {
   const dx = x1 - x0, dz = z1 - z0;
-  const len = Math.hypot(dx, dz);
+  const len = dlen(dx, dz);
   const ux = dx / len, uz = dz / len;
-  const yaw = Math.atan2(-dz, dx); // local X of the box along the wall
+  const yaw = datan2(-dz, dx); // local X of the box along the wall
   const out: BpBox[] = [];
   const sorted = gaps.slice().sort((a, b) => a[0] - b[0]);
   let from = 0;
@@ -101,14 +102,14 @@ function ring(tag: string, pts: [number, number][], t: number, y0: number, y1: n
     if (open.includes(i)) continue;
     const a = pts[i], b = pts[(i + 1) % pts.length];
     const dx = b[0] - a[0], dz = b[1] - a[1];
-    const len = Math.hypot(dx, dz);
+    const len = dlen(dx, dz);
     let nx = dz / len, nz = -dx / len;
     const mx = (a[0] + b[0]) / 2, mz = (a[1] + b[1]) / 2;
     if (nx * (mx - cx) + nz * (mz - cz) < 0) {
       nx = -nx;
       nz = -nz;
     }
-    out.push({ x: mx + nx * t / 2, z: mz + nz * t / 2, hx: len / 2 + t * 0.45, hz: t / 2, yaw: Math.atan2(-dz, dx), y0, y1, kind, tag });
+    out.push({ x: mx + nx * t / 2, z: mz + nz * t / 2, hx: len / 2 + t * 0.45, hz: t / 2, yaw: datan2(-dz, dx), y0, y1, kind, tag });
   }
   return out;
 }
@@ -801,7 +802,7 @@ export interface Placed {
 
 /** Local point -> world, for something placed at `at`. */
 export function toWorld(at: Pose, lx: number, ly: number, lz: number, lyaw = 0): Pose {
-  const c = Math.cos(at.yaw), s = Math.sin(at.yaw);
+  const c = dcos(at.yaw), s = dsin(at.yaw);
   return { x: at.x + lx * c + lz * s, y: at.y + ly, z: at.z - lx * s + lz * c, yaw: at.yaw + lyaw };
 }
 

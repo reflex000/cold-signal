@@ -3,17 +3,39 @@
 // object shapes). `id` and `rev` are 0 until SimCtx.spawn assigns them.
 // Owner: SIM.
 import type { SpawnDef } from '../world/types';
+import { PITCH_LIMIT } from './move';
 import type {
-  CrateEnt, DeviceEnt, Entity, Env, FireEnt, FireType, FlareEnt, HeliEnt, InputCmd, ItemId, LogEnt, Objective,
+  CrateEnt, DeviceEnt, Entity, EntityKind, Env, FireEnt, FireType, FlareEnt, HeliEnt, InputCmd, ItemId, LogEnt, Objective,
   PickupEnt, PlayerEnt, SimState, Stats, WolfEnt, WoodEnt,
 } from './types';
 
 export const STATE_VERSION = 1;
+
+/** Every entity kind (the order per-kind lists are created in). */
+export const ENTITY_KINDS: readonly EntityKind[] = ['player', 'wolf', 'fire', 'pickup', 'crate', 'wood', 'log', 'flare', 'device', 'heli'];
 /** Hour of day at which a new game starts (dusk). */
 export const START_CLOCK = 16.5;
 
 export function neutralInput(): InputCmd {
   return { seq: 0, mx: 0, mz: 0, yaw: 0, pitch: 0, b: 0, focus: 0 };
+}
+
+const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+
+/**
+ * Copy a command into `dst`, making it safe: finite numbers, axes in -1..1, pitch within the
+ * limit, integer bits and ids. Used on everything that arrives from a client or a bot.
+ */
+export function copyInput(dst: InputCmd, src: InputCmd): InputCmd {
+  const mx = num(src.mx), mz = num(src.mz), pitch = num(src.pitch);
+  dst.seq = Math.floor(num(src.seq));
+  dst.mx = mx < -1 ? -1 : mx > 1 ? 1 : mx;
+  dst.mz = mz < -1 ? -1 : mz > 1 ? 1 : mz;
+  dst.yaw = num(src.yaw);
+  dst.pitch = pitch < -PITCH_LIMIT ? -PITCH_LIMIT : pitch > PITCH_LIMIT ? PITCH_LIMIT : pitch;
+  dst.b = num(src.b) | 0;
+  dst.focus = Math.floor(num(src.focus));
+  return dst;
 }
 
 export function makeEnv(): Env {

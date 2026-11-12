@@ -14,7 +14,7 @@ import { Rng } from '../src/core/rng';
 import { U } from '../src/gfx/shared';
 import { createBench } from './bench';
 
-const { uniform, vec2, vec3, float, mix, smoothstep, max, sin, positionWorld, positionLocal, normalWorld, mx_noise_float, mx_fractal_noise_float, bumpMap, uv, length, clamp } = TSL as any;
+const { uniform, vec2, vec3, float, mix, smoothstep, min, max, sin, positionWorld, positionLocal, normalWorld, mx_noise_float, mx_fractal_noise_float, bumpMap, length, clamp } = TSL as any;
 
 const b = await createBench({ light: 'day', ground: false });
 const { engine, scene } = b;
@@ -38,7 +38,7 @@ const height = (x: number, z: number): number => {
   const mat = new THREE.MeshStandardNodeMaterial({ metalness: 0 });
   // Snow is never pure white and never one colour: packed crust is greyer, fresh powder brighter.
   const crust: any = mx_fractal_noise_float(positionWorld.xz.mul(vec2(0.5, 1.6)), 3, 2, 0.5).mul(0.5).add(0.5);
-  mat.colorNode = mix(vec3(0.8, 0.83, 0.88), vec3(0.93, 0.94, 0.955), smoothstep(0.25, 0.75, crust));
+  mat.colorNode = mix(vec3(0.84, 0.855, 0.88), vec3(0.94, 0.945, 0.95), smoothstep(0.25, 0.75, crust));
   mat.roughnessNode = mix(float(0.62), float(0.9), smoothstep(0.3, 0.7, crust));
   // Sastrugi: small ridges the wind cuts, stretched along it.
   const ripples: any = mx_noise_float(positionWorld.xz.mul(vec2(2.2, 9.0))).mul(0.6).add(mx_noise_float(positionWorld.xz.mul(vec2(9.0, 31.0))).mul(0.25));
@@ -192,7 +192,8 @@ function strut(a: THREE.Vector3, c: THREE.Vector3, r: number, mat: THREE.Materia
 
 // ---- fire: small and hot ----
 const fire = new THREE.Group();
-const fireLight = new THREE.PointLight(new THREE.Color(1.0, 0.42, 0.12), 60, 22, 2);
+const FIRE = 14; // candela-like units on the bench's light scale (day sun = 10.5)
+const fireLight = new THREE.PointLight(new THREE.Color(1.0, 0.42, 0.12), FIRE, 18, 2);
 const flameHeat: any = uniform(1);
 {
   const fy = height(0, 0);
@@ -215,7 +216,7 @@ const flameHeat: any = uniform(1);
   const flameMat = new THREE.MeshBasicNodeMaterial();
   const t: any = clamp(positionLocal.y.add(0.5), 0, 1); // 0 base .. 1 tip of the unit cone
   const flick: any = sin(positionWorld.y.mul(23).sub(U.time.mul(9))).mul(0.15).add(0.85);
-  flameMat.colorNode = mix(vec3(34, 13, 2.2), vec3(9, 1.6, 0.12), smoothstep(0.1, 0.95, t)).mul(flick).mul(flameHeat);
+  flameMat.colorNode = mix(vec3(14, 5.5, 1.1), vec3(4.5, 0.9, 0.08), smoothstep(0.1, 0.95, t)).mul(flick).mul(flameHeat);
   flameMat.fog = false;
   for (let i = 0; i < 6; i++) {
     const f = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1, 7, 1, true), flameMat);
@@ -229,7 +230,7 @@ const flameHeat: any = uniform(1);
   }
   // Embers: single hot pixels drifting up (what the bloom's first downsample must not flicker on).
   const emberMat = new THREE.MeshBasicNodeMaterial();
-  emberMat.colorNode = vec3(40, 12, 1.5);
+  emberMat.colorNode = vec3(22, 6, 0.7);
   for (let i = 0; i < 14; i++) {
     const e = new THREE.Mesh(new THREE.SphereGeometry(0.006, 5, 4), emberMat);
     e.userData.seed = rng.range(0, 100);
@@ -245,10 +246,10 @@ const flameHeat: any = uniform(1);
 
   // A red hand flare burning in the snow, 28 m off.
   const flare = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), new THREE.MeshBasicNodeMaterial());
-  (flare.material as any).colorNode = vec3(160, 9, 5);
+  (flare.material as any).colorNode = vec3(70, 4, 1.8);
   const fx = -17, fz = -21;
   flare.position.set(fx, height(fx, fz) + 0.12, fz);
-  const flareLight = new THREE.PointLight(new THREE.Color(1, 0.06, 0.03), 220, 40, 2);
+  const flareLight = new THREE.PointLight(new THREE.Color(1, 0.06, 0.03), 45, 40, 2);
   flareLight.position.set(0, 0.25, 0);
   flare.add(flareLight);
   scene.add(flare);
@@ -275,14 +276,20 @@ if (stages.includes('haze')) {
   }, { resample: true });
 }
 if (overlays.includes('frost')) {
-  // Frost creeping in from the edges of the goggles.
-  const frost: any = uniform(0.8);
+  // Frost creeping in from the edges of the goggles: a ragged front of crystals, densest at the
+  // rim. `frost` (0..1) is how far it has crept; a real system drives it from the body heat.
+  const frost: any = uniform(0.7);
   engine.post.addOverlay('frost', 200, (color, at, i) => {
     const p = at.sub(0.5).mul(vec2(i.aspect, 1));
-    const edge = smoothstep(float(0.62).sub(frost.mul(0.3)), float(0.95), length(p).mul(1.35));
-    const crystals = mx_fractal_noise_float(p.mul(26), 4, 2.2, 0.55).mul(0.5).add(0.5);
-    const mask = clamp(edge.mul(crystals.mul(1.5).add(0.25)), 0, 1).mul(frost);
-    return mix(color, vec3(0.82, 0.88, 0.95), mask);
+    // Distance from the nearest edge of the picture, in picture heights.
+    const edgeDist = min(min(at.x, at.x.oneMinus()).mul(i.aspect), min(at.y, at.y.oneMinus()));
+    const front = frost.mul(0.24).add(mx_fractal_noise_float(p.mul(7), 3, 2, 0.5).mul(0.05));
+    const cover = smoothstep(front, front.mul(0.35), edgeDist); // 1 at the rim, 0 past the front
+    // Ridged noise at two scales: thin bright veins, like the ferns frost grows on glass.
+    const veins = (s: number): any => smoothstep(0.82, 1.0, float(1).sub(mx_noise_float(p.mul(s)).abs()));
+    const fern: any = max(veins(24), veins(61).mul(0.7)).toVar();
+    const mask = clamp(cover.mul(fern.mul(0.55).add(cover.mul(0.45))), 0, 1).mul(0.9);
+    return mix(color, vec3(0.8, 0.86, 0.92).add(fern.mul(0.12)), mask);
   });
 }
 if (overlays.includes('drops')) {
@@ -297,6 +304,84 @@ if (overlays.includes('drops')) {
     }
     return out;
   }, { resample: true });
+}
+
+// ---- ?late=1: an object with a new material, compiled through engine.compile() while frames run ----
+if (b.param('late') !== null) {
+  b.busy(
+    (async () => {
+      await new Promise((r) => setTimeout(r, 600));
+      const m = new THREE.Mesh(new THREE.TorusKnotGeometry(0.35, 0.1, 96, 12), new THREE.MeshStandardNodeMaterial({ color: 0x2a4f6e, roughness: 0.4, metalness: 0.2 }));
+      (m.material as any).emissiveNode = vec3(0.8, 0.35, 0.05).mul(sin(U.time.mul(3)).mul(0.5).add(0.5));
+      m.position.set(-2.2, height(-2.2, 1.2) + 0.7, 1.2);
+      m.castShadow = true;
+      const t0 = performance.now();
+      await engine.compile(m);
+      scene.add(m);
+      console.log(`late object compiled in ${(performance.now() - t0).toFixed(0)} ms`);
+    })(),
+  );
+}
+
+// ---- cost of each stage: ?perf=1 ----
+// Starts from the ?q= preset and switches one thing off at a time, then logs a table (console and
+// window.PERF) with the median GPU time (timestamp queries) and the frame rate of each variant.
+// The GPU may be shared with other work: compare the rows with each other, not with a budget.
+if (b.param('perf') !== null) b.busy(runPerf());
+async function runPerf(): Promise<void> {
+  const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  const base = engine.quality.name;
+  type Variant = [string, (q: typeof engine.quality) => void];
+  const variants: Variant[] = [
+    ['warm-up', () => {}], // the first variant pays for compiles and clock ramp-up: not reported
+    ['baseline', () => {}],
+    ['no ao', (q) => (q.ao = false)],
+    ['no bloom', (q) => (q.bloom = false)],
+    ['no aa', (q) => (q.aa = 'none')],
+    ['fxaa', (q) => (q.aa = 'fxaa')],
+    ['no grain', (q) => (q.grain = false)],
+    ['no post', (q) => Object.assign(q, { ao: false, bloom: false, aa: 'none', grain: false })],
+    ['no shadows', (q) => (q.shadowCascades = 0)],
+    ['scale 0.7', (q) => (q.renderScale = 0.7)],
+    ['scale 1.0', (q) => (q.renderScale = 1)],
+  ];
+  const sunShadow = b.sun.castShadow;
+  const rows: { variant: string; gpuMs: number; fps: number; calls: number; size: string; chain: string }[] = [];
+  for (const [label, apply] of variants) {
+    engine.setQuality(base);
+    apply(engine.quality);
+    engine.post.setQuality(engine.quality);
+    b.sun.castShadow = sunShadow && engine.quality.shadowCascades > 0;
+    engine.renderer.shadowMap.enabled = engine.quality.shadowCascades > 0;
+    engine.resize();
+    await wait(1200); // pipelines compile, render targets resize
+    engine.stats.gpuMs = 0;
+    await wait(600);
+    const gpu: number[] = [];
+    const fps: number[] = [];
+    for (let i = 0; i < 30; i++) {
+      await wait(80);
+      // The latest resolved frame's GPU total (set by resolveTimestampsAsync), not the smoothed stat.
+      const ts = (engine.renderer.info.render as any).timestamp as number;
+      if (ts > 0) gpu.push(ts);
+      fps.push(engine.stats.fps);
+    }
+    const med = (a: number[]): number => (a.length ? a.slice().sort((x, y) => x - y)[a.length >> 1] : 0);
+    const a = engine.post.active;
+    if (label === 'warm-up') continue;
+    rows.push({
+      variant: label,
+      gpuMs: Math.round(med(gpu) * 100) / 100,
+      fps: Math.round(med(fps)),
+      calls: engine.stats.calls,
+      size: `${engine.width}x${engine.height}`,
+      chain: `ao ${a.ao ? 1 : 0} bloom ${a.bloom ? 1 : 0} aa ${a.aa} bakes ${a.bakes}`,
+    });
+  }
+  engine.setQuality(base);
+  b.sun.castShadow = sunShadow;
+  (window as any).PERF = rows;
+  console.log(`PERF ${engine.backend} ${base}\n` + rows.map((r) => `${r.variant.padEnd(11)} gpu ${r.gpuMs.toFixed(2).padStart(6)} ms  ${String(r.fps).padStart(4)} fps  ${r.calls} calls  ${r.size}  ${r.chain}`).join('\n'));
 }
 
 // ---- animate ----
@@ -315,7 +400,7 @@ b.onFrame((_dt, time) => {
     }
   }
   const flick = 0.82 + 0.12 * Math.sin(time * 13.1) + 0.08 * Math.sin(time * 31.7 + 1.3);
-  fireLight.intensity = 60 * flick;
+  fireLight.intensity = FIRE * flick;
   flameHeat.value = 0.9 + 0.2 * flick;
   void night;
 });

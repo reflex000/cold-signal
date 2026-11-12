@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Cold Signal: sound</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        --bg: #0a0c0f;
+        --ink: #dfe3e6;
+        --dim: #7d8791;
+        --faint: #2a3038;
+        --amber: #e6a84a;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink); }
+      body {
+        font: 300 clamp(13px, 1.4vw, 15px) / 1.45 "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+        letter-spacing: 0.02em;
+        padding: clamp(14px, 3vw, 36px);
+        padding-left: max(clamp(14px, 3vw, 36px), env(safe-area-inset-left));
+        padding-right: max(clamp(14px, 3vw, 36px), env(safe-area-inset-right));
+      }
+      h1 { font-weight: 200; font-size: clamp(18px, 2.6vw, 26px); letter-spacing: 0.18em; text-transform: uppercase; margin: 0 0 2px; }
+      h2 { font-weight: 300; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--dim); margin: clamp(16px, 2.4vw, 26px) 0 2px; }
+      h3 { font-weight: 300; font-size: 12px; letter-spacing: 0.12em; color: var(--dim); margin: 8px 0 0; min-width: 9em; }
+      .sub { color: var(--dim); margin: 0 0 clamp(12px, 2vw, 22px); max-width: 80ch; }
+      .row { display: flex; flex-wrap: wrap; align-items: center; gap: 0 clamp(10px, 1.4vw, 20px); }
+      .group { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 clamp(8px, 1.2vw, 16px); border-top: 1px solid var(--faint); }
+      button {
+        font: inherit; color: var(--dim); background: none; border: 0; border-bottom: 1px solid transparent;
+        padding: 11px 2px; min-height: 44px; min-width: 44px; cursor: pointer; letter-spacing: 0.06em;
+        touch-action: manipulation;
+      }
+      button:hover { color: var(--ink); }
+      button:active, button.hit { color: var(--ink); border-bottom-color: var(--dim); }
+      button.on { color: var(--amber); border-bottom-color: var(--amber); }
+      #start { color: var(--bg); background: var(--ink); padding: 10px 22px; border: 0; margin-right: 8px; }
+      #start.live { color: var(--dim); background: none; border: 1px solid var(--faint); }
+      .sliders { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 0 clamp(14px, 2vw, 30px); }
+      label { color: var(--dim); display: flex; align-items: center; gap: 10px; min-height: 44px; }
+      label .k { min-width: 6.5em; }
+      label .v { min-width: 4.2em; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+      input[type="range"] { appearance: none; -webkit-appearance: none; flex: 1; min-width: 90px; height: 44px; background: none; margin: 0; }
+      input[type="range"]::-webkit-slider-runnable-track { height: 1px; background: var(--dim); }
+      input[type="range"]::-moz-range-track { height: 1px; background: var(--dim); }
+      input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 3px; height: 22px; margin-top: -11px; background: var(--amber); border: 0; border-radius: 0; }
+      input[type="range"]::-moz-range-thumb { width: 3px; height: 22px; background: var(--amber); border: 0; border-radius: 0; }
+      #status { color: var(--dim); font-variant-numeric: tabular-nums; }
+      #status b { color: var(--ink); font-weight: 300; }
+      #meter { display: block; width: 100%; height: 64px; margin-top: 6px; }
+      .loop { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+      .loop button { min-width: 7.5em; text-align: left; }
+      .loop input { max-width: 200px; }
+      #note { color: var(--dim); margin-top: 18px; max-width: 80ch; }
+    </style>
+  </head>
+  <body>
+    <h1>Sound</h1>
+    <p class="sub">Everything here is synthesised as it plays: no files. Wind is the bed; boots, breath and fire are small and close; the mountain answers the loud things.</p>
+    <div class="row"><button id="start">Start audio</button><span id="status">silent until started</span></div>
+    <canvas id="meter"></canvas>
+
+    <h2>Scenes</h2>
+    <div id="scenes" class="row"></div>
+
+    <h2>Ambience</h2>
+    <div id="amb" class="sliders"></div>
+
+    <h2>Where one-shots and loops play</h2>
+    <div id="place" class="row"></div>
+    <div id="placeSliders" class="sliders"></div>
+
+    <h2>One-shots</h2>
+    <div id="sfx"></div>
+
+    <h2>Loops</h2>
+    <div id="loops" class="sliders"></div>
+
+    <h2>Footsteps</h2>
+    <div id="steps" class="row"></div>
+    <div id="stepSliders" class="sliders"></div>
+
+    <h2>Score</h2>
+    <div id="moods" class="row"></div>
+    <div id="moodSliders" class="sliders"></div>
+
+    <h2>Mix</h2>
+    <div id="mix" class="sliders"></div>
+    <div id="mixButtons" class="row"></div>
+
+    <p id="note">The strip above shows the master peak (light) and RMS (amber) over the last ten seconds. Bearing is measured from where you face, counter-clockwise: 90 is your left.</p>
+    <script type="module" src="./audio.ts"></script>
+  </body>
+</html>

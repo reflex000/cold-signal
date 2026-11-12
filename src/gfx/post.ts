@@ -4,25 +4,31 @@
 //     -> ambient occlusion (GTAO at half resolution, depth-aware blur)          quality.ao
 //     -> HDR stages added by other systems (storm volume, god rays, heat haze)   addHdrStage()
 //     -> bloom (threshold on the exposed image, dual-filter mip chain)           quality.bloom
-//     -> exposure (U.exposure) -> AgX tone mapping -> cold grade -> sRGB
+//     -> exposure (U.exposure) -> ACES filmic (or AgX) -> cold grade -> sRGB
 //     -> anti-aliasing (FXAA / SMAA; TAA resolves the scene before all of this)  quality.aa
 //     -> overlays added by other systems (frost, lens drops, damage, whiteout)   addOverlay()
-//     -> vignette -> film grain (quality.grain) -> dither
+//     -> vignette -> film grain (quality.grain && userGrain) -> dither
 //
-// How a system extends it (see PostApi at the bottom of the type section):
+// How a system extends it (see PostApi below; docs/THREE_NOTES.md has a worked example):
 //
-//   engine.post.addHdrStage('storm', 100, (i) => mix(i.color, U.fogColor, fogAmount(i.worldPos)));
-//   engine.post.addOverlay('frost', 100, (color, uv) => mix(color, frostColor, frostMask(uv).mul(uFrost)));
+//   const uFog = uniform(0);                                         // created once, driven per frame
+//   engine.post.addHdrStage('storm', 100, (i) => mix(i.color, U.fogColor, uFog.mul(fogAmount(i.worldPos))));
+//   const uFrost = uniform(0);
+//   engine.post.addOverlay('frost', 200, (color, uv, i) => mix(color, frostColor, frostMask(uv, i.aspect).mul(uFrost)));
 //
 // A stage is a function from TSL nodes to a TSL colour node. It is called again whenever the
 // graph is rebuilt (a quality change, a stage added, removed or toggled), so it must be pure:
 // create uniforms once outside the function and drive them every frame from the system's update.
+// A stage that throws while building is logged once and skipped; the picture stays up.
 //
 // Degradation. 'mobile' and 'low' never bake an intermediate HDR target: stages are inlined into
-// the single composite pass and bloom is a quarter-resolution glow. On the WebGL2 backend GTAO,
-// SMAA and TAA are replaced (off / FXAA / FXAA). Where the device cannot render to half-float
-// targets at all (`hdr === false`) the scene is written pre-exposed and square-root encoded into
-// RGBA8 and every stage decodes it; nothing here needs a float target without that check.
+// the single composite pass and bloom is a quarter-resolution glow. On the WebGL2 backend SMAA
+// and TAA become FXAA and GTAO runs on 'high' and up only. Where the device cannot render to
+// half-float targets at all (`hdr === false`) the scene is written pre-exposed and square-root
+// encoded into RGBA8 and every stage decodes it; nothing here needs a float target without that
+// check. Full-resolution passes after the scene pass: mobile 1 (+ a quarter-res glow chain), low
+// and medium 2 (the second feeds FXAA; medium adds GTAO at half res), and each resampling HDR
+// stage on medium and up adds one.
 // Owner: ENGINE.
 import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
@@ -39,7 +45,7 @@ const {
   vec2, vec3, vec4, float, Fn, mix, smoothstep, max, min, clamp, dot, sqrt, luminance,
   agxToneMapping, acesFilmicToneMapping, sRGBTransferOETF, interleavedGradientNoise, screenCoordinate,
   getViewPosition, getNormalFromDepth, perspectiveDepthToViewZ, logarithmicDepthToViewZ,
-  viewZToPerspectiveDepth, rand, NodeUpdateType,
+  viewZToPerspectiveDepth, rand, NodeUpdateType, isBackgroundDepth,
 } = TSL as any;
 
 /** A TSL node. */
@@ -64,7 +70,8 @@ export interface HdrStageInput {
   worldPos: N;
   /** vec3. View-space geometric normal, reconstructed from depth (costly: nine depth reads). */
   normal: N;
-  /** bool. True where nothing was drawn (the sky dome draws depth, so usually false). */
+  /** bool. True where only the background was drawn (scene.background / backgroundNode write no
+   *  depth). A sky dome mesh that writes depth reads as geometry at its own distance. */
   isSky: N;
   /** vec3 colour at another screen position. Without `resample` this is the scene before any
    *  stage; with `resample: true` everything up to this stage is baked first (one more pass). */
@@ -147,6 +154,8 @@ export interface PostApi {
   invalidate(): void;
   readonly uniforms: PostUniforms;
   tonemap: ToneMap;
+  /** The player's film-grain setting (Settings.grain). Grain is drawn when this and quality.grain are both on. */
+  userGrain: boolean;
   readonly hdr: boolean;
   readonly backend: 'webgpu' | 'webgl2';
 }
@@ -482,13 +491,16 @@ export class Post implements PostApi {
   readonly backend: 'webgpu' | 'webgl2';
   readonly hdr: boolean;
   readonly uniforms: PostUniforms = {
-    bloomStrength: uniform(0.55),
-    bloomThreshold: uniform(1.15),
-    bloomKnee: uniform(0.55),
+    // Exposed units (1 = display white before the tone curve). Sunlit snow sits near 1 and a
+    // slope facing a low sun near 2.5, so the glow starts at 2: only fire, flares, embers, the
+    // sun and specular glints bloom.
+    bloomStrength: uniform(0.4),
+    bloomThreshold: uniform(3.0),
+    bloomKnee: uniform(1.0),
     aoStrength: uniform(0.9),
-    saturation: uniform(0.94),
-    contrast: uniform(1.1),
-    temperature: uniform(new THREE.Vector3(0.975, 1.0, 1.04)),
+    saturation: uniform(0.9),
+    contrast: uniform(1.03),
+    temperature: uniform(new THREE.Vector3(0.955, 0.995, 1.06)),
     shadowTint: uniform(new THREE.Vector3(0.9, 0.97, 1.08)),
     vignette: uniform(0.22),
     grain: uniform(0.028),
@@ -504,7 +516,11 @@ export class Post implements PostApi {
   private stages: Stage[] = [];
   private seq = 0;
   private dirty = true;
-  private tone: ToneMap = 'agx';
+  // ACES over AgX: with snow exposed near display white, AgX's long, flat shoulder needs about
+  // 1.3 stops more exposure for the same snow brightness, which lifts rock and shade into a
+  // milky grey; ACES keeps rock near black, shade blue, and 20+ levels per stop of snow detail.
+  private tone: ToneMap = 'aces';
+  private grainOn = true;
   private scenePassNode: N = null;
   private graph: { dispose(): void }[] = [];
   private failed = new Set<string>();
@@ -563,6 +579,16 @@ export class Post implements PostApi {
     this.dirty = true;
   }
 
+  get userGrain(): boolean {
+    return this.grainOn;
+  }
+
+  set userGrain(v: boolean) {
+    if (v === this.grainOn) return;
+    this.grainOn = v;
+    this.dirty = true;
+  }
+
   get tonemap(): ToneMap {
     return this.tone;
   }
@@ -592,13 +618,46 @@ export class Post implements PostApi {
     // A new grain pattern every frame; the golden-ratio walk never repeats visibly.
     this.frameNo = (this.frameNo + 1) % 4096;
     this.grainSeed.value.set((this.frameNo * 0.61803398875) % 1, (this.frameNo * 0.75487766625) % 1);
+    // The final pass draws to whatever target is bound: make sure it is the canvas with no MRT,
+    // whatever a pending compileAsync (or another system) left behind.
+    const r = this.renderer as any;
+    r.setRenderTarget(null);
+    r.setMRT(null);
     this.pipeline.render();
   }
 
-  /** Compile every pipeline the scene needs for the scene pass, without blocking a frame. */
-  async compile(): Promise<void> {
+  /**
+   * Compile the pipelines the scene pass needs, for the whole scene or for one object that is
+   * about to be added to it (compiled with the scene's lights), without blocking a frame.
+   * Pipelines are keyed by the render target's formats and the MRT, so this compiles against the
+   * scene pass's own target. Unlike PassNode.compileAsync, which leaves that target bound until
+   * the promise settles, the renderer state is restored synchronously (Renderer.compileAsync
+   * snapshots it before its first await), so frames may keep rendering meanwhile.
+   */
+  async compile(object?: THREE.Object3D): Promise<void> {
     if (this.dirty) this.build();
-    await this.scenePassNode.compileAsync(this.renderer);
+    const r = this.renderer as any;
+    const sp = this.scenePassNode;
+    const size = r.getDrawingBufferSize(new THREE.Vector2());
+    sp.setSize(size.x, size.y);
+    const prevTarget = r.getRenderTarget();
+    const prevMRT = r.getMRT();
+    let done: Promise<void>;
+    r.setRenderTarget(sp.renderTarget);
+    r.setMRT(sp.getMRT());
+    try {
+      done = object ? r.compileAsync(object, this.camera, this.scene) : r.compileAsync(this.scene, this.camera);
+    } finally {
+      r.setRenderTarget(prevTarget);
+      r.setMRT(prevMRT);
+    }
+    try {
+      await done;
+    } finally {
+      // compileAsync puts back the MRT it started with each time it yields (Renderer
+      // _finishPreCompile), i.e. the scene pass's; render() also resets it before every frame.
+      r.setMRT(prevMRT);
+    }
   }
 
   dispose(): void {
@@ -677,12 +736,25 @@ export class Post implements PostApi {
     let aa: Quality['aa'] = q.aa;
     if (aa === 'taa' && (gl || !hdr)) aa = 'smaa'; // TAA needs a velocity target and float history
     if (aa === 'smaa' && (gl || !hdr)) aa = 'fxaa'; // SMAA keeps three half-float targets
-    const useAo = q.ao && hdr && !gl; // GTAO gathers depth texels, which GLSL ES 3.0 cannot
+    // GTAO renders to an 8-bit red target and its depth gather has a GLSL polyfill in r187
+    // (GLSLNodeBuilder tsl_textureGather), so it also runs on WebGL2 (verified); there it is kept
+    // for 'high' and up, so the WebGL2 'medium' chain stays at three full-screen passes.
+    const useAo = q.ao && hdr && (!gl || q.name === 'high' || q.name === 'ultra');
     const useBloom = q.bloom;
 
     // ---- scene pass ----
     const scenePass: N = this.track(pass(this.scene, this.camera));
     this.scenePassNode = scenePass;
+    // PassNode switches its depth texture to FloatType only in setup(), which runs after
+    // compileAsync() (warmup) has already allocated it as depth24plus; reversed depth on a 24-bit
+    // fixed-point buffer gains nothing, and TRAA's depth copy then fails on the format mismatch.
+    // (three/src/nodes/display/PassNode.js setup(), src/renderers/common/Textures.js)
+    if ((this.renderer as any).reversedDepthBuffer === true && scenePass.renderTarget?.depthTexture) {
+      scenePass.renderTarget.depthTexture.type = THREE.FloatType;
+    }
+    // Same for the colour format (setup() copies the output buffer type): compile() must see the
+    // format the frames will render to, or its pipelines do not match (the RGBA8 fallback).
+    if (scenePass.renderTarget?.texture) scenePass.renderTarget.texture.type = (this.renderer as any).getOutputBufferType();
     if (aa === 'taa') scenePass.setMRT(mrt({ output, velocity }));
     else if (!hdr) scenePass.setMRT(mrt({ output: vec4(enc8(output.rgb.mul(U.exposure)), output.a) }));
     let sceneTex: N = scenePass.getTextureNode('output');
@@ -753,7 +825,7 @@ export class Post implements PostApi {
           return getNormalFromDepth(uvN, depthTex.value, self.camProjInv);
         },
         get isSky() {
-          return viewDepthAt(uvN).greaterThanEqual(self.camFar.mul(0.999));
+          return isBackgroundDepth(depthTex.sample(uvN).r); // reversed-depth aware
         },
         sample: (at: N) => read(from, at),
         viewDepthAt,
@@ -795,21 +867,30 @@ export class Post implements PostApi {
 
     // ---- tone mapping, grade, transfer ----
     const tone = this.tone;
+    // AgX leaves a milky toe that needs a larger black lift than ACES.
+    const blackLift = tone === 'agx' ? 0.0035 : 0.0012;
     const display = Fn(([x]: N[]) => {
       const hdrIn = max(x, vec3(0));
-      const mapped = tone === 'aces' ? acesFilmicToneMapping(hdrIn, float(1)) : agxToneMapping(hdrIn, float(1));
-      // Grade, on display-linear colour. Cold white balance, a little less colour, a gentle S
-      // curve in perceptual space, blue in the shadows only (multiplied, so black stays black).
-      const g = mapped.mul(u.temperature).toVar();
+      const mapped = tone === 'agx' ? agxToneMapping(hdrIn, float(1)) : acesFilmicToneMapping(hdrIn, float(1));
+      // Grade, on display-linear colour.
+      const g = mapped.toVar();
+      const l0 = luminance(g).toVar();
+      // Cold white balance in the shadows and mid tones, fading out toward the highlights so
+      // snow in a low sun keeps the light's warmth (blue shade, cream highlights).
+      g.assign(g.mul(mix(u.temperature, vec3(1), smoothstep(0.3, 0.8, l0))));
+      // Less colour in the mid tones; the darks and the hottest highlights (fire) keep theirs.
       const l = luminance(g).toVar();
-      g.assign(mix(vec3(l), g, u.saturation));
-      g.assign(g.mul(mix(u.shadowTint, vec3(1), smoothstep(0.0, 0.35, l))));
-      const p = sqrt(clamp(g, 0, 1)).toVar(); // close enough to perceptual for a contrast curve
+      const satW = mix(u.saturation, float(1), smoothstep(0.75, 1.0, max(g.r, max(g.g, g.b))));
+      g.assign(mix(vec3(l), g, satW));
+      // Blue in the deep shadows only, multiplied so black stays black.
+      g.assign(g.mul(mix(u.shadowTint, vec3(1), smoothstep(0.0, 0.3, l))));
+      // A gentle S curve in perceptual space (contrast 1 = none).
+      const p = sqrt(clamp(g, 0, 1)).toVar();
       const sCurve = p.mul(p).mul(float(3).sub(p.mul(2)));
       p.assign(mix(p, sCurve, u.contrast.sub(1).mul(2.5)));
       g.assign(p.mul(p));
-      // Clean blacks: AgX leaves a slightly milky toe.
-      g.assign(max(g.sub(0.0035), 0).div(1 - 0.0035));
+      // Clean blacks.
+      g.assign(max(g.sub(blackLift), 0).div(1 - blackLift));
       return sRGBTransferOETF(clamp(g, 0, 1));
     });
     let ldr: N = display(exposed);
@@ -851,7 +932,7 @@ export class Post implements PostApi {
       const d = uvN.sub(0.5).mul(vec2(aspect, 1));
       const r = d.length().div(vec2(aspect, 1).mul(0.5).length());
       o.mulAssign(float(1).sub(u.vignette.mul(smoothstep(0.42, 1.08, r))));
-      if (q.grain) {
+      if (q.grain && this.grainOn) {
         const n = rand(uvN.add(this.grainSeed)).sub(0.5);
         // Grain lives in the mid tones and shadows; highlights (snow in sun) stay clean.
         const lum = luminance(o);

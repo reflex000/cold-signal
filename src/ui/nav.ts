@@ -53,6 +53,8 @@ export function createNav(ctx: Ctx): Nav {
 
     open(scope, select) {
       if (nav.scope === scope && !select) return;
+      // only the scope in use shows its selection; the other keeps it for when focus returns
+      if (nav.scope && nav.scope !== scope && nav.scope.sel) nav.scope.sel.el.classList.remove('sel');
       nav.scope = scope;
       swallow = true;
       if (!scope) return;
@@ -62,6 +64,8 @@ export function createNav(ctx: Ctx): Nav {
 
     bind(scope, item) {
       scope.items.push(item);
+      // Selection is ours, not the browser's: a focused button would also fire on Enter / Space.
+      item.el.tabIndex = -1;
       item.el.addEventListener('pointerenter', (e) => {
         if ((e as PointerEvent).pointerType !== 'mouse' || nav.scope !== scope || item.noHover) return;
         ctx.device = 'kbm';
