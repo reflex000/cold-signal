@@ -34,12 +34,17 @@ const shots = path.join(root, 'shots');
 fs.mkdirSync(shots, { recursive: true });
 let failed = false;
 try {
-  const target = args._[0].replace(/^\//, '');
+  let target = args._[0].replace(/^\//, '');
+  // Chrome keeps navigator.gpu even when asked not to, so the WebGL2 path is forced by the page:
+  // every page honours `?webgl=1` (WebGPURenderer { forceWebGL: true }).
+  const wantGL = (args.backend || (mobile ? 'webgl' : 'webgpu')) === 'webgl';
+  if (wantGL && !/[?&]webgl=/.test(target)) target += (target.includes('?') ? '&' : '?') + 'webgl=1';
   await page.goto(`${server.url}/${target}`, { waitUntil: 'load' });
   await page.waitForFunction(() => window.DONE === true, null, { timeout: Number(args.timeout || 120000) });
   if (args.eval) await page.evaluate(args.eval);
   if (args.wait) await page.waitForTimeout(Number(args.wait));
   const name = args.out || target.replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '');
+  console.log('backend: ' + (await page.evaluate(() => window.BACKEND || 'unknown')));
   const file = path.join(shots, name + '.jpg');
   await page.screenshot({ path: file, type: 'jpeg', quality: 90 });
   console.log(file);
