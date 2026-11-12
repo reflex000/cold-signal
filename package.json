@@ -1,0 +1,27 @@
+{
+  "name": "cold-signal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cold Signal: a first-person co-op mountain survival game. WebGPU with WebGL2 fallback, fully procedural, plays in the browser.",
+  "scripts": {
+    "dev": "vite --port 8940",
+    "build": "vite build",
+    "preview": "vite preview --port 8941",
+    "check": "tsc --noEmit -p .",
+    "test": "vitest run",
+    "gpu": "node tools/gpucheck.mjs"
+  },
+  "dependencies": {
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/three": "^0.187.0",
+    "playwright-core": "^1.65.0",
+    "pngjs": "^7.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}
