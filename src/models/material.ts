@@ -83,11 +83,11 @@ type N = any;
 /** vec2 of two independent 3D value noises in 0..1 at lattice point p, mip level lod. */
 function noise2(p: N, lod: N): N {
   const tex = getNoiseTexture();
-  const i = floor(p);
-  const f = p.sub(i);
-  const u = f.mul(f).mul(f.mul(-2).add(3));
-  const iw = i.sub(floor(i.div(256)).mul(256)); // wrap before scaling: keeps float precision far from the origin
-  const uv = iw.xy.add(iw.z.mul(vec2(37, 17))).add(u.xy).add(0.5).div(256);
+  const i: N = floor(p);
+  const f: N = p.sub(i);
+  const u: N = f.mul(f).mul(f.mul(-2).add(3));
+  const iw: N = i.sub(floor(i.div(256)).mul(256)); // wrap before scaling: keeps float precision far from the origin
+  const uv: N = iw.xy.add(iw.z.mul(vec2(37, 17))).add(u.xy).add(0.5).div(256);
   const t: N = texture(tex, uv).level(lod);
   return mix(t.yw, t.xz, u.z);
 }

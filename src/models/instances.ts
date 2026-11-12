@@ -92,6 +92,8 @@ export interface PropsSystem extends GfxSystem {
   lights(): readonly PlacedLight[];
   /** The pivot object of a named part: rotate or move it; its rest pose is the identity rotation. */
   part(id: number, name: string): THREE.Object3D | null;
+  /** Swing every hinged part of a prop (lid, door) to fraction t of its open angle: 0 shut, 1 fully open. */
+  setOpen(id: number, t: number): void;
   /** Ids of props whose origin lies within r of (x, z). */
   near(x: number, z: number, r: number, out?: number[]): number[];
   /** Ids of every placed prop of a model. */
@@ -370,6 +372,14 @@ export function createPropsSystem(host: PropsHost, props: readonly PropInst[] = 
     },
     part(id, name) {
       return placed[id]?.parts?.[name] ?? null;
+    },
+    setOpen(id, t) {
+      const pl = placed[id];
+      if (!pl || !pl.parts) return;
+      for (const name in pl.parts) {
+        const def = pl.def.parts[name];
+        if (def.openAngle !== 0) pl.parts[name].quaternion.setFromAxisAngle(def.axis, def.openAngle * t);
+      }
     },
     near(x, z, r, out = []) {
       out.length = 0;

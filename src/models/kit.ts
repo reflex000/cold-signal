@@ -763,6 +763,9 @@ export class Group extends Xf<Group> {
   lights: LightDef[] = [];
   /** For a named model part: the point the game rotates it about. */
   pivot = new THREE.Vector3();
+  /** For a hinged named part: the hinge axis (unit, model space) and the angle that opens it fully. */
+  axis = new THREE.Vector3(1, 0, 0);
+  openAngle = 0;
   constructor(readonly b: Builder, readonly name: string | null = null) {
     super();
   }
@@ -780,6 +783,9 @@ export class Group extends Xf<Group> {
     }
     for (const l of this.lights) l.position.applyMatrix4(mm);
     this.pivot.applyMatrix4(mm);
+    this.axis.transformDirection(mm);
+    // a mirror turns the sense of rotation around
+    if (mm.determinant() < 0) this.openAngle = -this.openAngle;
     return this;
   }
   paint(o: Paint): this {
@@ -1022,6 +1028,10 @@ export interface ModelPart {
   glass: THREE.BufferGeometry | null;
   /** Model-space point the part is placed at (and rotated about). */
   pivot: THREE.Vector3;
+  /** Hinge axis through the pivot (unit, model space). */
+  axis: THREE.Vector3;
+  /** Rotation about `axis` (radians) that opens the part fully; 0 if it is not hinged. */
+  openAngle: number;
 }
 
 export interface ModelDef {
@@ -1166,11 +1176,16 @@ export class Builder {
   }
   /**
    * Everything made inside fn becomes the named part `name` of the ModelDef: a separate geometry
-   * the game can move (door, lid, crank). `pivot` is the hinge point in model space.
+   * the game can move (door, lid, crank). `pivot` is the hinge point in model space. For lids and
+   * doors give the hinge: `axis` (default +X) and `open`, the angle in radians about that axis
+   * that opens it fully (right-handed; a lid hinged along its back edge opens with a negative
+   * angle about +X). The props system then opens it with setOpen(id, 0..1).
    */
-  part(name: string, fn: () => void, pivot: V3 = [0, 0, 0]): Group {
+  part(name: string, fn: () => void, pivot: V3 = [0, 0, 0], hinge: { axis?: V3; open?: number } = {}): Group {
     const g = new Group(this, name);
     g.pivot.set(pivot[0], pivot[1], pivot[2]);
+    if (hinge.axis) g.axis.set(hinge.axis[0], hinge.axis[1], hinge.axis[2]).normalize();
+    g.openAngle = hinge.open ?? 0;
     this._inGroup(g, fn);
     for (const e of g.emitters) e.part = name;
     for (const l of g.lights) l.part = name;
@@ -1866,7 +1881,7 @@ export class Builder {
     };
     for (const g of this.named) {
       const name = g.name as string;
-      def.parts[name] = { name, geometry: emit(name, false, g.pivot), glass: emit(name, true, g.pivot), pivot: g.pivot.clone() };
+      def.parts[name] = { name, geometry: emit(name, false, g.pivot), glass: emit(name, true, g.pivot), pivot: g.pivot.clone(), axis: g.axis.clone(), openAngle: g.openAngle };
     }
     for (const a of this.anchors) def.anchors[a.name] = a;
     def.tris = tris;
