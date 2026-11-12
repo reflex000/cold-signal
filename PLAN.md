@@ -8,15 +8,15 @@ browser on the real GPU (WebGPU and the WebGL2 fallback, desktop and phone viewp
 screenshots, judge them harshly against the art direction, fix what looks cheap or broken, check
 the console is clean, commit.
 
-## M0 — Spine
-- [ ] Toolchain: Vite, TypeScript, three r187, headless Chrome on the real GPU with WebGPU
-- [ ] Contracts: sim state / actions / events, world, protocol, view, gfx, audio, ui
-- [ ] Sim core: fixed 30 Hz tick, entity table with net ids, systems, serialise / load
-- [ ] Net: host, client session with prediction and interpolation, loopback (ref / json / lag)
-- [ ] Engine: WebGPURenderer with WebGL2 fallback, quality presets, shared uniforms, post skeleton
-- [ ] Tools: `play.mjs` scenarios, `CS` hook, bench pages, model shots
-- [ ] World: seeded heightmap, places, trees, rocks, colliders, shelter, spawn tables
-- [ ] Model kit: builder, registry, the shared prop material with snow cover
+## M0 — Spine (done)
+- [x] Toolchain: Vite, TypeScript, three r187, headless Chrome on the real GPU with WebGPU
+- [x] Contracts: sim state / actions / events, world, protocol, view, gfx, audio, ui
+- [x] Sim core: fixed 30 Hz tick, entity table with net ids, systems, serialise / load
+- [x] Net: host, client session with prediction and interpolation, loopback (ref / json / lag)
+- [x] Engine: WebGPURenderer with WebGL2 fallback, quality presets, shared uniforms, post skeleton
+- [x] Tools: `play.mjs` scenarios, `CS` hook, bench pages, model shots
+- [x] World: seeded heightmap, places, trees, rocks, colliders, shelter, spawn tables
+- [x] Model kit: builder, registry, the shared prop material with snow cover
 
 ## M1 — The mountain
 - [ ] Terrain mesh with level of detail, snow / rock / ice material

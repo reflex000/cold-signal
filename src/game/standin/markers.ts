@@ -1,0 +1,306 @@
+// STAND-IN for the entity visuals (actors, fx, item models arrive in later milestones): plain
+// coloured shapes for every entity in the view so everything can be seen and walked to.
+// Pickups, crates, wood, heavy logs, devices, campfires and their flames, flares, other players
+// (parka colour by slot), wolves, the helicopter. One instanced mesh per shape, rewritten every
+// frame from view.list(kind) (no allocation). A small fixed pool of point lights follows the
+// nearest flames (a fixed count, so the lighting never recompiles).
+// Owner: GAME.
+import * as THREE from 'three/webgpu';
+import type { Frame, GfxSystem, Quality } from '../../gfx/api';
+import type { CsEngine } from '../../gfx/engine';
+import type { CrateEnt, DeviceEnt, FireEnt, ItemId, LogEnt, PickupEnt, PlayerEnt, WoodEnt } from '../../sim/types';
+import type { View, ViewEnt } from '../view';
+
+type RGB = [number, number, number];
+const PARKA: RGB[] = [[0.5, 0.12, 0.05], [0.07, 0.14, 0.36], [0.2, 0.24, 0.09], [0.55, 0.34, 0.05]];
+
+const ITEM_LOOK: Partial<Record<ItemId, { s: [number, number, number]; c: RGB }>> = {
+  stick: { s: [0.55, 0.05, 0.06], c: [0.17, 0.11, 0.06] },
+  log: { s: [0.42, 0.14, 0.14], c: [0.22, 0.15, 0.09] },
+  tinder: { s: [0.18, 0.06, 0.14], c: [0.5, 0.42, 0.28] },
+  matches: { s: [0.1, 0.03, 0.06], c: [0.55, 0.12, 0.06] },
+  flare: { s: [0.05, 0.05, 0.2], c: [0.6, 0.08, 0.04] },
+  ammo: { s: [0.1, 0.05, 0.07], c: [0.35, 0.28, 0.12] },
+  cell: { s: [0.06, 0.06, 0.12], c: [0.12, 0.12, 0.14] },
+  bandage: { s: [0.12, 0.06, 0.12], c: [0.75, 0.74, 0.7] },
+  ration: { s: [0.16, 0.05, 0.1], c: [0.3, 0.32, 0.18] },
+  thermos: { s: [0.08, 0.26, 0.08], c: [0.12, 0.2, 0.3] },
+  axe: { s: [0.12, 0.06, 0.7], c: [0.35, 0.08, 0.05] },
+  flashlight: { s: [0.06, 0.06, 0.26], c: [0.2, 0.2, 0.22] },
+  flaregun: { s: [0.08, 0.16, 0.24], c: [0.65, 0.22, 0.04] },
+  rifle: { s: [0.08, 0.1, 1.05], c: [0.2, 0.13, 0.08] },
+  radio: { s: [0.16, 0.22, 0.08], c: [0.18, 0.2, 0.16] },
+};
+const PART_LOOK = { s: [0.2, 0.16, 0.2] as [number, number, number], c: [0.95, 0.55, 0.1] as RGB };
+
+const CRATE_LOOK: Record<CrateEnt['type'], { s: [number, number, number]; c: RGB }> = {
+  luggage: { s: [0.7, 0.28, 0.48], c: [0.1, 0.13, 0.22] },
+  locker: { s: [0.5, 1.8, 0.5], c: [0.33, 0.35, 0.37] },
+  crate: { s: [0.8, 0.6, 0.6], c: [0.3, 0.21, 0.12] },
+  medkit: { s: [0.42, 0.26, 0.16], c: [0.7, 0.68, 0.64] },
+  cupboard: { s: [0.8, 1.6, 0.42], c: [0.22, 0.15, 0.1] },
+  toolbox: { s: [0.52, 0.26, 0.24], c: [0.52, 0.1, 0.05] },
+};
+
+const DEVICE_LOOK: Record<DeviceEnt['type'], { s: [number, number, number]; y: number; c: RGB }> = {
+  panel: { s: [0.7, 0.9, 0.25], y: 0.7, c: [0.22, 0.24, 0.23] },
+  generator: { s: [1.1, 0.8, 0.65], y: 0, c: [0.2, 0.25, 0.16] },
+  door: { s: [0.9, 2.0, 0.07], y: 0, c: [0.2, 0.14, 0.09] },
+  beacon: { s: [0.25, 0.4, 0.25], y: 0, c: [0.5, 0.08, 0.05] },
+  bed: { s: [0.9, 0.45, 2.0], y: 0, c: [0.16, 0.17, 0.2] },
+  note: { s: [0.22, 0.01, 0.3], y: 0.02, c: [0.75, 0.72, 0.62] },
+};
+
+interface Pool {
+  mesh: THREE.InstancedMesh;
+  arr: Float32Array;
+  col: Float32Array;
+  n: number;
+}
+
+function pool(geo: THREE.BufferGeometry, mat: THREE.Material, cap: number, name: string, shadow = true): Pool {
+  const mesh = new THREE.InstancedMesh(geo, mat, cap);
+  mesh.name = name;
+  mesh.castShadow = shadow;
+  mesh.receiveShadow = shadow;
+  mesh.frustumCulled = false;
+  mesh.count = 0;
+  mesh.setColorAt(0, new THREE.Color(1, 1, 1));
+  return { mesh, arr: mesh.instanceMatrix.array as Float32Array, col: mesh.instanceColor!.array as Float32Array, n: 0 };
+}
+
+const _m = new THREE.Matrix4();
+const _q = new THREE.Quaternion();
+const _e = new THREE.Euler();
+const _p = new THREE.Vector3();
+const _s = new THREE.Vector3();
+
+/** Instance with translation, Euler rotation (YXZ: yaw, pitch, roll) and scale. */
+function add(pl: Pool, x: number, y: number, z: number, yaw: number, pitch: number, roll: number, sx: number, sy: number, sz: number, c: RGB, k = 1): void {
+  if (pl.n >= pl.mesh.instanceMatrix.count) return;
+  _e.set(pitch, yaw, roll, 'YXZ');
+  _q.setFromEuler(_e);
+  _m.compose(_p.set(x, y, z), _q, _s.set(sx, sy, sz));
+  _m.toArray(pl.arr, pl.n * 16);
+  pl.col[pl.n * 3] = c[0] * k;
+  pl.col[pl.n * 3 + 1] = c[1] * k;
+  pl.col[pl.n * 3 + 2] = c[2] * k;
+  pl.n++;
+}
+
+function done(pl: Pool): void {
+  pl.mesh.count = pl.n;
+  pl.mesh.instanceMatrix.needsUpdate = true;
+  if (pl.mesh.instanceColor) pl.mesh.instanceColor.needsUpdate = true;
+}
+
+export function createStandinMarkers(engine: CsEngine): GfxSystem {
+  const scene = engine.scene;
+  const group = new THREE.Group();
+  group.name = 'standin-markers';
+  const lit = new THREE.MeshStandardNodeMaterial({ roughness: 0.75, metalness: 0 });
+  const glow = new THREE.MeshBasicNodeMaterial();
+  glow.fog = true;
+
+  const unitBox = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+  const unitCyl = new THREE.CylinderGeometry(1, 1, 1, 8).rotateZ(Math.PI / 2); // along X
+  const unitPost = new THREE.CylinderGeometry(1, 1, 1, 7).translate(0, 0.5, 0);
+  const capsule = new THREE.CapsuleGeometry(0.5, 1, 4, 10).translate(0, 1, 0); // 2 tall
+  const sphere = new THREE.IcosahedronGeometry(1, 1);
+  const flame = new THREE.ConeGeometry(1, 1, 7).translate(0, 0.5, 0);
+  const stone = new THREE.IcosahedronGeometry(1, 0);
+
+  const boxes = pool(unitBox, lit, 600, 'standin-boxes');
+  const cyls = pool(unitCyl, lit, 400, 'standin-logs');
+  // items on the ground cast no shadow: at a low sun every stick would draw a long dark line
+  const items = pool(unitBox, lit, 800, 'standin-items', false);
+  const sticks = pool(unitCyl, lit, 900, 'standin-sticks', false);
+  const posts = pool(unitPost, lit, 600, 'standin-posts');
+  const bodies = pool(capsule, lit, 64, 'standin-bodies');
+  const heads = pool(sphere, lit, 64, 'standin-heads');
+  const stones = pool(stone, lit, 400, 'standin-stones');
+  const flames = pool(flame, glow, 64, 'standin-flames', false);
+  const sparks = pool(sphere, glow, 64, 'standin-glow', false);
+  const all = [boxes, cyls, items, sticks, posts, bodies, heads, stones, flames, sparks];
+  for (const p of all) group.add(p.mesh);
+  scene.add(group);
+
+  // a fixed pool of point lights: the nearest flames get them
+  const LIGHTS = 3;
+  const lights: THREE.PointLight[] = [];
+  for (let i = 0; i < LIGHTS; i++) {
+    const l = new THREE.PointLight(0xff8a3c, 0, 22, 2);
+    l.castShadow = false;
+    l.name = 'standin-firelight-' + i;
+    lights.push(l);
+    group.add(l);
+  }
+  let maxLights = 2;
+  const cand: { x: number; y: number; z: number; d: number; k: number; c: RGB }[] = [];
+  for (let i = 0; i < 32; i++) cand.push({ x: 0, y: 0, z: 0, d: 0, k: 0, c: [1, 0.5, 0.2] });
+  let nc = 0;
+  const FIRE: RGB = [1.0, 0.42, 0.12];
+  const FLARE: RGB = [1.0, 0.12, 0.06];
+
+  function light(x: number, y: number, z: number, k: number, c: RGB, view: View): void {
+    if (nc >= cand.length || k <= 0) return;
+    const cam = view.camera;
+    const o = cand[nc++];
+    o.x = x;
+    o.y = y;
+    o.z = z;
+    o.k = k;
+    o.c = c;
+    o.d = (x - cam.x) ** 2 + (y - cam.y) ** 2 + (z - cam.z) ** 2;
+  }
+
+  return {
+    name: 'markers',
+    setQuality(q: Quality): void {
+      maxLights = Math.max(1, Math.min(LIGHTS, q.maxLights));
+    },
+    update(f: Frame): void {
+      const view = f.view;
+      const t = f.time;
+      for (const p of all) p.n = 0;
+      nc = 0;
+      // small things are not drawn far away (sub-pixel specks): metres, squared
+      const cx = view.camera.x, cz = view.camera.z;
+      const beyond = (e: { x: number; z: number }, r: number) => (e.x - cx) * (e.x - cx) + (e.z - cz) * (e.z - cz) > r * r;
+
+      for (const e of view.list('pickup') as ViewEnt<PickupEnt>[]) {
+        if (beyond(e, e.item.startsWith('part_') ? 200 : 110)) continue;
+        const look = e.item.startsWith('part_') ? PART_LOOK : ITEM_LOOK[e.item] ?? { s: [0.16, 0.16, 0.16] as [number, number, number], c: [0.4, 0.4, 0.4] as RGB };
+        const sink = e.lie === 'snow' ? look.s[1] * 0.5 : 0;
+        if (e.item === 'stick' || e.item === 'log') {
+          // a few pieces side by side
+          const n = Math.min(3, Math.max(1, e.n));
+          for (let i = 0; i < n; i++) {
+            const off = (i - (n - 1) / 2) * look.s[1] * 1.3;
+            add(sticks, e.x + Math.sin(e.yaw) * off, e.y + look.s[1] / 2 - sink, e.z + Math.cos(e.yaw) * off, e.yaw + i * 0.15, 0, 0, look.s[0], look.s[1] / 2, look.s[2] / 2, look.c);
+          }
+        } else add(items, e.x, e.y - sink, e.z, e.yaw, 0, 0, look.s[0], look.s[1], look.s[2], look.c);
+      }
+      for (const e of view.list('crate') as ViewEnt<CrateEnt>[]) {
+        if (beyond(e, 250)) continue;
+        const look = CRATE_LOOK[e.type] ?? CRATE_LOOK.crate;
+        add(boxes, e.x, e.y, e.z, e.yaw, 0, 0, look.s[0], look.s[1], look.s[2], look.c, e.open ? 0.55 : 1);
+      }
+      for (const e of view.list('wood') as ViewEnt<WoodEnt>[]) {
+        if (beyond(e, e.type === 'snag' ? 400 : 200)) continue;
+        const s = e.scale || 1;
+        if (e.type === 'snag') add(posts, e.x, e.y - 0.2, e.z, e.yaw, 0, 0, 0.17 * s, 7 * s, 0.17 * s, [0.21, 0.2, 0.19]);
+        else if (e.type === 'stump') add(posts, e.x, e.y - 0.05, e.z, e.yaw, 0, 0, 0.28 * s, 0.5 * s, 0.28 * s, [0.2, 0.15, 0.1]);
+        else if (e.type === 'deadfall') add(cyls, e.x, e.y + 0.18 * s, e.z, e.yaw, 0, 0.06, 2.6 * s, 0.2 * s, 0.2 * s, [0.19, 0.17, 0.15]);
+        else add(boxes, e.x, e.y - 0.1, e.z, e.yaw, 0, 0, 1.4 * s, 0.55 * s, 1.0 * s, [0.12, 0.1, 0.08]);
+      }
+      for (const e of view.list('log') as ViewEnt<LogEnt>[]) {
+        if (beyond(e, 250)) continue;
+        add(cyls, e.x, e.y + 0.22, e.z, e.yaw + Math.PI / 2, 0, 0, Math.max(1, e.len), 0.22, 0.22, [0.23, 0.17, 0.11]);
+      }
+      for (const e of view.list('device') as ViewEnt<DeviceEnt>[]) {
+        if (beyond(e, 250)) continue;
+        const look = DEVICE_LOOK[e.type] ?? DEVICE_LOOK.panel;
+        add(boxes, e.x, e.y + look.y, e.z, e.yaw, 0, 0, look.s[0], look.s[1], look.s[2], look.c);
+        if (e.type === 'beacon' && e.on) {
+          const k = 20 * (0.5 + 0.5 * Math.sin(t * 6));
+          add(sparks, e.x, e.y + 0.48, e.z, 0, 0, 0, 0.06, 0.06, 0.06, [1, 0.1, 0.05], k);
+        }
+      }
+      for (const e of view.list('fire') as ViewEnt<FireEnt>[]) {
+        if (e.type === 'campfire') {
+          // a ring of stones and a few crossed sticks
+          for (let i = 0; i < 7; i++) {
+            const a = (i / 7) * Math.PI * 2 + e.id;
+            add(stones, e.x + Math.sin(a) * 0.48, e.y + 0.04, e.z + Math.cos(a) * 0.48, a, 0.3, 0, 0.13, 0.09, 0.11, [0.09, 0.088, 0.085]);
+          }
+          const sz = 0.3 + 0.6 * e.size;
+          for (let i = 0; i < 3; i++) add(sticks, e.x, e.y + 0.08, e.z, (i / 3) * Math.PI + e.id, 0, 0.35, 0.32 * sz, 0.04, 0.04, e.lit ? [0.06, 0.04, 0.03] : [0.2, 0.14, 0.08]);
+        }
+        const heat = e.lit ? Math.max(0.15, e.heat) : e.embers > 0 ? 0.08 : 0;
+        if (heat <= 0) continue;
+        const fl = 0.85 + 0.15 * Math.sin(t * 13 + e.id) * Math.sin(t * 7.3 + e.id * 2);
+        const base = e.type === 'barrel' ? 0.95 : e.type === 'stove' ? 0.25 : 0.05;
+        if (e.lit) {
+          const h = (e.type === 'stove' ? 0.25 : 0.55) * (0.5 + heat) * fl;
+          add(flames, e.x, e.y + base, e.z, t * 0.7, 0, 0, 0.22 * (0.6 + heat * 0.6), h, 0.22 * (0.6 + heat * 0.6), FIRE, 14 * heat);
+          add(flames, e.x, e.y + base, e.z, -t, 0, 0, 0.12, h * 1.35, 0.12, [1, 0.62, 0.25], 22 * heat);
+        } else add(sparks, e.x, e.y + base + 0.03, e.z, 0, 0, 0, 0.18, 0.04, 0.18, FIRE, 3);
+        light(e.x, e.y + base + 0.5, e.z, 13 * heat * fl, FIRE, view);
+      }
+      for (const e of view.list('flare')) {
+        const burning = e.life > 0;
+        const fl = 0.8 + 0.2 * Math.sin(t * 23 + e.id);
+        add(sparks, e.x, e.y + 0.05, e.z, 0, 0, 0, 0.07, 0.07, 0.07, FLARE, burning ? 60 * fl : 0.5);
+        if (burning) light(e.x, e.y + 0.4, e.z, 30 * fl, FLARE, view);
+      }
+      const third = view.camera.third > 0.3;
+      for (const e of view.list('player') as ViewEnt<PlayerEnt>[]) {
+        if (e.id === view.myId && !third) continue;
+        const c = PARKA[e.slot % PARKA.length];
+        const down = e.life === 'downed' || e.life === 'dead';
+        const h = down ? 0.35 : e.crouch ? 0.62 : 0.86;
+        if (down) {
+          add(bodies, e.x, e.y + 0.25, e.z, e.yaw, Math.PI / 2, 0, 0.55, 0.85, 0.5, c);
+          continue;
+        }
+        add(bodies, e.x, e.y, e.z, e.yaw, 0, 0, 0.62, h, 0.5, c);
+        add(heads, e.x - Math.sin(e.yaw) * 0.04, e.y + h * 2 - 0.02, e.z - Math.cos(e.yaw) * 0.04, e.yaw, 0, 0, 0.15, 0.17, 0.15, [0.08, 0.075, 0.07]);
+      }
+      for (const e of view.list('wolf')) {
+        if (e.mood === 'dead') {
+          add(bodies, e.x, e.y + 0.18, e.z, e.yaw, Math.PI / 2, Math.PI / 2, 0.42, 0.55, 0.42, [0.22, 0.21, 0.2]);
+          continue;
+        }
+        const c: RGB = e.alpha ? [0.2, 0.19, 0.18] : [0.3, 0.29, 0.27];
+        // body along the facing (yaw 0 faces north like a player): the capsule starts at the chest
+        // and runs back; legs as posts
+        add(bodies, e.x - Math.sin(e.yaw) * 0.55, e.y + 0.42, e.z - Math.cos(e.yaw) * 0.55, e.yaw, Math.PI / 2, 0, 0.42, 0.55, 0.4, c);
+        add(heads, e.x - Math.sin(e.yaw) * 0.72, e.y + 0.78, e.z - Math.cos(e.yaw) * 0.72, e.yaw, 0, 0, 0.15, 0.14, 0.22, c);
+        for (const [fx, fz] of [[0.14, 0.42], [-0.14, 0.42], [0.14, -0.42], [-0.14, -0.42]]) {
+          const s = Math.sin(e.yaw), co = Math.cos(e.yaw);
+          add(posts, e.x + co * fx + s * -fz, e.y, e.z - s * fx + co * -fz, 0, 0, 0, 0.045, 0.5, 0.045, c);
+        }
+      }
+      for (const e of view.list('heli')) {
+        add(boxes, e.x, e.y, e.z, e.yaw, 0, 0, 2.6, 2.6, 11, [0.1, 0.11, 0.12]);
+        add(cyls, e.x, e.y + 2.8, e.z, t * 20, 0, 0, 6.5, 0.04, 0.2, [0.05, 0.05, 0.05]);
+        light(e.x, e.y - 0.2, e.z, 25, [1, 1, 0.95], view);
+      }
+      for (const p of all) done(p);
+
+      // lights: the brightest nearby flames
+      for (let i = 0; i < LIGHTS; i++) {
+        const l = lights[i];
+        let best = -1;
+        let bs = Infinity;
+        if (i < maxLights) {
+          for (let k = 0; k < nc; k++) {
+            const o = cand[k];
+            if (o.k <= 0) continue;
+            const s = o.d / o.k;
+            if (s < bs) {
+              bs = s;
+              best = k;
+            }
+          }
+        }
+        if (best < 0 || cand[best].d > 120 * 120) {
+          l.intensity = 0;
+          continue;
+        }
+        const o = cand[best];
+        l.position.set(o.x, o.y, o.z);
+        l.color.setRGB(o.c[0], o.c[1] * 1.3, o.c[2] * 1.8);
+        l.intensity = o.k;
+        o.k = 0; // taken
+      }
+    },
+    dispose(): void {
+      scene.remove(group);
+      for (const g of [unitBox, unitCyl, unitPost, capsule, sphere, flame, stone]) g.dispose();
+      lit.dispose();
+      glow.dispose();
+    },
+  };
+}
