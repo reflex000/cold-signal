@@ -14,7 +14,7 @@ Module: the model toolkit and the first models. Owner files: `src/models/kit.ts`
       lines (`line()` / `edge()` helpers), bump slope clamp, rust that follows the vertex albedo
 - [x] all nine models written, registered, render on both backends: crate, barrel, luggage, campfire,
       stick_bundle, log_heavy, trail_marker, jerrycan, toolbox (+ props/index.ts imports them all)
-- [ ] docs/THREE_NOTES.md section
+- [x] docs/THREE_NOTES.md section 12 written
 - [ ] polish pass: close-ups per model, day/dusk, snow 0/0.8, both backends; console clean
 - [ ] final report (append under "## Final report")
 

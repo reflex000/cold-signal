@@ -384,7 +384,7 @@ async function main(): Promise<void> {
       if (e.def.lit === false) continue;
       const k = Math.max(0.3, Math.min(2, e.size / 0.2)) * (typeof e.def.strength === 'number' ? Math.max(0.2, e.def.strength) : 1);
       const p = new THREE.PointLight(new THREE.Color(PAL.fire[0], PAL.fire[1], PAL.fire[2]), 2.2 * k, 7, 2);
-      p.position.copy(e.position).addScaledVector(e.dir, 0.12 + e.size);
+      p.position.copy(e.position).addScaledVector(e.dir, 0.06 + e.size * 0.5);
       scene.add(p);
     }
     for (const l of props.lights()) {

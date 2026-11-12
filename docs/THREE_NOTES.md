@@ -169,3 +169,43 @@ engine.post.addOverlay('frost', 200, (color, uv, i) => {
   ~0.7 ms, FXAA ~0.3 ms, grain ~0.1 ms, whole post ~2 ms. Shadows halve the draw calls when off.
 - 'mobile' at 1440x810: ~3.2 ms total, post ~0.5 ms (one full-screen pass + quarter-res glow).
 - Run `dev/engine.html?q=<tier>&perf=1&t=3` and read the PERF table in the console.
+
+## 12. Materials, vertex attributes and instancing (owner: KIT)
+Checked while building src/models/material.ts (one MeshStandardNodeMaterial for every kit model)
+and drawing it through InstancedMesh on WebGPU and WebGL2.
+- Order in `NodeMaterial.setupPosition` (materials/nodes/NodeMaterial.js): morph, skinning,
+  displacementMap, batch, `instancedMesh(object)`, then `positionLocal.assign(positionNode)`. So
+  inside `positionNode`, `positionLocal` and `normalLocal` already carry the instance matrix
+  (nodes/accessors/Instance.js assigns both); `modelWorldMatrix` is the InstancedMesh's own
+  matrix. World-space effects written in `positionNode` (snow push, wind sway) are per instance
+  with no extra work; assigning `normalLocal` there swings the shading normal too.
+- Instance matrices (Instance.js `createInstanceMatrixNode`): a uniform buffer while
+  `count * 64` bytes fits `builder.getUniformBufferLimit()`, otherwise an instanced interleaved
+  attribute (four vec4 columns in one vertex buffer). `MAX_VERTEX_BUFFERS = 8` is hard-coded
+  there for WebGPU; motion vectors add a previous-matrix buffer. The kit keeps geometry at six
+  attributes for that reason, and never sets `instanceColor`.
+- Custom attributes: `attribute('aDetail', 'vec4')`. A `BufferAttribute(Uint8Array, 4, true)`
+  (normalised) arrives as 0..1 floats on both backends: the kit packs colour+AO, surface and
+  environment channels as u8x4 to keep vertices small.
+- `property('float', 'csRough')` assigned inside the `colorNode` Fn and used as `roughnessNode`
+  / `metalnessNode` / `emissiveNode` / `normalNode` / `aoNode` works on both backends:
+  `NodeMaterial.setup` builds the diffuse colour (setupDiffuseColor) before setupVariants and
+  setupLighting, so one Fn can compute every channel once. `normalNode` is a VIEW-space normal.
+- Derivatives (`dFdx`, `dFdy`) must be taken outside `If()` branches that depend on a varying:
+  WGSL only allows them in uniform control flow. Take `dFdx(detail)` once at the top, pass an
+  explicit LOD into branch-local lookups (`texture(t, uv).level(lod)` works on both backends).
+- `If(...).ElseIf(...)` chains on an int id from a vertex attribute compile on both backends; a
+  float id interpolates across a triangle, so a triangle whose vertices carry non-neighbouring
+  ids shows bands of the ids in between (keep per-vertex id changes between neighbours).
+- No environment map: subclass MeshStandardNodeMaterial and override `setupEnvironment(builder)`
+  to return `super.setupEnvironment(builder) ?? new MyLightingNode()`; a `LightingNode` subclass
+  whose `setup(builder)` does `builder.context.radiance.addAssign(...)` supplies the specular
+  ambient (material.ts `SkyReflectionNode`). With `scene.environment` set, three's own IBL wins.
+- Procedural bump (height -> view normal via `dFdx(positionView)`): clamp the gradient (slope
+  about 40 degrees) or grazing angles and height steps at material borders sparkle in dotted lines.
+- Thresholding magnified value noise from an RGBA8 texture shows 1/256-cell stair steps (the
+  hardware's bilinear weights are 8-bit): mix a finer octave into anything you threshold.
+- `smoothstep(e0, e1, x)` with e0 > e1 happens to work on both backends but is undefined by the
+  GLSL and WGSL specs; new code uses `smoothstep(0, w, x).oneMinus()`.
+- `scene.fogNode = fog(colorNode, factorNode)` replaces scene.fog for node materials that set
+  `fog = true`; the prop material relies on gfx/weather setting it.

@@ -44,11 +44,19 @@ register(
     }
 
     // ---- the bed: ash and charcoal, glowing beneath while the fire lives ----
-    const glow = [0, 1.6, 3.2, 0][stage];
+    const glow = [0, 0.55, 0.9, 0][stage]; // scene radiance: real coals are 0.2 to 1 (the day sun on paper is about 3)
     if (stage > 0) {
       b.ink({ color: PAL.charcoal, mat: MAT.CHAR, wear: [0, 0.5, 0.62, 0.92][stage], emissive: glow, snow: stage === 3 ? 1 : 0.15 });
-      const bed = b.lathe([[0, 0], [R * 0.86, 0], [R * 0.74, 0.012], [R * 0.45, 0.034], [0, 0.046]], { sides: 16, smooth: true });
-      bed.noise(0.007, 11);
+      // a flat, lumpy bed (2 to 3 cm), not a mound: ash settles level
+      const bed = b.lathe([[0, 0], [R * 0.84, 0], [R * 0.72, 0.007], [R * 0.5, 0.014], [R * 0.25, 0.02], [0, 0.024]], { sides: 18, smooth: true });
+      bed.noise(0.008, 6).noise(0.0035, 21);
+      // a ragged outline where ash and charcoal were kicked out over the snow
+      const os = r.int(0, 1 << 20);
+      bed.warp((q) => {
+        const a = Math.atan2(q.z, q.x), k = Math.hypot(q.x, q.z) / (R * 0.84);
+        const s = 1 + k * k * (0.16 * Math.sin(a * 3 + os) + 0.1 * Math.sin(a * 7 + os * 1.7) + 0.06 * Math.sin(a * 13 + os * 0.3));
+        q.x *= s; q.z *= s;
+      });
       bed.scale(1, stage === 2 ? 0.8 : 1, 1);
       // only the heart glows; the outer part of the bed is cold grey ash
       bed.each((q) => {
@@ -62,7 +70,7 @@ register(
         const a = r.range(0, Math.PI * 2), d = Math.sqrt(r.next()) * R * 0.5;
         const cr = r.range(0.016, 0.034);
         b.ink({ color: mixRGB(PAL.charcoal, PAL.soot, r.next()), mat: MAT.CHAR, wear: stage === 3 ? r.range(0.4, 0.9) : r.range(0.05, 0.4), emissive: glow * r.range(0.8, 1.8) * sat(1 - d / (R * 0.4)), snow: 0.3 });
-        b.rock(cr, { detail: 0, rough: 0.9, facet: 0.8, flat: 0.3, squash: [1.3, 0.7, 1] }).rotY(r.range(0, 6.3)).move(Math.cos(a) * d, 0.03 - (d / R) * 0.03, Math.sin(a) * d);
+        b.rock(cr, { detail: 0, rough: 0.9, facet: 0.8, flat: 0.3, squash: [1.3, 0.7, 1] }).rotY(r.range(0, 6.3)).move(Math.cos(a) * d, 0.014 - (d / R) * 0.02, Math.sin(a) * d);
       }
     }
 
@@ -105,7 +113,7 @@ register(
         const tip: V3 = [top[0] - Math.cos(a) * over + r.range(-0.02, 0.02), top[1] + r.range(-0.05, 0.03), top[2] - Math.sin(a) * over + r.range(-0.02, 0.02)];
         const rad = r.range(0.011, 0.02);
         if (stage === 0) stick(base, tip, rad, -2, 0, 0);
-        else stick(base, tip, rad, r.range(0.14, 0.22), r.range(1.6, 3), 0.35);
+        else stick(base, tip, rad, r.range(0.14, 0.22), r.range(0.5, 0.9), 0.35);
       }
       if (v >= 2) {
         // two split pieces leaning in on the windward side
@@ -113,7 +121,7 @@ register(
           const a = r.range(0, Math.PI * 2);
           const base: V3 = [Math.cos(a) * 0.27, 0.02, Math.sin(a) * 0.27];
           const tip: V3 = [Math.cos(a) * 0.04, 0.3, Math.sin(a) * 0.04];
-          stick(base, tip, r.range(0.024, 0.032), stage === 0 ? -2 : 0.1, 1.4, 0.3);
+          stick(base, tip, r.range(0.024, 0.032), stage === 0 ? -2 : 0.1, 0.5, 0.3);
         }
       }
       if (stage === 0) {
@@ -134,14 +142,15 @@ register(
         const base: V3 = [Math.cos(a) * out, 0.03, Math.sin(a) * out];
         const tip: V3 = [Math.cos(a + r.range(-0.3, 0.3)) * inn, r.range(0.035, 0.07), Math.sin(a + r.range(-0.3, 0.3)) * inn];
         // charred from the middle of the ring outward to about 14 cm from the centre
-        const p = stick(base, tip, r.range(0.012, 0.022), 10, stage === 2 ? r.range(2, 4) : 0, stage === 2 ? 0.45 : 0.75);
+        const p = stick(base, tip, r.range(0.012, 0.022), 10, 0, stage === 2 ? 0.45 : 0.75);
+        const ember = stage === 2 ? r.range(0.6, 1.1) : 0;
         p.each((q) => {
           const d = Math.hypot(q.x, q.z);
           const t = sat((0.17 - d) / 0.06 + 0.5);
           const cc = mixRGB(mixRGB(PAL.bark, PAL.timberDark, 0.3), mixRGB(PAL.charcoal, PAL.soot, 0.5), t);
           q.r = cc[0]; q.g = cc[1]; q.b = cc[2];
           q.wear = t * (stage === 2 ? 0.45 : 0.8);
-          q.emissive = stage === 2 ? t * 3 : 0;
+          q.emissive = t * ember;
         });
       }
     }

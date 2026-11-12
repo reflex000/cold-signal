@@ -179,7 +179,7 @@ tempo 120
 enter now 0.3
 leave now
 fade 0.35
-level -6
+level -10
 order hit drive hit2 drive cut | drive cut
 
 phrase hit len 16
@@ -208,7 +208,7 @@ mood whiteout
 tempo 40
 fade 7
 wait 6
-level -4.5
+level -7
 order w1 w2 w3 w2
 
 phrase w1 len 24
@@ -217,7 +217,7 @@ phrase w1 len 24
   glass  p  -:5 D3:11 C3:8
   glass  @0.5 pp -:8 A4:8 G4:8
   cello  pp D2:12 A2:12
-  brass  @0.7 pp -:8 D3+A3:10
+  brass  @0.7 ppp -:8 D3+A3:10
 
 phrase w2 len 24
   glass  p  G3:8 A3:8 Bb3:8
@@ -225,7 +225,7 @@ phrase w2 len 24
   glass  p  D3:13 D3:8 E3:3
   glass  @0.5 pp -:4 G4:8 A4:8
   cello  pp Bb2:12 A2:12
-  brass  @0.7 pp -:10 Bb2+F3:10
+  brass  @0.7 ppp -:10 Bb2+F3:10
 
 phrase w3 len 24
   glass  p  A3:8 G3:8 A3:8
@@ -233,7 +233,7 @@ phrase w3 len 24
   glass  p  D3:5 D3:8 C3:8 D3:3
   glass  @0.5 pp -:6 D4:10 E4:8
   cello  pp D2:12 F2:12
-  brass  @0.7 pp -:6 D3+A3:10
+  brass  @0.7 ppp -:6 D3+A3:10
 
 # ---------------------------------------------------------------------------------------------
 # shelter: warmth. The motif with its major inflection (B for Bb, F# for F), piano alone.
@@ -265,7 +265,7 @@ phrase d rest 14..18
 mood tower
 tempo 48
 fade 5
-level -2.5
+level -6
 order t1 t2 t3 t4
 
 phrase t1 rest 5..8
@@ -287,7 +287,7 @@ phrase t4 rest 12..18
   piano  mp D4:3 A4:3 | Bb4:1 A4:3 | D5:8
   brass  mp D3+A3:10 D3+A3+D4:8
   glass  pp -:10 D4+A4:8
-  ice    @0.6 pp -:12 D7:6
+  ice    @0.6 p  -:12 D7:6
 
 # ---------------------------------------------------------------------------------------------
 # holdout: the pulse and the brass, built in four steps by intensity. Each step adds a player
@@ -296,7 +296,7 @@ mood holdout
 tempo 60
 fade 3
 wait 5
-level -6
+level -10.5
 order s1a s1b s2a s2b s3a s3b s4a s4b
 
 phrase s1a len 16 when 0..0.25
@@ -330,15 +330,15 @@ phrase s3b len 16 when 0.5..0.75
 # At the top step every player has a register of its own: the drum below, the brass and the
 # cello in the middle, the glass above them, and the piano striking bells over everything.
 phrase s4a len 16 when 0.75..1.01
-  drum   [ f D2:.5 mp D2:.5 ]*16
+  drum   [ mf D2:.5 p D2:.5 ]*16
   brass  mf D3+A3+D4:8 F3+C4+F4:8
   cello  mf D3:3 A3:3 | Bb3:1 A3:3 F3:2 | E3:4
   piano  mf D5+A5:8 F5+C6:8
   glass  p  A4:16
 
 phrase s4b len 16 when 0.75..1.01
-  drum   [ f D2:.5 mp D2:.5 ]*16
-  brass  f  G3+D4+G4:8 A3+E4+A4:8
+  drum   [ mf D2:.5 p D2:.5 ]*16
+  brass  mf G3+D4+G4:8 A3+E4+A4:8
   cello  mf A3:3 E4:3 | F4:1 E4:3 D4:2 | E4:4
   piano  mf G5+D6:8 A5+E6:8
   glass  p  D5:16
@@ -348,7 +348,7 @@ phrase s4b len 16 when 0.75..1.01
 mood rescue
 tempo 52
 fade 6
-level -5
+level -8.5
 order r1 r2 | r3 r2
 
 phrase r1 rest 4..6
@@ -357,12 +357,12 @@ phrase r1 rest 4..6
   piano  p  D2:6      | G2:6            | A2:4 | D2+A2:8
   brass  mp -:6       | G2+D3+B3:6      | A2+E3+C#4:4 | D3+A3+F#4:8
   glass  p  D4+A4:16 F#4+A4+D5:8
-  ice    @0.4 pp -:16 A6:4 D7:4
+  ice    @0.4 p -:16 A6:4 D7:4
 
 phrase r2 rest 10..14
   piano  p  F#4:2 A4:2 D5:8
   glass  pp D3+A3+F#4:12
-  ice    pp -:4 A6:4 D7:6
+  ice    p  -:4 A6:4 D7:6
 
 phrase r3 rest 12..18
   piano  p  D5:3 A5:3 | B5:1 A5:3 F#5:2 | E5:4 | D5:8

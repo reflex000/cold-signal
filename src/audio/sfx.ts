@@ -322,6 +322,9 @@ const defs = {
     s.tone({ f: 62, f1: 44, ft: 0.07, a: 0.012, d: 0.1, g: 0.5, to: lp });
     s.tone({ t: s.t + 0.13, f: 74, f1: 50, ft: 0.05, a: 0.01, d: 0.075, g: 0.34, to: lp });
     s.burst({ kind: 'brown', type: 'lowpass', f: 90, a: 0.01, d: 0.08, g: 0.5, to: lp });
+    // phone and laptop speakers play nothing under ~150 Hz: a soft knock higher up carries the beat there
+    s.burst({ kind: 'pink', f: 250, q: 1.3, a: 0.006, d: 0.06, g: 0.3 });
+    s.burst({ t: s.t + 0.13, kind: 'pink', f: 290, q: 1.3, a: 0.005, d: 0.045, g: 0.18 });
     return 0.4;
   }, 1),
   /** internal: one breath cycle. a = cold 0..1 (rate and raggedness), b = level */

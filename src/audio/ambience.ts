@@ -35,7 +35,7 @@ const TC = 0.09;
  * body and the scene's events): a calm dusk about -30 dBFS, a whiteout on the ridge about -19,
  * the cabin about -31. Room is left above it for boots (-16 peak) and the shot (-1).
  */
-const BED_LEVEL = 0.7;
+const BED_LEVEL = 0.8;
 const NUM: (keyof AmbienceEx)[] = ['wind', 'gust', 'storm', 'snowfall', 'shelter', 'indoor', 'forest', 'height', 'night', 'onIce', 'cold', 'cave'];
 
 export class AmbienceSynth {
@@ -210,9 +210,11 @@ export class AmbienceSynth {
     const T = this.T;
     const set = (p: AudioParam, v: number) => p.setTargetAtTime(v, at, TC);
 
-    // how hard the air moves at the ear: the game's wind and gust, and three scales of our own turbulence
+    // how hard the air moves at the ear: the game's wind and gust, and three scales of our own
+    // turbulence. A strong mean wind sits near 0.7 so that gusts still have somewhere to go: if the
+    // mean alone reached 1, a storm would be one flat roar with no swells in it
     const turb = 0.55 * wander(T * 0.09, 1) + 0.3 * wander(T * 0.31, 2) + 0.15 * wander(T * 1.3, 3);
-    const I = clamp(c.wind * (0.78 + 0.34 * turb) + c.gust * (0.3 + 0.25 * c.wind) + c.storm * 0.12, 0.03, 1);
+    const I = clamp(c.wind * (0.55 + 0.25 * turb) + c.gust * (0.42 + 0.16 * c.wind) + c.storm * 0.08, 0.03, 1);
     const Ik = (i: number) => clamp(I * (1 + 0.28 * wander(T * 0.5, 10 + i)), 0.02, 1);
     const hk = smooth(80, 420, c.height);
     const nk = c.night;
@@ -229,9 +231,9 @@ export class AmbienceSynth {
       if (s.p) s.p.pan.setTargetAtTime(clamp(side + s.off, -1, 1), at, 0.2);
     };
 
-    // body: the weight of moving air. Thinner up high.
+    // body: the weight of moving air at the hood; it surges with every gust. Thinner up high.
     set(this.body.f.frequency, 80 + 300 * I);
-    set(this.body.g.gain, (1.1 * Math.pow(I, 1.3) + 0.3 * st) * (1 - 0.45 * hk));
+    set(this.body.g.gain, (1.15 * Math.pow(I, 1.6) + 0.12 * st) * (1 - 0.45 * hk));
     set(this.buffet.g.gain, 0.9 * I * I * open);
     set(this.buffetDepth.gain, 0.55 * I * I * open);
 
@@ -243,31 +245,34 @@ export class AmbienceSynth {
       set(s.g.gain, 1.5 * Math.pow(w, 1.7));
       pan(s);
     }
-    // hiss: spindrift over crust, air through cloth. From behind the hood dulls it.
+    // hiss: spindrift over crust, air through cloth. From behind the hood dulls it. It is white
+    // noise above a few kHz, so a little goes a long way: at full gale it sits near -25 dBFS
     for (let i = 0; i < this.hiss.length; i++) {
       const w = Ik(4 + i);
       const s = this.hiss[i];
       set(s.f.frequency, 2600 + 2600 * w);
-      set(s.g.gain, 0.42 * Math.pow(w, 2.2) * (1 + 1.3 * hk) * (0.82 + 0.18 * front));
+      set(s.g.gain, 0.15 * Math.pow(w, 2.2) * (1 + 0.8 * hk) * (0.82 + 0.18 * front));
       pan(s);
     }
-    set(this.edge.g.gain, 0.9 * hk * I * I);
+    set(this.edge.g.gain, 0.45 * hk * I * I);
     set(this.edge.f.frequency, 5600 + 2600 * I);
     pan(this.edge);
 
     // whistles: only in strong wind (sooner on the ridge), each drifting in pitch, coming and going
     for (let i = 0; i < this.whistles.length; i++) {
       const s = this.whistles[i];
-      const present = smooth(0.2, 0.75, 0.5 + 0.5 * wander(T * 0.13, 20 + i)) * smooth(0.5, 0.85, Ik(8 + i) + 0.18 * hk);
+      // they sing in the gusts: half there in a strong steady wind, fully in a gust, gone in a lull
+      const present = smooth(0.25, 0.7, 0.5 + 0.5 * wander(T * 0.13, 20 + i)) * smooth(0.6, 0.95, Ik(8 + i) + 0.12 * hk);
       set(s.f.frequency, this.whistleHz[i] * (0.82 + 0.42 * I) * (1 + 0.06 * wander(T * 0.6, 30 + i)));
       set(s.g.gain, 16 * present * (0.5 + 0.5 * open));
       pan(s);
     }
 
-    // the storm itself, out on the mountain: a roar that does not gust with the near wind
-    const roar = Math.pow(st, 1.4) * (0.72 + 0.28 * wander(T * 0.07, 40)) * (1 - 0.3 * nk);
-    set(this.roarLo.g.gain, 1.5 * roar);
-    set(this.roarMid.g.gain, 1.1 * roar);
+    // the storm itself, out on the mountain: a roar that does not gust with the near wind but comes
+    // in long waves of its own, under it rather than over it
+    const roar = Math.pow(st, 1.4) * (0.6 + 0.4 * wander(T * 0.06, 40)) * (1 - 0.3 * nk);
+    set(this.roarLo.g.gain, 0.5 * roar);
+    set(this.roarMid.g.gain, 0.55 * roar);
     set(this.roarMid.f.frequency, 170 + 80 * wander(T * 0.05, 41));
 
     // pines: a hush that arrives in long waves through the canopy
@@ -291,8 +296,8 @@ export class AmbienceSynth {
     const inn = c.indoor * (1 - c.cave);
     set(this.moan[0].f.frequency, 104 + 58 * I + 9 * wander(T * 0.4, 60));
     set(this.moan[1].f.frequency, 240 + 95 * Ik(12) + 14 * wander(T * 0.33, 61));
-    set(this.moan[0].g.gain, 5 * inn * (0.15 + I) * (0.6 + 0.4 * wander(T * 0.21, 62)));
-    set(this.moan[1].g.gain, 3.2 * inn * Math.pow(I, 1.5) * (0.5 + 0.5 * wander(T * 0.27, 63)));
+    set(this.moan[0].g.gain, 1.6 * inn * (0.15 + I) * (0.6 + 0.4 * wander(T * 0.21, 62)));
+    set(this.moan[1].g.gain, 1.4 * inn * Math.pow(I, 1.5) * (0.5 + 0.5 * wander(T * 0.27, 63)));
     // brown noise under 75 Hz is nearly all of its energy: a little is a pull you feel, more is a rumble
     set(this.draft.g.gain, 0.28 * inn * I);
     set(this.room.g.gain, 0.12 * (inn + c.cave));

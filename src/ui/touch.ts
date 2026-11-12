@@ -156,7 +156,7 @@ export function createTouch(ctx: Ctx): TouchApi {
     const a = (i / WHEEL.length) * Math.PI * 2;
     const s = h('div', 'tw-s', twc);
     s.dataset.id = tool;
-    s.style.transform = `translate(calc(var(--tb) * ${(Math.sin(a) * 1.72).toFixed(3)}), calc(var(--tb) * ${(-Math.cos(a) * 1.72).toFixed(3)}))`;
+    s.style.transform = `translate(calc(var(--tb) * ${(Math.sin(a) * 1.64).toFixed(3)}), calc(var(--tb) * ${(-Math.cos(a) * 1.64).toFixed(3)}))`;
     icon(tool, '', s, true);
     return s;
   });
@@ -176,6 +176,7 @@ export function createTouch(ctx: Ctx): TouchApi {
     wheelOpen = true;
     wheelTap = tapMode;
     cls(tw, 'on', true);
+    cls(ctx.root, 'wheel', true); // the HUD centre steps back while the wheel is up
     ctx.sfx('ui_open');
   }
   function closeWheel(choose: boolean): void {
@@ -191,6 +192,7 @@ export function createTouch(ctx: Ctx): TouchApi {
     wheelTap = false;
     hot = -1;
     cls(tw, 'on', false);
+    cls(ctx.root, 'wheel', false);
   }
   const tbPx = () => whl.el.getBoundingClientRect().width || 56;
   whl.el.addEventListener('pointerdown', (e) => {

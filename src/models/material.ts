@@ -246,12 +246,14 @@ export function createPropMaterial(o: PropMaterialOpts = {}): THREE.MeshStandard
       const sB = vec3(17, 0.8, 21);
       const g2: N = noise2(det.mul(sB).add(3.3), lodAni(sB));
       const endGrain: N = smoothstep(0.8, 0.95, nD.y);
-      const rr: N = length(det.xz).add(g2.y.sub(0.5).mul(0.012)).add(g.y.sub(0.5).mul(0.0025));
-      const RING = 150; // rings per metre
+      // distance from the heart, wobbling with the fibre; good and bad years make the spacing uneven
+      const r0: N = length(det.xz);
+      const rr: N = r0.add(g2.y.sub(0.5).mul(0.01)).add(g.y.sub(0.5).mul(0.002)).add(sin(r0.mul(23)).mul(0.004));
+      const RING = 140; // rings per metre
       const ph: N = fract(rr.mul(RING));
-      const late: N = smoothstep(0.55, 0.78, ph).mul(smoothstep(1.0, 0.86, ph)).mul(smoothstep(2.4, 0.9, pix.mul(RING)));
+      const late: N = smoothstep(0.5, 0.75, ph).mul(smoothstep(1.0, 0.84, ph)).mul(smoothstep(2.4, 0.9, pix.mul(RING))).mul(nMd.y.mul(0.6).add(0.55));
       const fibre: N = g.x.mul(0.6).add(g2.x.mul(0.4));
-      col.mulAssign(mix(fibre.mul(0.36).add(0.8), nHi.x.mul(0.16).add(0.92), endGrain).mul(late.mul(-0.34).add(1.08)));
+      col.mulAssign(mix(fibre.mul(0.36).add(0.8), nHi.x.mul(0.16).add(0.92), endGrain).mul(late.mul(-0.26).add(1.06)));
       // checks: along the grain on the faces, radial splits from the heart on the ends
       const dir: N = det.xz.div(rr.max(1e-4));
       const radial: N = noise2(vec3(dir.x.mul(5), dir.y.mul(5), rr.mul(3)).add(7.7), lodIso(30));
@@ -280,8 +282,9 @@ export function createPropMaterial(o: PropMaterialOpts = {}): THREE.MeshStandard
       // chalky fade on the weather side, rust weeping down from the chips
       const bleed: N = smoothstep(0.52, 0.8, drip.x).mul(wear.mul(1.5).min(1)).mul(nLo.y.mul(0.7).add(0.3));
       col.assign(mix(col, col.mul(vec3(0.62, 0.4, 0.26)).add(vec3(0.02, 0.008, 0.002)), bleed.mul(0.7)));
+      // primer, then dark steel (it dulls within days outdoors)
       col.assign(mix(col, vec3(0.3, 0.27, 0.22), any));
-      col.assign(mix(col, vec3(0.5, 0.51, 0.53), deep));
+      col.assign(mix(col, vec3(0.26, 0.265, 0.275), deep));
       col.assign(mix(col, rustCol, rustMask));
       metal.assign(deep.mul(rustMask.oneMinus()));
       rough.assign(mix(mix(rough.add(bleed.mul(0.2)), 0.4, deep), 0.95, rustMask));
@@ -293,7 +296,7 @@ export function createPropMaterial(o: PropMaterialOpts = {}): THREE.MeshStandard
       const scratch: N = smoothstep(0.8, 0.92, g.y).mul(wear.mul(2).min(1).mul(0.7).add(0.3));
       const dull: N = smoothstep(0.35, 0.75, nLo.y.add(nMd.x.mul(0.3)).sub(0.15)).mul(wear.mul(2).min(1).mul(0.7).add(0.3));
       col.mulAssign(g.x.mul(0.2).add(0.86).mul(nLo.x.mul(0.2).add(0.9)));
-      col.assign(mix(col, col.mul(0.72).add(0.05), dull.mul(0.6)).add(scratch.mul(0.1)));
+      col.assign(mix(col, col.mul(0.72).add(col.mul(0.15)), dull.mul(0.6)));
       rough.addAssign(dull.mul(0.25).add(g.x.sub(0.5).mul(0.18)).sub(scratch.mul(0.15)));
       // above wear 0.5 steel rusts: blooms first in the creases
       const rustAmt: N = wear.mul(2).sub(1).max(0).add(ao.oneMinus().mul(wear).mul(0.6));
@@ -302,6 +305,8 @@ export function createPropMaterial(o: PropMaterialOpts = {}): THREE.MeshStandard
       const rustK: N = dot(base, vec3(0.3, 0.55, 0.15)).div(0.045).clamp(0.18, 1.15);
       const rustCol: N = mix(mix(vec3(0.12, 0.048, 0.022), vec3(0.05, 0.027, 0.016), nHi.x), vec3(0.07, 0.05, 0.04), nMd.x.mul(0.5)).mul(rustK);
       col.assign(mix(col, rustCol, rustMask));
+      // bright scratches only through bare metal, relative to it (never chalk lines on rust)
+      col.mulAssign(scratch.mul(rustMask.oneMinus()).mul(0.45).add(1));
       metal.mulAssign(rustMask.oneMinus());
       rough.assign(mix(rough, 0.95, rustMask));
       h.assign(g.x.mul(0.00006).sub(scratch.mul(0.00015)).add(rustMask.mul(nHi.x).mul(0.0008)));

@@ -29,11 +29,21 @@ dev/audio.html, dev/audio.ts, tools/audio-check.mjs.
 - DC flags from subsonic thumps / shaped pulse wave (fixed by master HPF).
 - Cabin scene 62 Hz centroid at -17 dBFS RMS: stove draw + flue hum too loud.
 
+## Round 2 (done)
+- src/audio/mix.ts: MIX table, dB per sound name ('step_<surface>' for steps, loop names for loops),
+  applied by Engine.start (Voice.trim) and loop set({gain}). Trims came from the --dry run.
+- Check pre-roll PRE = 0.4 s: DynamicsCompressorNode needs ~0.3 s to settle after a context starts
+  (one-shots at 0.05 s measured 5 dB low: artefact, not a real loss). measureCompGain now 0.75 s.
+- Fire loop pops/hiss -12/-10 dB inside; stove rebalanced (less draw/flue, a mid roar); match crackle 3 -> 0.9;
+  rifle synthetic roll down, far send carries echoes; howl: drifting hold, purer (LP 2.5k), sends down.
+- ambience.ts: BED_LEVEL gain for the whole bed (0.7); draft 1.6 -> 0.28 (was a -14 dBFS 65 Hz rumble);
+  moan 5/3.2 -> 1.6/1.4; storm roar 1.5/1.1 -> 0.95/0.8.
+- Live path verified: shot.mjs "dev/audio.html?auto=1": ready, 8 voices, clean console.
+
 ## Remaining (priority order)
-1. Dry measurement (--dry 1), then re-level every sound to the targets below; rifle: less synthetic roll.
-2. Fire loop pops far too hot; stove too bassy; footsteps on rock/ice/metal too hot.
-3. Scenes levels: calm ~-30 dBFS RMS, storm ~-20, cabin ~-30. Then lite profile run (--lite 1).
-4. Bench page: shot.mjs "dev/audio.html?auto=1" check console clean + screenshot.
+1. Re-measure scenes (targets: dusk -30, ridge -19, cabin -31, stalked -24, ice -27, cave -28 RMS).
+2. Look at sheets again for design issues; lite profile run (--lite 1).
+3. Final full run, report table.
 
 Level targets (raw peak, dBFS): UI -24..-18; breath -36..-28; footsteps -22..-14; body hurt -18,
 downed/death -14; tools -16..-8; rifle -2 (loudest); howl near -8; ice crack -6; loops RMS: fire -28,

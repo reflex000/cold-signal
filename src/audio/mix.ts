@@ -34,5 +34,5 @@ export const MIX: Readonly<Record<string, number>> = {
   // footsteps
   step_snow: -2, step_deep: -9, step_rock: -16.5, step_ice: -14.5, step_wood: -10, step_metal: -13, step_water: -7.5,
   // loops
-  fire: 0, flare: -4, generator: -3, radio_static: -8, heli: -10, stove: 0, beacon: 0, wolf_breath: -3,
+  fire: -7, flare: -4, generator: -3, radio_static: -8, heli: -10, stove: 0, beacon: 0, wolf_breath: -3,
 };

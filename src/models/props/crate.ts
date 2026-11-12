@@ -9,7 +9,7 @@
 // handles and a steel band; 2 small plywood crate with cleat grips; 3 wide flat crate, one band
 // cut and sprung loose.
 // Anchors: top (lid centre), loot (inside floor), use (where a player stands to open it), hinge.
-import { Builder, MAT, PAL, mixRGB, Path, type Part, type RGB, type V3 } from '../kit';
+import { Builder, MAT, PAL, hex, mixRGB, Path, type Part, type RGB, type V3 } from '../kit';
 import { register } from '../registry';
 
 const PI = Math.PI;
@@ -41,6 +41,9 @@ register(
     const boardInk = { color: face, mat: MAT.WOOD, wear, vary: 0.14 } as const;
     const frameInk = { color: frame, mat: MAT.WOOD, wear: Math.min(1, wear + 0.15), vary: 0.1 } as const;
     const steelInk = { color: PAL.steelDark, mat: MAT.METAL, wear: 0.75, rough: 0.6 } as const;
+    const nailInk = { color: PAL.iron, mat: MAT.METAL, wear: 1.6, rough: 0.7, vary: 0.2 } as const;
+    // stencil paint soaks into the timber: WOOD with a paint colour, grain across like the boards
+    const stencilInk = { color: v === 1 ? hex(0xb9b49a) : hex(0x1b1a18), mat: MAT.WOOD, wear: 0.7, grain: 'x', vary: 0 } as const;
     const boards: Part[] = [];
 
     /**
@@ -58,6 +61,13 @@ register(
         }
         b.ink(frameInk);
         for (const s of [-1, 1]) b.plank(Hs, vw, bt, { rows: 1 }).move(s * (half - vw / 2), y0 + Hs / 2, bt / 2);
+        // rusty nail heads through the verticals, one into every board
+        b.ink(nailInk);
+        const nb = ply ? 3 : Math.max(2, Math.round(Hs / 0.12));
+        for (const s of [-1, 1]) for (let i = 0; i < nb; i++) {
+          b.dome(0.0042, 0.0016, 5).rotX(Math.PI / 2).move(s * (half - vw / 2) + r.range(-0.006, 0.006), y0 + (Hs / nb) * (i + 0.5) + r.range(-0.008, 0.008), bt);
+        }
+        b.ink(frameInk);
         const inner = half - vw;
         for (const yy of [y0 + bw / 2, y1 - bw / 2]) b.plank(inner * 2, bw, bt, { rows: 1 }).rotZ(PI / 2).move(0, yy, bt / 2);
         if (brace) {
@@ -113,6 +123,11 @@ register(
         b.ink(frameInk);
         const cleats = W > 0.9 ? [-1, 0, 1] : [-1, 1];
         for (const c of cleats) b.plank(LD - 0.01, bw, bt, { rows: 1 }).rotX(-PI / 2).move(c * (LW / 2 - bw / 2 - 0.004), y1 + t + bt / 2, 0);
+        b.ink(nailInk);
+        const nl = ply ? 3 : Math.max(3, Math.round(LD / 0.125));
+        for (const c of cleats) for (let i = 0; i < nl; i++) {
+          b.dome(0.0042, 0.0016, 5).move(c * (LW / 2 - bw / 2 - 0.004) + r.range(-0.006, 0.006), y1 + t + bt, -LD / 2 + (LD / nl) * (i + 0.5) + r.range(-0.006, 0.006));
+        }
         // strap hinges and the hasp
         b.ink(steelInk);
         for (const s of [-1, 1]) {
@@ -150,7 +165,7 @@ register(
           b.box(0.24, 0.05, 0.03, { bevel: 0.006 }).move(0, yh, bt + 0.015);
           b.ink({ color: PAL.rope, mat: MAT.CLOTH, wear: 0.6, vary: 0.05, detailScale: 1.8 });
           const zc = bt + 0.034;
-          b.pipe(Path.spline([[-0.08, yh + 0.026, zc - 0.012], [-0.081, yh - 0.03, zc], [-0.05, yh - 0.075, zc + 0.012], [0, yh - 0.088, zc + 0.016], [0.05, yh - 0.075, zc + 0.012], [0.081, yh - 0.03, zc], [0.08, yh + 0.026, zc - 0.012]], 5), 0.0085, { sides: 6 });
+          b.pipe(Path.spline([[-0.08, yh + 0.026, zc - 0.012], [-0.081, yh - 0.03, zc], [-0.05, yh - 0.075, zc + 0.012], [0, yh - 0.088, zc + 0.016], [0.05, yh - 0.075, zc + 0.012], [0.081, yh - 0.03, zc], [0.08, yh + 0.026, zc - 0.012]], 3), 0.0085, { sides: 6 });
           for (const k of [-1, 1]) b.sphere([0.014, 0.011, 0.014], { sides: 7, rings: 4 }).move(k * 0.08, yh + 0.03, zc - 0.012);
         }
       });
@@ -172,6 +187,25 @@ register(
         const path = Path.fillet([[-hx, y2, hz * 0.2], [-hx, y2, -hz], [hx, y2, -hz], ...tail], 0.012, 3);
         b.strap(path, 0.016, 0.0012, { up: [-1, 0, 0] });
       }
+    }
+
+    // ---- stencilled markings: on the front top rail (nothing crosses it) and on one end panel ----
+    b.ink(stencilInk);
+    {
+      const lh = 0.04;
+      const front = ['AIR CARGO', 'LOT 4712', 'THIS SIDE UP', 'KEEP DRY'][v];
+      if (ply) {
+        b.stencil(front, 0.034, { align: 'center' }).move(0, y0 + Hs * 0.42, D / 2 + 0.0012);
+        b.stencil('^   ^', 0.05, { align: 'center', weight: 0.12 }).move(0, y0 + Hs * 0.6, D / 2 + 0.0012);
+      } else {
+        // the hasp hangs over the middle of the rail: one word either side of it
+        const [left, right] = front.split(' ');
+        const yb = y1 - bw / 2 - lh / 2, z = D / 2 + bt + 0.0012;
+        b.stencil(left, lh, { align: 'right' }).move(-0.04, yb, z);
+        b.stencil(right, lh, { align: 'left' }).move(0.04, yb, z);
+      }
+      const lot = ['NO 2417-B', 'NO 0388', 'NO 51-7', 'NO 2417-F'][v];
+      b.stencil(lot, 0.026, { align: 'center' }).rotY(PI / 2).move(W / 2 + 0.0012, y0 + bw + 0.022, 0);
     }
 
     // ---- weather and use: grime and damp creep up from the ground, the lid's front edge is handled most ----

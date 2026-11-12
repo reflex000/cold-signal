@@ -163,6 +163,8 @@ export function createInventory(ctx: Ctx, nav: Nav): InventoryApi {
 
   let shown = false;
   let tabOn: 'pack' | 'map' = 'pack';
+  // drawn item icons may arrive later than the pack opens: look again now and then, not every frame
+  let iconWait = 0;
 
   // ======================================================================================
   function tab(t: 'pack' | 'map'): void {
@@ -330,7 +332,7 @@ export function createInventory(ctx: Ctx, nav: Nav): InventoryApi {
       cls(c.el, 'held', me.held === c.id);
       cls(c.el, 'inst', ps === 'installed');
       txt(c.n, !part && !TOOLS.includes(c.id) && n > 0 ? String(n) : '');
-      if (!c.cv) {
+      if (!c.cv && iconWait <= 0) {
         const src = game.icon(c.id);
         if (src) {
           const cv = document.createElement('canvas');
@@ -456,6 +458,7 @@ export function createInventory(ctx: Ctx, nav: Nav): InventoryApi {
       if (on) {
         ctx.sfx('ui_open');
         actKey = '';
+        iconWait = 0;
         const me = view.me;
         // open on what is in hand, or the first thing carried
         if (me) {
@@ -467,7 +470,7 @@ export function createInventory(ctx: Ctx, nav: Nav): InventoryApi {
         renderDetail();
       } else if (nav.scope === scope) nav.open(null);
     },
-    update() {
+    update(dt) {
       if (!shown) return;
       updateLegend();
       const me = view.me;
@@ -482,6 +485,7 @@ export function createInventory(ctx: Ctx, nav: Nav): InventoryApi {
         renderDetail();
         updateFire(me);
       } else updateMap(me);
+      iconWait = iconWait <= 0 ? 1 : iconWait - dt;
     },
   };
 }

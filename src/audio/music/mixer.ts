@@ -46,7 +46,7 @@ const STRIPS: Record<Player, StripSpec> = {
   drum: { level: 1, pan: 0, send: 0.14, body: [['lowpass', 900, 0.7, 0]] },
   ice: { level: 0.4, pan: 0, send: 0.8, body: [] },
   brass: {
-    level: 0.6,
+    level: 0.42,
     pan: 0.28,
     send: 0.55,
     // The mute: lows thinned, a nasal peak, the top closed.

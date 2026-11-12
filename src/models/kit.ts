@@ -207,7 +207,12 @@ export interface Paint {
   mat?: MatId;
   rough?: number;
   metal?: number;
-  /** Glow strength, 0..64 (1 is paper-white under the tone mapper; 6 and up blooms). */
+  /**
+   * Glow as scene radiance, 0..64, the units of the lights (white paper in the day sun is about 3,
+   * in dusk light about 1.5). Embers and coals 0.3 to 1 (MAT.CHAR: only its cracks glow), a lit
+   * window 0.5 to 2, an instrument light or lamp lens 2 to 8, a beacon 10 to 30. Bloom starts
+   * where radiance times exposure passes about 1, so the same number blooms at night, not by day.
+   */
   emissive?: number;
   /** 0 new .. 1 wrecked. Edges wear first. */
   wear?: number;
@@ -591,17 +596,21 @@ export class Part extends Xf<Part> {
       const seed = this.b._nextSeed();
       const g = o.grain ?? 'y';
       const ds = o.detailScale ?? 1;
-      // a random offset decorrelates the procedural detail of parts; across the grain it also
-      // puts the heart of the tree (the ring centre) 1.5 to 6 m away unless `pith` says where
-      const pa = (hash32(seed, 1) / 4294967296) * Math.PI * 2, pr = 1.5 + (hash32(seed, 3) / 4294967296) * 4.5;
-      const ox = o.pith ? -o.pith[0] * ds : Math.cos(pa) * pr, oy = (hash32(seed, 2) / 4294967296) * 31, oz = o.pith ? -o.pith[1] * ds : Math.sin(pa) * pr;
+      // A random offset decorrelates the procedural detail of parts. Across the grain it is also
+      // where the heart of the tree (the ring centre) lies: 6 to 36 cm off, as in a board sawn
+      // from a real log, and never quite parallel to the board (a slight shear), so faces show
+      // cathedral arches. `pith` puts it exactly on the axis instead (logs, sticks).
+      const h01 = (k: number) => hash32(seed, k) / 4294967296;
+      const pa = h01(1) * Math.PI * 2, pr = 0.06 + h01(3) * 0.3;
+      const ox = o.pith ? -o.pith[0] * ds : Math.cos(pa) * pr, oy = h01(2) * 31, oz = o.pith ? -o.pith[1] * ds : Math.sin(pa) * pr;
+      const shx = o.pith ? 0 : (h01(5) - 0.5) * 0.06, shz = o.pith ? 0 : (h01(6) - 0.5) * 0.06;
       this.d.length = nv * 3;
       for (let i = 0; i < nv; i++) {
         let x = this.p[i * 3], y = this.p[i * 3 + 1], z = this.p[i * 3 + 2];
         if (g === 'x') { const t = x; x = y; y = t; } else if (g === 'z') { const t = z; z = y; y = t; }
-        this.d[i * 3] = x * ds + ox;
+        this.d[i * 3] = (x + y * shx) * ds + ox;
         this.d[i * 3 + 1] = y * ds + oy;
-        this.d[i * 3 + 2] = z * ds + oz;
+        this.d[i * 3 + 2] = (z + y * shz) * ds + oz;
       }
       const mat = o.mat ?? MAT.PLASTIC;
       const col = o.color ?? PAL.plasticGrey;
@@ -1076,6 +1085,28 @@ export interface BuildOpts {
   /** 0 disables baked occlusion, 1 default strength. */
   ao?: number;
 }
+
+// ------------------------------------------------------------------------------------------
+// Stencil font: strokes as polylines on a 4 x 6 grid, "x y x y ..." per stroke
+// ------------------------------------------------------------------------------------------
+
+const GLYPHS: Record<string, string[]> = {
+  A: ['0 0 0 4 2 6 4 4 4 0', '0 2.6 4 2.6'], B: ['0 0 0 6 3 6 4 5 4 4 3 3 0 3', '3 3 4 2 4 1 3 0 0 0'],
+  C: ['4 5.4 3 6 1 6 0 5 0 1 1 0 3 0 4 0.6'], D: ['0 0 0 6 3 6 4 5 4 1 3 0 0 0'], E: ['4 6 0 6 0 0 4 0', '0 3 3 3'],
+  F: ['4 6 0 6 0 0', '0 3 3 3'], G: ['4 5 3 6 1 6 0 5 0 1 1 0 3 0 4 1 4 3 2 3'], H: ['0 0 0 6', '4 0 4 6', '0 3 4 3'],
+  I: ['1 6 3 6', '2 6 2 0', '1 0 3 0'], J: ['4 6 4 1 3 0 1 0 0 1'], K: ['0 0 0 6', '4 6 0 2', '1.3 3.3 4 0'],
+  L: ['0 6 0 0 4 0'], M: ['0 0 0 6 2 3 4 6 4 0'], N: ['0 0 0 6 4 0 4 6'], O: ['1 0 0 1 0 5 1 6 3 6 4 5 4 1 3 0 1 0'],
+  P: ['0 0 0 6 3 6 4 5 4 4 3 3 0 3'], Q: ['1 0 0 1 0 5 1 6 3 6 4 5 4 1 3 0 1 0', '2.4 1.6 4 0'],
+  R: ['0 0 0 6 3 6 4 5 4 4 3 3 0 3', '2 3 4 0'], S: ['4 5 3 6 1 6 0 5 0 4 1 3 3 3 4 2 4 1 3 0 1 0 0 1'],
+  T: ['0 6 4 6', '2 6 2 0'], U: ['0 6 0 1 1 0 3 0 4 1 4 6'], V: ['0 6 2 0 4 6'], W: ['0 6 1 0 2 3 3 0 4 6'],
+  X: ['0 6 4 0', '0 0 4 6'], Y: ['0 6 2 3 4 6', '2 3 2 0'], Z: ['0 6 4 6 0 0 4 0'],
+  '0': ['1 0 0 1 0 5 1 6 3 6 4 5 4 1 3 0 1 0', '1 1.5 3 4.5'], '1': ['1 5 2 6 2 0', '1 0 3 0'],
+  '2': ['0 5 1 6 3 6 4 5 4 4 0 0 4 0'], '3': ['0 5 1 6 3 6 4 5 4 4 3 3 1.5 3', '3 3 4 2 4 1 3 0 1 0 0 1'],
+  '4': ['3 0 3 6 0 2 4 2'], '5': ['4 6 0 6 0 3.4 3 3.4 4 2.4 4 1 3 0 0 0'],
+  '6': ['4 5 3 6 1 6 0 5 0 1 1 0 3 0 4 1 4 2 3 3 0 3'], '7': ['0 6 4 6 1.2 0'],
+  '8': ['1 3 0 4 0 5 1 6 3 6 4 5 4 4 3 3 1 3 0 2 0 1 1 0 3 0 4 1 4 2 3 3'], '9': ['4 3 1 3 0 4 0 5 1 6 3 6 4 5 4 1 3 0 1 0'],
+  '-': ['0.8 3 3.2 3'], '.': ['2 0 2 0.7'], '/': ['0 0 4 6'], '^': ['2 0 2 6', '0 4 2 6 4 4'], ' ': [],
+};
 
 // ------------------------------------------------------------------------------------------
 // Builder
@@ -1850,6 +1881,41 @@ export class Builder {
         for (let i = 1; i + 1 < ids.length; i++) part.idx.push(ids[0], ids[i], ids[i + 1]);
       }
     }
+    return part.finish();
+  }
+
+  /**
+   * Stencilled lettering: flat paint strokes in the XY plane facing +Z, baseline on y = 0, letter
+   * height h. Painted with the current ink: on timber use mat WOOD and a dark colour so the grain
+   * shows through the paint; on steel MAT.PAINT. Place it 1 to 2 mm proud of the surface it is
+   * painted on. A-Z, 0-9, space and - . / ^ (an up arrow). Strokes stop short of each other at the
+   * joints, as a real stencil does.
+   */
+  stencil(text: string, h: number, o: { weight?: number; spacing?: number; align?: 'left' | 'center' | 'right' } = {}): Part {
+    const part = new Part(this);
+    const u = h / 6, w = (o.weight ?? 0.15) * h, adv = (4 + (o.spacing ?? 1.7)) * u;
+    const chars = text.toUpperCase().split('');
+    const total = chars.length * adv - (o.spacing ?? 1.7) * u;
+    let x0 = o.align === 'center' ? -total / 2 : o.align === 'right' ? -total : 0;
+    for (const ch of chars) {
+      for (const stroke of GLYPHS[ch] ?? []) {
+        const pts = stroke.split(' ').map(Number);
+        for (let i = 0; i + 3 < pts.length; i += 2) {
+          const ax = x0 + pts[i] * u, ay = pts[i + 1] * u, bx = x0 + pts[i + 2] * u, by = pts[i + 3] * u;
+          const len = Math.hypot(bx - ax, by - ay);
+          if (len < 1e-6) continue;
+          const dx = (bx - ax) / len, dy = (by - ay) / len, nx = -dy * (w / 2), ny = dx * (w / 2);
+          const e = w * 0.2; // reach a little past the point, short of the next stroke
+          const a = part.vert(ax - dx * e + nx, ay - dy * e + ny, 0, 0, 0, 1);
+          const b2 = part.vert(bx + dx * e + nx, by + dy * e + ny, 0, 0, 0, 1);
+          const c = part.vert(bx + dx * e - nx, by + dy * e - ny, 0, 0, 0, 1);
+          const d = part.vert(ax - dx * e - nx, ay - dy * e - ny, 0, 0, 0, 1);
+          part.quad(a, b2, c, d);
+        }
+      }
+      x0 += adv;
+    }
+    part.occluder = false;
     return part.finish();
   }
 

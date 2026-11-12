@@ -285,7 +285,7 @@ export const CSS = /* css */ `
 .mate .s:empty{display:none}
 .mate .c,.mate .d{font:300 1em/1 var(--fn);letter-spacing:.06em;font-variant-numeric:tabular-nums;text-align:right}
 .mate .c{min-width:2.5em}
-.mate .d{min-width:3.1em;color:var(--fg2)}
+.mate .d{min-width:3.1em;color:rgba(235,232,225,.8)}
 .mate.cold .c{color:var(--ice)}
 .mate.frz .c,.mate.frz .s{color:var(--amber)}
 .mate.down{opacity:1}
@@ -481,7 +481,7 @@ export const CSS = /* css */ `
 .tw{position:absolute;inset:0;opacity:0;visibility:hidden;transition:opacity .18s ease,visibility 0s .18s;touch-action:none}
 .tw.on{opacity:1;visibility:visible;pointer-events:auto;transition:opacity .18s ease}
 .tw-c{position:absolute;left:50%;top:50%;width:0;height:0}
-.tw-r{position:absolute;width:calc(var(--tb)*4.7);height:calc(var(--tb)*4.7);margin:calc(var(--tb)*-2.35);border-radius:50%;background:radial-gradient(circle,rgba(7,9,12,.5) 0%,rgba(7,9,12,.66) 62%,rgba(7,9,12,.4) 70.5%,rgba(7,9,12,0) 71%);box-shadow:inset 0 0 0 1px rgba(235,232,225,.14)}
+.tw-r{position:absolute;width:calc(var(--tb)*4.5);height:calc(var(--tb)*4.5);margin:calc(var(--tb)*-2.25);border-radius:50%;background:radial-gradient(circle,rgba(7,9,12,.42) 0%,rgba(7,9,12,.58) 52%,rgba(7,9,12,.34) 64%,rgba(7,9,12,.08) 69%,rgba(7,9,12,0) 71%);box-shadow:inset 0 0 0 1px rgba(235,232,225,.14)}
 .tw-s{position:absolute;width:var(--tb);height:var(--tb);margin:calc(var(--tb)*-.5);border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--fg2);transition:color .12s,box-shadow .12s,background .12s}
 .tw-s svg.ic{width:52%;height:52%}
 .tw-s.no{color:rgba(235,232,225,.16)}
@@ -504,7 +504,7 @@ export const CSS = /* css */ `
 .touch .fc-v span{margin-left:0}
 .touch .ob::before{content:"";position:absolute;inset:-1.4em -3.4em -1.6em -2.6em;background:var(--smudge);opacity:.8;z-index:-1}
 .touch .dw-t{font-size:2.1em}
-.hud.down .hn.on{opacity:0}
+.hud.down .hn.on,.hud.down .dms{opacity:0}
 @media (max-height:560px){.end-c{display:none}}
 .cs [hidden]{display:none!important}
 .cs.photo>*{opacity:0!important;visibility:hidden!important}
@@ -513,6 +513,11 @@ export const CSS = /* css */ `
 .cp-m.k-down span{color:var(--red)}
 .cp-m.k-player i{width:.36em;height:.36em;left:-.18em;top:-.18em;border-color:var(--fg2)}
 .hud.wo::before{background:linear-gradient(rgba(6,8,12,.56),rgba(6,8,12,0))}
+/* in a whiteout every soft shade behind text works harder */
+.hud.wo{--smudge:radial-gradient(closest-side,rgba(6,8,12,.5),rgba(6,8,12,.26) 52%,rgba(6,8,12,.08) 80%,rgba(6,8,12,0))}
+.touch .hud.wo::before{height:30%}
+.cs.wheel .hud .tp,.cs.wheel .hud .xh,.cs.wheel .hud .fc,.cs.wheel .hud .tcn,.cs.wheel .hud .dms{opacity:0;transition:opacity .15s}
+.hud.nome .tp,.hud.nome .tl,.hud.nome .tm,.hud.nome .dw,.hud.nome .dms{opacity:0}
 .hud.wo::after{background:linear-gradient(rgba(6,8,12,0),rgba(6,8,12,.6))}
 .ob.hide{opacity:0}
 .ln.hide{display:none}

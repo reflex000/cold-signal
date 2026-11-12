@@ -111,7 +111,7 @@ register(
     });
 
     // ---- inside: coals and charred split wood ----
-    const glow = lit ? 2.6 : 0;
+    const glow = lit ? 0.6 : 0; // scene radiance of glowing coals
     b.ink({ color: PAL.charcoal, mat: MAT.CHAR, wear: lit ? 0.45 : 0.8, emissive: glow, snow });
     b.lathe([[0, 0.03], [R - 0.004, 0.03], [R - 0.01, 0.07], [R * 0.4, 0.1], [0, 0.11]], { sides: 18, smooth: true }).noise(0.008, 10);
     for (let i = 0; i < 12; i++) {

@@ -25,9 +25,16 @@ tools/music-check.mjs. Do not touch the rest of src/audio (AUDIO engineer).
 - Scratch tool (not in project): per-player solo levels per mood, used to set trims. Findings: every player of
   attack/holdout/rescue exceeded -14 alone; stalked's pont sat 13 dB (peak) / 23 dB (rms) under the drum; bands:
   nothing harsh (>2.5 kHz < 0.5 %), energy mostly 60-250 Hz.
-- Levels set: per-mood `level` in the score: title -2, calm +1.5, cold -1, night +6, stalked -2, attack -6,
-  whiteout -4.5, shelter +2, tower -2.5, holdout -6, rescue -5, death 0. Stalked pont written p/mp (was pp/p) and
-  the instrument's pont factor 0.62 -> 0.8; ice strip 0.3 -> 0.4. Targets: loud moods ~-14 dBFS peak at full
+- MusicOptions.raw (and render({ raw })) leaves the ceiling out so true peaks can be measured. Raw findings: attack's
+  piano clusters at f peaked -7.3 alone (hammer knocks of 4 notes adding up); holdout full's brass f triads -7.3
+  (9 saws through the mute's +7 dB peak); rescue is a sum of many players near -15 each.
+- Fixes: piano knock 1.1*amp -> 0.55*amp (decay 32 ms); attack piano written ~6 dB lower; attack drum accents
+  (f mp mf mp); drum slap is band-passed (190+380*vel Hz) instead of low-passed (no sub rumble); brass strip
+  0.6 -> 0.42; holdout s4b brass mf; tower/rescue ice written p; stalked p4 pont back to p/pp, pont factor 0.7.
+- Levels (per-mood `level` in the score), current: title -2, calm +1.5, cold -1, night +6, stalked -2, attack -10,
+  whiteout -7, shelter +2, tower -6, holdout -10.5, rescue -8.5, death 0. Ice strip 0.3 -> 0.4. Raw (no ceiling)
+  peaks at full intensity before the last tweaks: attack -14.3, tower -14.9, rescue -15.1, stalked -15.2;
+  holdout s4 drum then written mf/p and whiteout brass ppp to bring holdout/whiteout full (-12.7) down. Targets: loud moods ~-14 dBFS peak at full
   intensity, middle moods -15/-16, quiet -18/-20, night ~-25. Kit draws from its own rnd stream (seed ^ 0x2545f491);
   muted lines still draw conductor rnd so solo renders keep the full mix's timing.
 - music-check.mjs now prints low/body/bright energy shares and poly; fails on peak > -12.5, peak < -32 (lost
