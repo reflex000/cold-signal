@@ -80,9 +80,14 @@ your own files, and a frank list of what is weak or missing for the next milesto
 STATE ON DISK (your handoff note: docs/status/GAME.md, create it first). Nothing of yours exists yet except the
 contract src/game/view.ts and a placeholder src/main.ts. SIM+NET, ENGINE, KIT, AUDIO, MUSIC and UI are finished:
 read their handoff notes in docs/status/ (the "## Final report" section at the end of each is the API summary)
-before reading their code. WORLD is still being polished by its engineer while you work: createWorld(seed) in
-src/world/index.ts already exists and works (tools/world-map.mjs uses it); its terrain may change under you, so do
-not hard-code heights, and do not edit src/world.
+before reading their code. WORLD is finished too (docs/status/WORLD.md): createWorld(seed) in src/world/index.ts. Do not hard-code heights.
+IN PARALLEL with you, three engineers are building the real visual systems: TERRAIN (src/gfx/terrain:
+createTerrainSystem(engine, world)), ATMOSPHERE (src/gfx/sky and src/gfx/weather: createSkySystem(engine, world),
+createWeatherSystem(engine, world), which will own all global light, fog and snowfall) and FOREST (src/gfx/forest:
+createForestSystem(engine, world)). Each is a GfxSystem fed by engine.frame({ dt, time, view }). Keep your
+stand-ins behind one seam (src/game/standin/ and one function in boot that adds the visual systems) so swapping
+in the real ones is a few lines; if one of those modules already exists and works when you get there, use it
+instead of a stand-in. Do not edit their folders.
 
 Build in this order so an interruption costs little: (1) boot + main loop + View + input + camera with the
 stand-in world, walkable and on screen; (2) the CS hook and tools/play.mjs with the first scenario; (3) focus,
