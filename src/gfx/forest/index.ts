@@ -108,16 +108,18 @@ class InstanceSet {
   /** Close the frame: hidden instances right after the visible ones, upload, set the main-pass count. */
   end(): void {
     const n = this.nVis + this.hid;
-    for (const at of [this.a, this.b, this.c]) {
-      if (!at) continue;
-      const arr = at.array as Float32Array;
-      if (this.hid > 0) arr.copyWithin(this.nVis * 4, (this.cap - this.hid) * 4, this.cap * 4);
-      at.clearUpdateRanges();
-      at.addUpdateRange(0, Math.max(4, n * 4));
-      at.needsUpdate = true;
-    }
+    this.close(this.a, n);
+    this.close(this.b, n);
+    if (this.c) this.close(this.c, n);
     this.nAll = n;
     this.geo.instanceCount = this.nVis;
+  }
+  private close(at: THREE.InstancedBufferAttribute, n: number): void {
+    const arr = at.array as Float32Array;
+    if (this.hid > 0) arr.copyWithin(this.nVis * 4, (this.cap - this.hid) * 4, this.cap * 4);
+    at.clearUpdateRanges();
+    at.addUpdateRange(0, Math.max(4, n * 4));
+    at.needsUpdate = true;
   }
 }
 
@@ -224,11 +226,13 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
   // set; conifers cast through shadow-only proxies, snags through their own depth pass
   const meshes: THREE.Mesh[] = [];
   const casters: THREE.Mesh[] = [];
+  const fullDepth: THREE.Mesh[] = [];
   const level = (kind: GeoKind, lod: GeoLod): InstanceSet => {
     const set = new InstanceSet(treeGeometry(kind, lod), ['iA', 'iB'], 1024);
     // prepasses go first of everything (render order -2): the terrain and whatever else stands
     // behind the trees is then rejected by early depth testing instead of being shaded
-    const depth = makeMesh(set, createTreeDepthMaterial(kind, lod), `forest-${kind}-${lod}-depth`, lod === 'full' ? -2 : -1, kind === 'snag');
+    const depth = makeMesh(set, createTreeDepthMaterial(kind, lod), `forest-${kind}-${lod}-depth`, lod === 'full' ? -2 : -1, kind === 'snag' || lod === 'full');
+    if (lod === 'full' && kind !== 'snag') fullDepth.push(depth);
     const lit = makeMesh(set, createTreeMaterial(kind, lod), `forest-${kind}-${lod}`, 2, false);
     lit.castShadow = false;
     depth.receiveShadow = false;
@@ -253,6 +257,7 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
   const spruceProxy = proxy('spruce');
   const firProxy = proxy('fir');
   let shadowRange = 110; // quality.shadowDistance
+  let realShadows = false; // high / ultra: the full meshes cast their own (card) shadows
 
   // ---------------- impostors ----------------
   let atlas: ImpostorAtlas | null = null;
@@ -364,33 +369,42 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
     }
   }
 
+  // per-frame parameters of the candidate visitors (hoisted: no closure per frame)
+  let fullMax = 0, midMin = 0, nearMax = 0, thinFrom = 0, dens = 1, proxyMin = 0, proxyMax = 0;
+  const visitTree = (i: number): void => {
+    const o = i * 4;
+    const H = tH[i];
+    const cx = tA[o] - camPos.x, cy = tA[o + 1] + H * 0.45 - camPos.y, cz = tA[o + 2] - camPos.z;
+    const d = Math.sqrt(cx * cx + cy * cy + cz * cz);
+    if (d > nearMax) return;
+    if (d > thinFrom && tB[o + 3] >= dens) return; // thinned away at this distance
+    sphere.center.set(tA[o], tA[o + 1] + H * 0.5, tA[o + 2]);
+    sphere.radius = H * 0.62 + 2;
+    const vis = frustum.intersectsSphere(sphere);
+    const k = tKind[i];
+    if (k === 2) {
+      snagSet.push(tA, tB, null, i, vis);
+      return;
+    }
+    if (d < fullMax) (k === 0 ? spruceFull : firFull).push(tA, tB, null, i, vis);
+    if (d > midMin) (k === 0 ? spruceMid : firMid).push(tA, tB, null, i, vis);
+    if (d < proxyMax && d > proxyMin) (k === 0 ? spruceProxy : firProxy).push(tA, tB, null, i, true);
+  };
+
   function updateTrees(): void {
     const near = FU.nearEnd.value as number;
     const fEnd = FU.fullEnd.value as number, fBand = FU.fullBand.value as number;
-    const thin1 = FU.thin1.value as number, dens = FU.density.value as number;
-    const fullMax = fEnd + fBand * 0.5 + 1, midMin = fEnd - fBand * 0.5 - 1, nearMax = near + 1;
+    thinFrom = FU.thin1.value as number;
+    dens = FU.density.value as number;
+    fullMax = fEnd + fBand * 0.5 + 1;
+    midMin = fEnd - fBand * 0.5 - 1;
+    nearMax = near + 1;
+    proxyMax = Math.min(shadowRange + 10, near - (FU.nearBand.value as number) + 1);
+    // with real (card) shadows from the full meshes, proxies only stand in beyond them
+    proxyMin = realShadows ? fEnd - fBand : -1;
     spruceFull.begin(); firFull.begin(); snagSet.begin(); spruceMid.begin(); firMid.begin();
     spruceProxy.begin(); firProxy.begin();
-    const proxyMax = Math.min(shadowRange + 10, near - (FU.nearBand.value as number) + 1);
-    gather(tGrid, camPos.x, camPos.z, nearMax + 12, (i) => {
-      const o = i * 4;
-      const H = tH[i];
-      const cx = tA[o] - camPos.x, cy = tA[o + 1] + H * 0.45 - camPos.y, cz = tA[o + 2] - camPos.z;
-      const d = Math.sqrt(cx * cx + cy * cy + cz * cz);
-      if (d > nearMax) return;
-      if (d > thin1 && tB[o + 3] >= dens) return; // thinned away at this distance
-      sphere.center.set(tA[o], tA[o + 1] + H * 0.5, tA[o + 2]);
-      sphere.radius = H * 0.62 + 2;
-      const vis = frustum.intersectsSphere(sphere);
-      const k = tKind[i];
-      if (k === 2) {
-        snagSet.push(tA, tB, null, i, vis);
-        return;
-      }
-      if (d < fullMax) (k === 0 ? spruceFull : firFull).push(tA, tB, null, i, vis);
-      if (d > midMin) (k === 0 ? spruceMid : firMid).push(tA, tB, null, i, vis);
-      if (d < proxyMax) (k === 0 ? spruceProxy : firProxy).push(tA, tB, null, i, true);
-    });
+    gather(tGrid, camPos.x, camPos.z, nearMax + 12, visitTree);
     spruceFull.end(); firFull.end(); snagSet.end(); spruceMid.end(); firMid.end();
     spruceProxy.end(); firProxy.end();
     spruceProxy.geo.instanceCount = 0;
@@ -400,23 +414,28 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
     counts.snag = snagSet.nAll;
   }
 
+  let rNearMax = 0, rMidMin = 0, rMidMax = 0;
+  const visitRock = (i: number): void => {
+    const o = i * 4;
+    const cx = rA[o] - camPos.x, cy = rA[o + 1] - camPos.y, cz = rA[o + 2] - camPos.z;
+    const d = Math.sqrt(cx * cx + cy * cy + cz * cz);
+    if (d > rMidMax) return;
+    const s = Math.max(rC[o], rC[o + 1], rC[o + 2]);
+    sphere.center.set(rA[o], rA[o + 1], rA[o + 2]);
+    sphere.radius = s * 1.4 + 1;
+    const vis = frustum.intersectsSphere(sphere);
+    if (d < rNearMax) rockNear.push(rA, rB, rC, i, vis);
+    if (d > rMidMin) rockMid.push(rA, rB, rC, i, vis);
+  };
+
   function updateRocks(): void {
     const nEnd = RU.nearEnd.value as number, nBand = RU.nearBand.value as number, mEnd = RU.midEnd.value as number;
-    const nearMax = nEnd + nBand * 0.5 + 1, midMin = nEnd - nBand * 0.5 - 1;
+    rNearMax = nEnd + nBand * 0.5 + 1;
+    rMidMin = nEnd - nBand * 0.5 - 1;
+    rMidMax = mEnd + 1;
     rockNear.begin();
     rockMid.begin();
-    gather(rGrid, camPos.x, camPos.z, mEnd + 6, (i) => {
-      const o = i * 4;
-      const cx = rA[o] - camPos.x, cy = rA[o + 1] - camPos.y, cz = rA[o + 2] - camPos.z;
-      const d = Math.sqrt(cx * cx + cy * cy + cz * cz);
-      if (d > mEnd + 1) return;
-      const s = Math.max(rC[o], rC[o + 1], rC[o + 2]);
-      sphere.center.set(rA[o], rA[o + 1], rA[o + 2]);
-      sphere.radius = s * 1.4 + 1;
-      const vis = frustum.intersectsSphere(sphere);
-      if (d < nearMax) rockNear.push(rA, rB, rC, i, vis);
-      if (d > midMin) rockMid.push(rA, rB, rC, i, vis);
-    });
+    gather(rGrid, camPos.x, camPos.z, mEnd + 6, visitRock);
     rockNear.end();
     rockMid.end();
     counts.rockNear = rockNear.nAll;
@@ -443,7 +462,9 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
     RU.minAngle.value = q.name === 'mobile' ? 0.009 : q.name === 'low' ? 0.007 : q.name === 'medium' ? 0.005 : 0.0035;
     const shadows = q.shadowCascades > 0;
     shadowRange = q.shadowDistance;
+    realShadows = shadows && (q.name === 'high' || q.name === 'ultra');
     for (const m of casters) m.castShadow = shadows;
+    for (const m of fullDepth) m.castShadow = realShadows;
     cover.setAmount(q.groundCover);
     force = true;
   }

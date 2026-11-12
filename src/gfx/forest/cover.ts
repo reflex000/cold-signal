@@ -256,9 +256,13 @@ export function createCover(world: World): CoverLayer {
     plantB.set([yaw, type, rnd, tv], o);
   }
 
+  let lastI = 0x7fffffff, lastJ = 0x7fffffff;
   function update(camX: number, camZ: number): void {
     if (active === 0) return;
     const ci = Math.floor(camX / CELL), cj = Math.floor(camZ / CELL);
+    if (ci === lastI && cj === lastJ && !dirty) return;
+    lastI = ci;
+    lastJ = cj;
     const h = active >> 1;
     let changed = dirty;
     for (let sj = 0; sj < active; sj++) {

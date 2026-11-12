@@ -185,7 +185,7 @@ export function effectiveSnow(load: N): N {
  * an effective load `s`. Every forest material and the impostor use this, so a baked impostor shows
  * the same snow as the mesh for any load.
  */
-export function snowCoverage(s: N, p: N, w = 0.08): N {
+export function snowCoverage(s: N, p: N, w: N = 0.08): N {
   const th: N = float(1.04).sub(float(s).mul(0.94));
   return smoothstep(th.sub(w), th.add(w), p);
 }

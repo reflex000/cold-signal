@@ -305,7 +305,7 @@ function addSlab(g: GeoBuilder, b: Branch, sp: Species, widthK: number, rings: n
     const c = midrib(b, s);
     // a pillow: widest a third of the way out, lumpy along its length, crest off-centre
     const bulge = Math.sin(Math.PI * Math.min(1, (s + 0.12) / 1.0));
-    const ws = W * 0.34 * (0.5 + 0.5 * bulge) * (0.78 + 0.44 * rnd(i + 1));
+    const ws = W * 0.3 * (0.5 + 0.5 * bulge) * (0.78 + 0.44 * rnd(i + 1));
     const T = Tmax * (0.55 + 0.45 * bulge) * (0.72 + 0.56 * rnd(i + 7));
     const off = (rnd(i + 13) - 0.5) * 0.3 * ws;
     const prof = five ? [-1.08, -0.62, 0, 0.62, 1.08] : [-1.05, 0, 1.05];

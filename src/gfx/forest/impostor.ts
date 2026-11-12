@@ -322,7 +322,9 @@ export function createImpostorMaterial(atlas: ImpostorAtlas): THREE.MeshLambertN
     const ao: N = B.z.mul(k).clamp(0, 1);
     const pot: N = B.w.mul(k).clamp(0, 1);
     const sh = snowShade(nW);
-    const c: N = snowCoverage(V.w.w, pot);
+    // the potential is averaged by the mips: widen the threshold with the level so a far crown
+    // keeps its share of dark needles instead of turning all white (or all dark) at once
+    const c: N = snowCoverage(V.w.w, pot, t.mip.mul(0.09).add(0.08));
     const col: N = mix(albedo, sh.color, c).toVar();
     If(FU.lodTint.greaterThan(0.5), () => {
       col.mulAssign(vec3(0.5, 0.6, 1.7));
