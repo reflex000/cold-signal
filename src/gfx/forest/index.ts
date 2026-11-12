@@ -426,11 +426,14 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
   function applyQuality(q: Quality): void {
     const near = Math.max(20, q.treeNear);
     FU.nearEnd.value = near;
-    FU.nearBand.value = Math.min(20, Math.max(6, near * 0.15));
+    // short bands where there is no anti-aliasing to soften the dither (phones, low)
+    const soft = q.aa !== 'none' && q.name !== 'low';
+    FU.nearBand.value = Math.min(20, Math.max(soft ? 6 : 3.5, near * (soft ? 0.15 : 0.1)));
     FU.fullEnd.value = Math.min(55, Math.max(12, near * 0.3));
-    FU.fullBand.value = Math.min(8, Math.max(3, near * 0.06));
-    FU.thin0.value = Math.max(14, near * 0.3);
-    FU.thin1.value = (FU.thin0.value as number) + Math.max(8, near * 0.25);
+    FU.fullBand.value = Math.min(8, Math.max(soft ? 3 : 1.6, near * (soft ? 0.06 : 0.045)));
+    // thinning only among the impostors: a whole 3D tree fading by dither reads as a skeleton
+    FU.thin0.value = near * 1.15 + 6;
+    FU.thin1.value = near * 1.55 + 14;
     FU.density.value = Math.max(0.05, Math.min(1, q.treeDensity));
     FU.farEnd.value = Math.max(600, q.viewDistance);
     RU.nearEnd.value = Math.min(70, Math.max(18, near * 0.45));

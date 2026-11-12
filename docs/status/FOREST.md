@@ -1,64 +1,56 @@
 # FOREST status (handoff note)
 
-Module: FOREST (trees, rocks, ground cover). Files owned: src/gfx/forest/**, src/models/nature/**,
-dev/forest.html, dev/forest.ts.
+Module: FOREST (trees, rocks, ground cover). Files owned: src/gfx/forest/**, src/models/nature/**
+(unused: rocks are built in src/gfx/forest/rocks.ts), dev/forest.html, dev/forest.ts.
 
 ## State
-- All files written and type-check: common.ts, textures.ts, treegen.ts, treemat.ts, impostor.ts,
-  rocks.ts, cover.ts, index.ts, dev/forest.html + dev/forest.ts. Bench renders on WebGPU (first
-  look: reads as snow-loaded spruce; slabs too board-like, curtains look like black drips).
-- Perf restructure done (was 530 ms vs 38 ms baseline on the shared GPU, now ~130 ms):
-  * trees: depth prepass (cheap alpha test, colorWrite off) + lit pass with depthFunc EqualDepth,
-    depthWrite off, no discard (one lit fragment per pixel). Both share ONE position node object.
-  * shadows: shadow-only proxy meshes per conifer kind (tiered crown envelope with noise holes,
-    treegen proxyGeometry, treemat createProxyMaterial); main-pass instanceCount forced to 0 in
-    onBeforeRender (no draw), restored in onBeforeShadow. Snags cast through their depth mesh.
-  * fixed: NaN vertices from zero-size empty cover slots (rC = 0 -> normal / 0) made huge triangles;
-    InstancedBufferGeometry.instanceCount defaults to Infinity (warm-up draw error) -> init 0.
-  * far rocks use the 20-triangle icosahedron; impostors 4 taps (2 azimuth frames, elevation row by
-    dither, explicit mip).
-- NOW: interleaved A/B timing (?perf=ab&cfg=none,all,full,mid,proxy,snag,imp,rocks,cover), then
-  shots of every view / light / backend and look polish (slabs reworked as lumpy pillows).
+- Everything in scope exists, type-checks and runs on WebGPU (shots of all five views in day and
+  dusk look right). Remaining: WebGL2 / mobile / night / storm shots, perf re-measure, report.
+- Files: common.ts (hashes, dither, noise texture, ForestMaterial (standard + analytic sky
+  reflection, envScale), ForestLambert (foliage), snow rule, wind), textures.ts (canvas needle
+  atlas, per-region coverage-preserving mips), treegen.ts (spruce / fir / snag geometry, full + mid,
+  shadow proxies), treemat.ts (variant shape, depth / lit / proxy / bake materials), impostor.ts
+  (atlas bake + depth / lit billboard materials), rocks.ts, cover.ts, index.ts (the system).
 
-## Plan / architecture (decided, keep unless broken)
-- Files: common.ts (TSL hash/dither/noise tex/sky-reflection material base, wind), textures.ts (canvas
-  needle atlas + CPU mips with coverage-preserving alpha), treegen.ts (CPU geometry: spruce='pine',
-  fir, snag; 'full' and 'mid' LOD), treemat.ts (3D tree material + bake material), impostor.ts (atlas
-  bake with the real renderer + billboard material), rocks.ts, cover.ts, index.ts (createForestSystem).
-- Draw-call budget (< 60 at medium incl. shadow cascades): ONE geometry per (kind, LOD) drawn as a
-  Mesh + InstancedBufferGeometry with per-instance attributes iA = (x, y, z, scale), iB = (yaw,
-  kind*8+variant, snow, rnd). The 8 variants per kind are made in the VERTEX SHADER from per-branch
-  attributes (branch length factor / dropped branches / crown base / asymmetry keyed by variant), so
-  impostors baked per variant match the 3D trees exactly.
-- LOD: full mesh to ~0.38*treeNear, simplified mid mesh to treeNear, impostors beyond. LOD fade and
-  culling are computed per instance in the vertex shader from U.camPos (dithered crossfade in the
-  fragment shader with a screen-space noise; complementary between LODs). CPU only picks candidate
-  instances for the 3D LODs each frame (frustum-visible first; off-screen ones are drawn only in shadow
-  passes via onBeforeShadow/onAfterShadow changing geometry.instanceCount). Impostors: one static
-  buffer with all trees, culled in the vertex shader.
-- Impostor atlas: 20 types (spruce v0-7, fir v0-7, snag v0-3) x 8 azimuths x 3 elevations (0,30,60
-  deg), frames 64x128, albedo(premultiplied, alpha=coverage) + aux (tree-local normal, snow
-  potential). Baked in one instanced draw per geometry (vertexNode places each view into its frame).
-- Snow: per-fragment coverage = f(effective snow, potential); slabs of snow geometry on the upper
-  side of every branch (thickness scales with snow); same function in the impostor shader.
-- Rocks: 8 variants share one icosphere topology; per-variant positions/normals in a half-float
-  DataTexture read with textureLoad(vertexIndex) -> all variants in one draw; nested icosphere LODs.
-- Ground cover: toroidal grid of cells around the camera (no per-frame allocation), one geometry
-  holding 4 item types (vertex collapse by instance type), one draw.
+## Architecture (as built)
+- One geometry per (kind, LOD); Mesh + InstancedBufferGeometry with instance attributes
+  iA = (x, y_sunk, z, scale), iB = (yaw, kind*8+variant, snow, rnd). Eight variants per kind come
+  from the vertex shader (crown base, dropped branches, length jitter, fuller side, lean; snags:
+  break height, splinters, stubs) and depend on the variant only, so impostors match.
+- Each tree level = depth prepass (cheap alpha test, colorWrite off, renderOrder -2/-1: drawn before
+  terrain so hidden terrain is early-Z rejected) + lit pass (Lambert, LessEqual + polygonOffset,
+  depthWrite off, same alpha function). EqualDepth was tried and dropped (programs compiled apart).
+- LOD: full to 0.3*treeNear, mid to treeNear, impostors beyond; per-instance distance in the vertex
+  shader, complementary screen-space dither between levels. treeDensity thins impostors only.
+- CPU per frame (only when the camera moved): candidates from a 32 m grid; frustum-visible first,
+  the rest only in shadow passes (onBeforeShadow / onAfterShadow swap instanceCount).
+- Shadows: shadow-only proxy meshes per conifer kind (tiered crown envelope, geometric holes,
+  FrontSide, no discard), main-pass instanceCount 0 via onBeforeRender (no draw). Snags cast via
+  their depth mesh, rocks near/mid cast. Impostors neither cast nor get their own proxy.
+- Impostor atlas: 20 types x 8 az x 3 el (0/30/60 deg), 64x128 frames, 2048x1920, MRT albedo +
+  aux (normal xz, AO, snow potential), baked in 3 instanced draws (~60 ms). NOTE: the baked atlas
+  runs top-down in v on both backends; impostor sampling flips v (measured).
+- Rocks: 8 variants in a half-float texture (textureLoad by vertexIndex), nested icosphere levels
+  near 1280 / mid 320 / far 20 tris. Cover: toroidal 1.6 m grid, stones (rock material) + plants.
 
-## Remaining (priority order)
-1. createForestSystem(engine, world): GfxSystem ('forest') in src/gfx/forest/index.ts
-2. Bench dev/forest.html + dev/forest.ts
-3. Shots in all views / lights / backends, polish
+## Gotchas found (keep)
+- Foliage snow potential must scale with facing (an additive noise term whitened down-facing
+  needles at heavy loads and got baked into impostors).
+- Specular on needle cards (standard material) made crowns khaki-grey: foliage is Lambert.
+- Empty cover slots have size 0: clamp before dividing (NaN vertices made huge triangles).
+- InstancedBufferGeometry.instanceCount defaults to Infinity: initialise to 0.
+- The bench terrain is plain white: trees standing on a slope above the camera look "cut off".
 
-## Decisions / API facts
-- World: 32.2k trees (pine 16.4k, fir 10.6k, sapling 4.4k, snag 0.8k); scale pine/fir 0.45-1.54,
-  sapling 0.16-0.40, snag 0.55-1.0. Densest: ~820 trees within 80 m, ~150 within 32 m.
-- Bench spots (seed 417): dense forest near cabin (-446,194); snag cluster (-480,200) (13 in 40 m);
-  clearing (-400,20); forest edge looking upslope from (10,190) (north).
-- r187 shadow pass: override material takes positionNode, colorNode.a and alphaTest from the material
-  (Renderer._getShadowNodes); onBeforeShadow/onAfterShadow are called around each shadow draw.
-- RenderObject.getDrawParameters: InstancedBufferGeometry -> geometry.instanceCount (0 = no draw).
+## Numbers (shared GPU, so relative only)
+- Forest view medium 1360x765: forest adds ~34 ms over a ~48 ms baseline (was +490 at first).
+  37 draw calls with the forest (16 without). Triangles: spruce 3450/726, fir 2906/1410,
+  snag 476/300, proxies ~100. Bake ~60 ms; createForestSystem ~0.9-1.1 s total (CPU, shared).
 
 ## Test commands
-(none yet)
+- npx tsc --noEmit -p . 2>&1 | grep -E "src/gfx/forest|dev/forest"
+- node tools/shot.mjs "dev/forest.html?view=forest&light=day&t=3&frames=8" --out f_forest_day
+  (view = forest|edge|aerial|clearing|snags; light = day|dusk|night|storm; &lod=1 tint; &q=;
+  &wind=; --backend webgl; --mobile 1)
+- debug: &hide=impostor,rocks,cover,-full,-mid,snag,proxy  &atlas=1|2|3  &fov=&az=&el=
+  &perf=1&pf=200 prints GPU ms (compare with &forest=0 in separate page loads; the in-page
+  &perf=ab interleave is unreliable on the shared GPU)

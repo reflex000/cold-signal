@@ -108,7 +108,9 @@ function plantMaterial(): THREE.MeshStandardNodeMaterial {
     const a: N = tex.a.sub(0.5).div(tex.a.fwidth().max(0.0001)).add(0.5).clamp(0, 1);
     const type: N = vT.x.add(0.5).floor();
     const rnd: N = vT.z;
-    const col: N = tex.rgb.mul(float(0.8).add(fract(rnd.mul(17.3)).mul(0.4)));
+    // dark and dull: bark, dead stems and shoots in snow light (the textures are drawn brighter)
+    const dull: N = select(type.equal(T_GRASS), float(0.85), float(0.55));
+    const col: N = tex.rgb.mul(float(0.8).add(fract(rnd.mul(17.3)).mul(0.4))).mul(dull);
     // twigs lie half sunk in the snow: a dusting over them; grass and shrub bases are buried
     const nW: N = normalize(normalViewGeometry).transformDirection(cameraWorldMatrix);
     const sh = snowShade(nW);
@@ -190,6 +192,16 @@ export function createCover(world: World): CoverLayer {
   let active = 0; // slots per side in use
   let dirty = true;
 
+  function clump(x: number, z: number): number {
+    const fx = x / 14, fz = z / 14;
+    const i = Math.floor(fx), j = Math.floor(fz);
+    const u = fx - i, v = fz - j;
+    const su = u * u * (3 - 2 * u), sv = v * v * (3 - 2 * v);
+    const a = hash01(i, j, 0x7c1), b = hash01(i + 1, j, 0x7c1), c = hash01(i, j + 1, 0x7c1), d = hash01(i + 1, j + 1, 0x7c1);
+    const n = a + (b - a) * su + (c - a) * sv + (a - b - c + d) * su * sv;
+    return Math.min(1, Math.max(0, (n - 0.25) * 1.8));
+  }
+
   function fill(slot: number, ci: number, cj: number): void {
     cellI[slot] = ci;
     cellJ[slot] = cj;
@@ -197,7 +209,7 @@ export function createCover(world: World): CoverLayer {
     stoneC[o] = stoneC[o + 1] = stoneC[o + 2] = 0;
     plantA[o + 3] = 0;
     const h = (k: number): number => hash01(ci * 7 + k * 1000003, cj, 0x51ed);
-    const x = (ci + 0.15 + 0.7 * h(1)) * CELL, z = (cj + 0.15 + 0.7 * h(2)) * CELL;
+    const x = (ci + h(1)) * CELL, z = (cj + h(2)) * CELL;
     if (Math.abs(x) > world.half - 2 || Math.abs(z) > world.half - 2) return;
     if (maskAt(3, x, z) > 0.2 || maskAt(2, x, z) > 0.35) return; // trail, ice
     const f = world.forestAt(x, z);
@@ -206,11 +218,12 @@ export function createCover(world: World): CoverLayer {
     const thin = 1 - Math.min(1, sd / 0.55);
     const wTwig = (0.15 + 1.3 * f) * (0.4 + 0.6 * thin);
     const wStone = (0.12 + 1.6 * rk) * (0.25 + 0.75 * thin);
-    const wGrass = (1 - f) * thin * 1.4 + 0.03;
+    const wGrass = (1 - f) * thin * 0.9 + 0.02;
     const wShrub = (f * (1 - f) * 2.2 + 0.08) * (0.5 + 0.5 * thin);
     const total = wTwig + wStone + wGrass + wShrub;
     // overall density: sparse; deep snow buries most of it
-    const p = Math.min(0.75, (0.16 + 0.22 * total) * (0.35 + 0.65 * amount));
+    // in clumps: a coarse value noise (14 m) thins whole patches
+    const p = Math.min(0.75, (0.16 + 0.22 * total) * (0.35 + 0.65 * amount)) * clump(x, z);
     if (h(3) > p) return;
     const y = world.heightAt(x, z);
     if (world.groundAt(x, z, y + 4).y > y + 0.05) return; // a floor: inside a building
@@ -235,9 +248,9 @@ export function createCover(world: World): CoverLayer {
       sink = 0.05 + 0.1 * h(14);
     } else {
       type = T_SHRUB;
-      size = 0.3 + 0.55 * h(13);
-      sink = 0.06 + 0.2 * h(14);
-      tv = f > 0.3 && h(15) < 0.6 ? 1 : 0;
+      size = 0.22 + 0.33 * h(13);
+      sink = 0.06 + 0.16 * h(14);
+      tv = h(15) < 0.35 + 0.5 * f ? 1 : 0; // a conifer shoot under the trees, bare twigs in the open
     }
     plantA.set([x, y - sink, z, size], o);
     plantB.set([yaw, type, rnd, tv], o);

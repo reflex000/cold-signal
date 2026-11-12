@@ -351,7 +351,8 @@ function addDeadTwig(g: GeoBuilder, b: Branch): void {
   const at = (u: number, v: number): V3 => add(add(o, mul(sub(tipP, o), v)), mul(roll, (u - 0.5) * W * (0.3 + 0.7 * v)));
   const corner = (u: number, v: number): number => {
     const [uu, vv] = regionUV(R.dead, u, v);
-    return g.vert(at(u, v), n, [uu, vv], [b.ya, b.hash, encodePart(PART.DEAD, b.az), v], [b.u, 0.45, 0.28, 0]);
+    // little snow: it falls through sparse dead twigs
+    return g.vert(at(u, v), n, [uu, vv], [b.ya, b.hash, encodePart(PART.DEAD, b.az), v], [b.u, 0.45, 0.1, 0]);
   };
   const a = corner(0, 0), bb = corner(1, 0), c = corner(1, 1), d = corner(0, 1);
   g.quad(a, bb, c, d);
@@ -372,7 +373,9 @@ function buildConifer(sp: Species, lod: GeoLod): THREE.BufferGeometry {
   // whorls (the mid level keeps every other whorl, same branches, so hashes and variants agree)
   let w = 0;
   for (let y = sp.y0; y < sp.H - 0.22; y += sp.step, w++) {
-    if (!full && w % 2 === 1) continue;
+    // the simplified spruce keeps every other whorl (its curtains fill the side view); the fir, a
+    // narrow spire whose tiers are its silhouette, keeps them all with simpler branches
+    if (!full && sp.curtain > 0 && w % 2 === 1) continue;
     const u = (y - sp.y0) / (sp.H - sp.y0);
     const n = sp.perWhorl(u);
     const phase = w * 2.39996 + h01(sp.seed, w, 99) * 0.6;
@@ -391,13 +394,14 @@ function buildConifer(sp: Species, lod: GeoLod): THREE.BufferGeometry {
         hash: h01(sp.seed + 5, w, k),
       };
       const rnd = (i: number): number => h01(sp.seed + 6 + i, w, k);
-      const wk = full ? 1 : 1.42;
-      addSpray(g, b, sp, full ? sp.spray : sp.sprayMid, wk, full ? 3 : 2);
+      const wk = full ? 1 : sp.curtain > 0 ? 1.42 : 1.15;
+      // the simplified sprays hang deeper at the sides so they still show edge-on from afar
+      addSpray(g, b, full ? sp : { ...sp, arch: sp.arch * 2.2 }, full ? sp.spray : sp.sprayMid, wk, full ? 3 : 2);
       if (sp.curtain > 0 && b.L > 0.55 && u < (full ? 0.86 : 0.7)) addCurtain(g, b, sp, full ? R.curtain : R.curtainMid, full ? 1 : 1.3, 2);
       if (sp.curtain === 0 && full && b.L > 0.6 && u < 0.6 && k % 2 === 0) {
         // fir: a second, steeper spray rolled about the branch fills the side view
         const b2: Branch = { ...b, az: b.az + 0.12, p0: b.p0 - 0.32, L: b.L * 0.82, hash: b.hash };
-        addSpray(g, b2, { ...sp, arch: -0.45 }, sp.spray, 0.7, 3);
+        addSpray(g, b2, { ...sp, arch: full ? -0.45 : 0.6 }, full ? sp.spray : sp.sprayMid, full ? 0.7 : 1.1, full ? 3 : 2);
       }
       addSlab(g, b, sp, full ? 1 : 1.3, full ? 3 : 2, full && sp === SPRUCE ? 5 : 3, rnd);
       if (u < 0.55) addDeadTwig(g, b);
@@ -420,12 +424,15 @@ function buildSnag(lod: GeoLod): THREE.BufferGeometry {
   addTrunk(g, H, 0.2, full ? 8 : 6, rings, 0.45, (y) => (y < 1.2 ? 0.75 : 0.62));
   // branch stubs: dead, drooping, thin; more and longer in the upper half (the lower ones broke off)
   let w = 0;
-  for (let y = 1.4; y < H - 0.5; y += full ? 0.62 : 1.0, w++) {
+  // irregular: whorls 0.5-1.3 m apart, many gone, one to three stubs, the low ones short
+  for (let y = 1.6; y < H - 0.5; y += (full ? 0.5 : 0.8) + 0.8 * h01(4, w, 1), w++) {
     const u = y / H;
-    const n = 2 + Math.floor(h01(5, w, 7) * 3);
+    if (h01(4, w, 2) < 0.3 + 0.35 * (1 - u)) continue;
+    const n = 1 + Math.floor(h01(5, w, 7) * (u > 0.4 ? 3 : 2));
     for (let k = 0; k < n; k++) {
       const az = w * 2.39996 + (k / n) * Math.PI * 2 + (h01(5, w, k) - 0.5) * 0.7;
-      const L = (0.18 + 0.75 * h01(6, w, k)) * (0.4 + 0.9 * u) * (1 - 0.5 * u * u);
+      const long = h01(6, w, k + 9) < 0.18 ? 2.2 : 1; // now and then a long dead branch survives
+      const L = (0.1 + 0.55 * h01(6, w, k) * h01(6, w, k + 3)) * (0.35 + 1.0 * u) * (1 - 0.5 * u * u) * long;
       const r = 0.018 + 0.03 * h01(7, w, k) * (1 - u * 0.5);
       const pitch = -0.25 - 0.5 * h01(8, w, k);
       const hash = h01(9, w, k);
@@ -475,14 +482,15 @@ function buildProxy(sp: Species): THREE.BufferGeometry {
   const span = sp.H - sp.y0;
   for (let t = 0; t < tiers; t++) {
     const yb = sp.y0 + (t / tiers) * span;
-    const yt = Math.min(sp.H, yb + (span / tiers) * 1.4);
+    // tiers overlap: under a low sun the gaps between them would project as long regular dashes
+    const yt = Math.min(sp.H, yb + (span / tiers) * 2.1);
     const u = (yb - sp.y0) / span;
     // the branches droop: the envelope at a tier's foot reaches the radius of the whorls above it
     const rb = sp.crownR * sp.profile(Math.min(1, u + 0.04)) * 0.8;
     const rt = sp.crownR * sp.profile((yt - sp.y0) / span) * 0.22;
     const first = g.pos.length / 3;
     for (let e = 0; e < 2; e++) {
-      const y = e === 0 ? yb - 0.15 * (span / tiers) : yt;
+      const y = e === 0 ? yb - 0.3 * (span / tiers) : yt;
       const r = e === 0 ? rb : rt;
       for (let k = 0; k <= sides; k++) {
         const a = (k / sides) * Math.PI * 2 + t * 0.7;

@@ -17,7 +17,7 @@ export interface InventoryApi {
 
 const TOOLS = TOOL_ORDER as readonly ItemId[];
 const PARTS = PART_ORDER.map((p) => `part_${p}` as ItemId);
-const GIVE_RANGE = 4; // metres
+const GIVE_RANGE = 3; // metres; the simulation accepts a give within 3 m (src/sim/systems/items.ts)
 
 interface Cell { id: ItemId; el: HTMLElement; n: HTMLElement; item: NavItem; cv: boolean }
 interface Act { label: string; run: () => void; ok: boolean }

@@ -57,7 +57,8 @@ export function fallDamage(impact: number, surface: Surface): number {
   return 100 * Math.pow((v - SAFE_IMPACT) / (LETHAL_IMPACT - SAFE_IMPACT), 1.6);
 }
 
-function goDown(ctx: SimCtx, p: PlayerEnt, cause: HurtCause): void {
+/** Down: 90 s to bleed out. `cold` only picks the words of the toast. */
+function goDown(ctx: SimCtx, p: PlayerEnt, cold: boolean): void {
   p.life = 'downed';
   p.health = Math.max(0, p.health);
   p.bleed = BLEED_TIME;
@@ -67,8 +68,9 @@ function goDown(ctx: SimCtx, p: PlayerEnt, cause: HurtCause): void {
   p.actT = 0;
   ctx.emit({ t: 'downed', id: p.id });
   ctx.state.stats.downs++;
-  toast(ctx, p, 'warn', cause === 'cold' ? 'The cold takes your legs. You can still crawl.' : 'You are down. You can still crawl.');
-  // (the cause only picks the words: the hurt events before this tell the death screen why)
+  // the HUD's downed panel says the rest (crawl, the timer, who can help); the hurt events before
+  // this tell the death screen why
+  if (cold) toast(ctx, p, 'warn', 'The cold takes your legs.');
 }
 
 function die(ctx: SimCtx, p: PlayerEnt): void {
@@ -108,7 +110,7 @@ export function hurt(ctx: SimCtx, p: PlayerEnt, amount: number, cause: HurtCause
   }
   p.health = Math.max(0, p.health - amount);
   if (lethal) die(ctx, p);
-  else if (p.health <= 0) goDown(ctx, p, cause);
+  else if (p.health <= 0) goDown(ctx, p, cause === 'cold');
 }
 
 function land(ctx: SimCtx, p: PlayerEnt): void {
@@ -315,7 +317,7 @@ export const vitals: System = {
       if (p.life === 'alive') {
         coldDrain(ctx, p);
         // health taken by anything (the cold here, wolves, a fall) or the cold collapse
-        if (p.health <= 0 || p.core <= COLLAPSE_CORE) goDown(ctx, p, p.core < SEVERE_CORE ? 'cold' : 'wolf');
+        if (p.health <= 0 || p.core <= COLLAPSE_CORE) goDown(ctx, p, p.core < SEVERE_CORE);
         else {
           if (p.health < 100 && p.core >= 36.5 && p.fireHeat >= 0.3 && p.hunger < 0.8) p.health = Math.min(100, p.health + REGEN * dt);
           rest(ctx, p);

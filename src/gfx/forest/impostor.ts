@@ -22,7 +22,7 @@ import {
   property, select, sin, smoothstep, sqrt, step, texture, varyingProperty, vec2, vec3, vec4,
 } from 'three/tsl';
 import { U } from '../shared';
-import { ForestMaterial, ditherNoise, effectiveSnow, gustAt, rotY, snowCoverage, snowShade, treeSway, type N } from './common';
+import { ForestLambert, ditherNoise, effectiveSnow, gustAt, rotY, snowCoverage, snowShade, treeSway, type N } from './common';
 import { FU, KIND_INDEX, createBakeMaterial, lodDistance, treeTint, type BakeLayout } from './treemat';
 import { FRAME_BOX, SNAG_H, TREE_H, treeGeometry, type GeoKind } from './treegen';
 
@@ -292,21 +292,19 @@ function impAlpha(atlas: ImpostorAtlas): N {
 }
 
 /** The lit impostors: depth test against the prepass, no depth write. */
-export function createImpostorMaterial(atlas: ImpostorAtlas): THREE.MeshStandardNodeMaterial {
-  const m = new ForestMaterial();
+export function createImpostorMaterial(atlas: ImpostorAtlas): THREE.MeshLambertNodeMaterial {
+  const m = new ForestLambert();
   m.name = 'forest-impostor';
   m.side = THREE.DoubleSide;
-  m.metalness = 0;
   m.depthWrite = false;
   m.depthFunc = THREE.LessEqualDepth;
   m.polygonOffset = true;
-  m.polygonOffsetFactor = -0.5;
-  m.polygonOffsetUnits = -2;
+  m.polygonOffsetFactor = -1;
+  m.polygonOffsetUnits = -4;
   m.alphaTest = 0.5;
   const V = impVaryings();
   m.positionNode = impostorPosition();
 
-  const pRough: N = property('float', 'csIRough');
   const pEmis: N = property('vec3', 'csIEmis');
   const pAO: N = property('float', 'csIAO');
   const pN: N = property('vec3', 'csINormal');
@@ -329,13 +327,11 @@ export function createImpostorMaterial(atlas: ImpostorAtlas): THREE.MeshStandard
     If(FU.lodTint.greaterThan(0.5), () => {
       col.mulAssign(vec3(0.5, 0.6, 1.7));
     });
-    pRough.assign(mix(0.76, 0.86, c));
     pEmis.assign(sh.emissive.mul(c));
     pAO.assign(mix(ao, 1, c.mul(0.6)));
     pN.assign(normalize(cameraViewMatrix.mul(vec4(nW, 0)).xyz));
     return vec4(col, impAlpha(atlas));
   })();
-  m.roughnessNode = pRough;
   m.emissiveNode = pEmis;
   m.aoNode = pAO;
   m.normalNode = pN;

@@ -5,8 +5,8 @@
 // Everything here is TSL and runs on the WebGPU and the WebGL2 backends alike.
 import * as THREE from 'three/webgpu';
 import {
-  Fn, cameraWorldMatrix, cos, dot, float, fract, mix, normalView, positionViewDirection, pow, roughness, screenCoordinate, sin,
-  smoothstep, texture, vec2, vec3,
+  Fn, cameraProjectionMatrix, cameraWorldMatrix, cos, dot, float, fract, mix, normalView, positionViewDirection, pow, roughness,
+  screenCoordinate, sin, smoothstep, texture, vec2, vec3, vec4,
 } from 'three/tsl';
 import { U } from '../shared';
 
@@ -30,10 +30,16 @@ export function hash12(x: N): N {
   return fract(q.x.add(q.y).mul(q));
 }
 
-/** Interleaved gradient noise of the pixel: a stable screen-space dither in [0, 1). */
+/**
+ * Interleaved gradient noise of the pixel: a stable screen-space dither in [0, 1). Under an
+ * orthographic projection (a shadow map) it is a constant 0.5: a fading tree then switches its
+ * shadow at the middle of its band instead of casting a stippled one.
+ */
 export function ditherNoise(): N {
   const p: N = screenCoordinate.xy.floor();
-  return fract(fract(dot(p, vec2(0.06711056, 0.00583715))).mul(52.9829189));
+  const ign: N = fract(fract(dot(p, vec2(0.06711056, 0.00583715))).mul(52.9829189));
+  const ortho: N = cameraProjectionMatrix.mul(vec4(0, 0, 0, 1)).w.clamp(0, 1);
+  return mix(ign, float(0.5), ortho);
 }
 
 /** CPU twin of hash11 (float32 differences make it differ in the last bits only). */
@@ -121,13 +127,19 @@ class ForestSkyReflection extends THREE.LightingNode {
     const horizon: N = vec3(U.fogColor);
     const ground: N = vec3(U.groundAmbient).mul(0.5);
     const sky: N = mix(horizon, zenith, dir.y.max(0).pow(0.6));
-    builder.context.radiance.addAssign(mix(ground, sky, smoothstep(blur.negate(), blur, dir.y)));
+    const k: number = (builder.material as ForestMaterial).envScale ?? 1;
+    builder.context.radiance.addAssign(mix(ground, sky, smoothstep(blur.negate(), blur, dir.y)).mul(k));
     return null;
   }
 }
 
 /** The lit material every forest mesh uses (fog on, sky reflection when there is no env map). */
 export class ForestMaterial extends THREE.MeshStandardNodeMaterial {
+  /**
+   * Scale on the sky reflection. Foliage cards are flat stand-ins for bundles of needles: with the
+   * full Fresnel of a smooth plane they glare grey at grazing angles, so tree materials use ~0.2.
+   */
+  envScale = 1;
   static get type(): string {
     return 'ColdSignalForestMaterial';
   }
@@ -138,6 +150,21 @@ export class ForestMaterial extends THREE.MeshStandardNodeMaterial {
   setupEnvironment(builder: any): any {
     const node = super.setupEnvironment(builder);
     return node ?? new ForestSkyReflection();
+  }
+}
+
+/**
+ * Lambert (diffuse only) for foliage and impostors. A card stands in for a bundle of needles: a
+ * smooth-plane specular lobe (F0 0.04 against an albedo of 0.03) turned whole crowns khaki-grey in
+ * the sun. Cheaper too, which matters for the most-shaded pixels of the frame.
+ */
+export class ForestLambert extends THREE.MeshLambertNodeMaterial {
+  static get type(): string {
+    return 'ColdSignalForestLambert';
+  }
+  constructor() {
+    super();
+    this.fog = true;
   }
 }
 
@@ -158,9 +185,9 @@ export function effectiveSnow(load: N): N {
  * an effective load `s`. Every forest material and the impostor use this, so a baked impostor shows
  * the same snow as the mesh for any load.
  */
-export function snowCoverage(s: N, p: N): N {
+export function snowCoverage(s: N, p: N, w = 0.08): N {
   const th: N = float(1.04).sub(float(s).mul(0.94));
-  return smoothstep(th.sub(0.08), th.add(0.08), p);
+  return smoothstep(th.sub(w), th.add(w), p);
 }
 
 /**

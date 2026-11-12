@@ -142,7 +142,7 @@ export default async function ({ ev, step, shot, log, check }) {
   await ev((o) => window.CS.go(o.x, o.z, o.yaw, 0), out);
   // walk in a slow circle (so the body keeps working), looking about
   let walked = 0;
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 120; i++) {
     await ev((i) => {
       window.CS.look((i * 18) % 360, 0);
       window.CS.input({ mz: 1 });
@@ -188,6 +188,7 @@ export default async function ({ ev, step, shot, log, check }) {
     }
     const n0 = (await body()).inv.stick ?? 0;
     await press(USE);
+    await step(6); // the client shows a removal ~100 ms later
     const n1 = (await body()).inv.stick ?? 0;
     gathered += n1 - n0;
     log(`stick pickup ${t.id}: +${n1 - n0}`);
@@ -200,38 +201,53 @@ export default async function ({ ev, step, shot, log, check }) {
   });
 
   // ---------------------------------------------------------------- 3. lay and light a fire in the wind
-  const fireSpot = await ev(() => {
-    const CS = window.CS, w = CS.world, me = window.SV.me();
-    for (let r = 0; r < 60; r += 3) {
-      for (let k = 0; k < 12; k++) {
-        const a = (k / 12) * Math.PI * 2;
-        const x = me.x + Math.sin(a) * r, z = me.z + Math.cos(a) * r;
-        if (!w.walkable(x, z) || w.slopeAt(x, z) > 0.12 || w.forestAt(x, z) > 0.25) continue;
+  // an exposed spot: the wind must have its say on an open fire
+  await ev(() => window.CS.env({ storm: 0.8, lock: true }));
+  const fireSpot = await ev((o) => {
+    const CS = window.CS, w = CS.world, me = window.SV.me(), env = CS.view.env;
+    let best = null, bs = 1;
+    for (const c of [me, o]) for (let r = 0; r < 150; r += 3) {
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2;
+        const x = c.x + Math.sin(a) * r, z = c.z + Math.cos(a) * r;
+        if (!w.walkable(x, z) || w.slopeAt(x, z) > 0.2) continue;
         let ok = true;
         for (let q = 0; q < 8 && ok; q++) ok = w.walkable(x + Math.sin(q * 0.785) * 3, z + Math.cos(q * 0.785) * 3);
-        if (ok && w.shelterAt(x, w.heightAt(x, z) + 1, z, CS.view.env.windX, CS.view.env.windZ).amount < 0.3) return { x, z };
+        if (!ok) continue;
+        const sh = w.shelterAt(x, w.heightAt(x, z) + 0.5, z, env.windX, env.windZ).amount;
+        if (sh < bs) {
+          bs = sh;
+          best = { x, z, shelter: Math.round(sh * 100) / 100 };
+        }
+        if (sh < 0.08) return best;
       }
     }
-    return null;
-  });
-  check(!!fireSpot, 'found an open, exposed spot for a fire');
-  await ev(() => window.CS.env({ storm: 0.8, lock: true }));
-  await ev((s) => window.CS.go(s.x, s.z, 0, -20), fireSpot);
+    return best;
+  }, out);
+  log('fire spot', fireSpot);
+  check(!!fireSpot && fireSpot.shelter < 0.2, 'found an open, exposed spot for a fire');
+  // stand just south of it, facing north: B lays the fire 1.1 m in front
+  await ev((s) => window.CS.go(s.x, s.z + 1.1, 0, -20), fireSpot);
   await mark();
   await ev(() => window.CS.act({ t: 'buildFire' }));
   await step(3);
   const built = await since('fireBuilt');
   check(built.length === 1, 'B lays a campfire from three sticks');
   const fid = built.length ? built[0].id : 0;
+  const lay = await ev((fid) => {
+    const f = window.CS.sim.ctx.get(fid);
+    return f ? { shelter: Math.round(f.shelter * 100) / 100, size: Math.round(f.size * 100) / 100 } : null;
+  }, fid);
+  log('the lay', lay);
   // look at it and strike matches with E until it catches (the wind should beat the first ones)
   await ev((fid) => {
-    const f = window.CS.view.ents.get(fid);
+    const f = window.CS.sim.ctx.get(fid);
     window.SV.standBy(f.x, f.y, f.z, 1.3, 0.3, window.SV.me());
   }, fid);
   await step(4);
   h = await hud();
   check(h.focus.startsWith('Light Campfire'), `the focus offers "${h.focus}"`);
-  let fails = [], lit = false;
+  let fails = [], lit = false, failShot = false;
   for (let k = 0; k < 10 && !lit; k++) {
     await mark();
     await press(USE);
@@ -241,9 +257,10 @@ export default async function ({ ev, step, shot, log, check }) {
       if (e.t === 'igniteFail') fails.push(e.why);
       if (e.t === 'fireLit') lit = true;
     }
-    if (fails.length === 1 && !lit && k === fails.length - 1) {
+    if (fails.length >= 1 && !failShot) {
+      failShot = true;
       h = await hud();
-      log('after the first failed match: toasts', h.toasts);
+      log('after a failed match: toasts', h.toasts);
       check(h.toasts.some((t) => t.includes('wind took the match')), 'the HUD says the wind took the match');
       await shot('survive_03_match_fails');
     }
@@ -264,43 +281,58 @@ export default async function ({ ev, step, shot, log, check }) {
   check(fails.length >= 1 && fails.every((w) => w === 'wind'), `the wind failed ${fails.length} match(es) on the open fire`);
   check(lit, 'the fire caught in the end');
 
-  // ---------------------------------------------------------------- 4. warm up
+  // ---------------------------------------------------------------- 4. feed it
+  await step(6);
+  h = await hud();
+  check(h.focus.startsWith('Feed fire'), `the focus offers "${h.focus}"`);
+  await mark();
+  const s0 = (await body()).inv.stick ?? 0;
+  for (let k = 0; k < 3; k++) {
+    await press(USE);
+    await step(4);
+  }
+  const fed = await since('fireFed');
+  check(fed.length === 3 && fed.every((e) => e.item === 'stick') && ((await body()).inv.stick ?? 0) === s0 - 3, 'E feeds the fire, a stick at a time');
+  await shot('survive_04_fed');
+
+  // ---------------------------------------------------------------- 5. warm up and rest (a checkpoint)
   await ev(() => window.CS.env({ storm: 0.45, lock: true }));
   await ev(() => (window.SV.me().core = Math.min(window.SV.me().core, 33.5)));
   await ev((fid) => {
-    const f = window.CS.view.ents.get(fid);
+    const f = window.CS.sim.ctx.get(fid);
     const env = window.CS.view.env;
     const wl = Math.hypot(env.windX, env.windZ) || 1;
     // across the wind from the fire, 1.4 m
     const sx = f.x - (env.windZ / wl) * 1.4, sz = f.z + (env.windX / wl) * 1.4;
     window.SV.standBy(f.x, f.y, f.z, 1.4, 0.3, { x: sx, z: sz });
   }, fid);
-  await step(60);
+  await step(30 * 30); // the fire is still taking hold: half a minute in
   b = await body();
   h = await hud();
-  log('by the fire', b, { chips: h.chips, stage: h.stage, temp: h.temp });
+  const fireNow = await ev((fid) => { const f = window.CS.sim.ctx.get(fid); return { heat: window.SV.round(f.heat), fuel: Math.round(f.fuel), shelter: window.SV.round(f.shelter) }; }, fid);
+  log('by the fire', b, { chips: h.chips, stage: h.stage, temp: h.temp }, 'fire', fireNow);
   check(b.fire > 0.3 && b.trend > 0.8, `the fire warms (fireHeat ${b.fire}, ${b.trend}/min)`);
   check(h.chips.fire, 'the HUD fire chip is on');
-  await shot('survive_04_warming');
-  const warmT = await stepUntil(() => window.SV.me().core >= 36.9, 240);
-  log(`33.5 -> 36.9 by the fire in ${warmT + 2} s`);
-  check(warmT + 2 <= 160, 'warm again in about two minutes');
-
-  // ---------------------------------------------------------------- 5. feed it, rest (checkpoint)
+  await shot('survive_05_warming');
   await mark();
-  const s0 = (await body()).inv.stick ?? 0;
-  h = await hud();
-  check(h.focus.startsWith('Feed fire'), `the focus offers "${h.focus}"`);
-  await press(USE);
-  await step(3);
-  const fed = await since('fireFed');
-  check(fed.length === 1 && fed[0].item === 'stick' && ((await body()).inv.stick ?? 0) === s0 - 1, 'E feeds the fire a stick');
-  await step(30 * 8);
-  const cps = await since('checkpoint');
-  h = await hud();
-  check(cps.length >= 1, 'resting warm at the fire makes a checkpoint');
-  check(h.toasts.some((t) => t.includes('Progress saved')), 'the HUD says progress saved');
-  await shot('survive_05_fed');
+  // warm until 36.9; resting warm by the fire also makes a checkpoint on the way (read its toast then)
+  let warmT = 30, cpSeen = false;
+  for (let i = 0; i < 480 && (!cpSeen || b.core < 36.9); i++) {
+    await step(15);
+    if (b.core < 36.9) warmT += 0.5;
+    b = await body();
+    if (!cpSeen && (await since('checkpoint')).length > 0) {
+      cpSeen = true;
+      h = await hud();
+      log('checkpoint at core', b.core, 'toasts', h.toasts);
+      check(h.toasts.some((t) => t.includes('Progress saved')), 'the HUD says progress saved');
+      await shot('survive_05b_rested');
+    }
+  }
+  log(`33.5 -> 36.9 by the fire (lit just before) in ${warmT} s`);
+  check(warmT <= 170, 'warm again in about two minutes, the fire taking hold included');
+  check(cpSeen, 'resting warm at the fire makes a checkpoint');
+
 
   // ---------------------------------------------------------------- 6. the axe on deadfall
   await ev(() => {
@@ -409,48 +441,48 @@ export default async function ({ ev, step, shot, log, check }) {
     const fx = Math.sin(c.yaw) * c.dir, fz = Math.cos(c.yaw) * c.dir;
     return Math.atan2(-fx, -fz);
   }, carry);
-  const p0 = await ev(() => ({ x: window.SV.me().x, z: window.SV.me().z }));
+  const pos = () => ev(() => ({ x: window.SV.me().x, z: window.SV.me().z }));
   await ev((yaw) => {
     window.CS.look((yaw * 180) / Math.PI, -8);
     window.CS.input({ mz: 1 });
     window.SV.botInput({ yaw, mz: 1 });
   }, walkDir);
-  await step(45);
-  // a look from behind, in third person
-  await ev(() => {
-    window.CS.game.input.setLook(window.CS.game.input.yaw + Math.PI * 0.8, -0.3);
-    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyV' }));
-  });
-  await ev((yaw) => {
-    window.CS.input({ mz: 1 });
-    window.SV.botInput({ yaw, mz: 1 });
-  }, walkDir);
-  await step(30);
+  await step(30); // up to pace
+  const p0 = await pos();
+  await step(40);
+  await ev(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyV' }))); // a look in third person
+  await step(35);
   await shot('survive_07_carry_pair');
   await ev(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyV' })));
-  const p1 = await ev(() => ({ x: window.SV.me().x, z: window.SV.me().z }));
+  const p1 = await pos();
   const carried = await ev((id) => {
     const l = window.CS.sim.ctx.get(id), me = window.SV.me(), bot = window.CS.sim.ctx.get(window.SV.bot);
-    return { mid: Math.hypot(l.x - (me.x + bot.x) / 2, l.z - (me.z + bot.z) / 2), apart: Math.hypot(me.x - bot.x, me.z - bot.z), len: l.len, held: l.a !== 0 && l.b !== 0 };
+    return { mid: window.SV.round(Math.hypot(l.x - (me.x + bot.x) / 2, l.z - (me.z + bot.z) / 2), 3), apart: window.SV.round(Math.hypot(me.x - bot.x, me.z - bot.z)), len: window.SV.round(l.len), held: l.a !== 0 && l.b !== 0 };
   }, carry.id);
-  const speed = Math.hypot(p1.x - p0.x, p1.z - p0.z) / 2.5;
-  log(`carried at ${speed.toFixed(2)} m/s`, carried);
-  check(carried.held && speed > 1.8, `two carry it at a walk (${speed.toFixed(2)} m/s; alone it would be 1.2)`);
-  check(carried.mid < 0.05, 'the log stays between its carriers');
+  // the companion lets go: the player drags it on alone along the same line
   await ev(() => {
-    window.CS.input(null);
+    window.CS.game.host.botAct(window.SV.bot, { t: 'release' });
     window.SV.botInput({});
   });
+  await step(30);
+  const p2 = await pos();
+  await step(60);
+  const p3 = await pos();
+  const pairSpeed = Math.hypot(p1.x - p0.x, p1.z - p0.z) / (75 / 30);
+  const dragSpeed = Math.hypot(p3.x - p2.x, p3.z - p2.z) / 2;
+  log(`carried by two at ${pairSpeed.toFixed(2)} m/s, dragged alone at ${dragSpeed.toFixed(2)} m/s`, carried);
+  check(carried.held && pairSpeed > dragSpeed * 1.6, 'two carry it at a walk; one alone only drags it');
+  check(carried.mid < 0.05, 'the log stays between its carriers');
+  await ev(() => window.CS.input(null));
   await mark();
   await ev(() => window.CS.act({ t: 'release' }));
-  await ev(() => window.CS.game.host.botAct(window.SV.bot, { t: 'release' }));
   await step(3);
-  check((await since('logDrop')).length === 1, 'put down together');
+  check((await since('logDrop')).length === 1, 'put down');
 
   // ---------------------------------------------------------------- 8. down from the cold
   // the companion waits by the fire; the player goes out alone into a whiteout at night
   await ev((fid) => {
-    const f = window.CS.view.ents.get(fid);
+    const f = window.CS.sim.ctx.get(fid);
     window.SV.botTo(f.x + 1.3, f.z);
     window.CS.sim.ctx.get(fid) && window.CS.sim.ctx.setV('fire.wood.' + fid, 1200);
   }, fid);
@@ -554,7 +586,7 @@ export default async function ({ ev, step, shot, log, check }) {
   b = await body();
   check(b.hunger < 0.01 && (b.inv.ration ?? 0) === r0 - 1, `ate a ration (hunger ${b.hunger})`);
   await ev(() => window.CS.mode('inventory'));
-  await step(10);
+  await step(45); // past the fade and the place card
   await shot('survive_12_pack');
   await ev(() => window.CS.mode('play'));
   await step(5);

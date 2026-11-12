@@ -13,8 +13,8 @@
 // fragment shader, which keeps a pixel when tLo <= dither < tHi. The full mesh, the simplified mesh
 // and the impostor use complementary ranges of the same screen-space dither, so a crossfade never
 // leaves holes or doubles. An instance outside its range collapses to a point (no fragments).
-// Thinning (quality.treeDensity) uses the same dither, beyond ~20 m only (nothing invisible to
-// walk into).
+// Thinning (quality.treeDensity) uses the same dither, among the impostors only (beyond the 3D
+// trees: nothing invisible to walk into, and no half-dissolved 3D tree).
 import * as THREE from 'three/webgpu';
 import {
   Fn, If, abs, attribute, cameraProjectionMatrix, cameraWorldMatrix, cos, cross, dFdx, dFdy, dot, float, floor, fract, frontFacing, fwidth,
@@ -23,7 +23,7 @@ import {
 } from 'three/tsl';
 import { U } from '../shared';
 import {
-  ForestMaterial, branchBounce, ditherNoise, effectiveSnow, gustAt, hash11, noiseAt, rotY, snowCoverage, snowShade, treeSway, type N,
+  ForestLambert, branchBounce, ditherNoise, effectiveSnow, gustAt, hash11, noiseAt, rotY, snowCoverage, snowShade, treeSway, type N,
 } from './common';
 import { getFoliageAtlas } from './textures';
 import { PART, SNAG_H, TREE_H, type GeoKind, type GeoLod } from './treegen';
@@ -209,10 +209,13 @@ function surface(kind: GeoKind, I: SurfaceIn): Surface {
     alpha.assign(aSharp);
     // snow catches on the up-facing side of the sprays, more where they are dense
     const up: N = smoothstep(0.08, 0.6, faceUp);
-    potential.assign(I.pot.mul(up).mul(dense.mul(0.55).add(0.45)).mul(nz.x.mul(0.6).add(0.7)));
-    rough.assign(0.74);
+    // snow sits on the needle masses: the brighter (outer) needles of the texture catch it first
+    const needle: N = tex.g.div(0.034).sub(1).clamp(-0.6, 0.6);
+    potential.assign(I.pot.mul(up).mul(dense.mul(0.55).add(0.45)).mul(nz.x.mul(0.6).add(0.7)).mul(needle.mul(0.6).add(1)));
+    rough.assign(0.86);
   }).ElseIf(part.equal(PART.DEAD), () => {
-    albedo.assign(tex.rgb.mul(vec3(0.92, 0.88, 0.85)));
+    // dead lower twigs: dark grey-brown, wet with melt, never pale
+    albedo.assign(tex.rgb.mul(vec3(0.52, 0.48, 0.45)));
     alpha.assign(aSharp);
     potential.assign(I.pot.mul(smoothstep(0.1, 0.7, faceUp)).mul(nz.x.mul(0.6).add(0.7)));
     rough.assign(0.9);
@@ -353,21 +356,19 @@ export function createTreeDepthMaterial(kind: GeoKind, lod: GeoLod): THREE.MeshB
 }
 
 /** The lit pass of a tree level: depth test against its prepass, no depth write. */
-export function createTreeMaterial(kind: GeoKind, lod: GeoLod): THREE.MeshStandardNodeMaterial {
-  const m = new ForestMaterial();
+export function createTreeMaterial(kind: GeoKind, lod: GeoLod): THREE.MeshLambertNodeMaterial {
+  const m = new ForestLambert();
   m.name = `forest-${kind}-${lod}`;
   m.side = THREE.DoubleSide;
-  m.metalness = 0;
   m.depthWrite = false;
   m.depthFunc = THREE.LessEqualDepth;
   m.polygonOffset = true;
-  m.polygonOffsetFactor = -0.5;
-  m.polygonOffsetUnits = -2;
+  m.polygonOffsetFactor = -1;
+  m.polygonOffsetUnits = -4;
   m.alphaTest = 0.5;
   const V = varyings();
   m.positionNode = treePosition(kind, lod);
 
-  const pRough: N = property('float', 'csFRough');
   const pEmis: N = property('vec3', 'csFEmis');
   const pAO: N = property('float', 'csFAO');
 
@@ -378,19 +379,18 @@ export function createTreeMaterial(kind: GeoKind, lod: GeoLod): THREE.MeshStanda
     const s = surface(kind, { part: V.part, ao: V.misc.x, pot: V.misc.y, uv: attribute('uv', 'vec2'), tint, faceUp: face.y, wp: positionWorld });
     const nW: N = normalize(normalViewGeometry).transformDirection(cameraWorldMatrix);
     const sh = snowShade(nW);
-    // a slab that is drawn at all is snow (the depth pass dropped the thin parts)
-    const c: N = select(s.isSnowPart.greaterThan(0.5), float(1), snowCoverage(load, s.potential));
+    // a slab that is drawn at all is snow (the depth pass dropped the thin parts); on needles the
+    // snow is either there or not: a narrow edge, no grey half-snow
+    const c: N = select(s.isSnowPart.greaterThan(0.5), float(1), snowCoverage(load, s.potential, 0.03));
     const col: N = mix(s.albedo, sh.color, c).toVar();
     If(FU.lodTint.greaterThan(0.5), () => {
       col.mulAssign(lod === 'full' ? vec3(1.6, 0.5, 0.4) : vec3(0.45, 1.5, 0.5));
     });
-    pRough.assign(mix(s.rough, 0.86, c));
     pEmis.assign(sh.emissive.mul(c));
     pAO.assign(mix(s.ao, 1, c.mul(0.6)));
     // the same coverage decision as the depth pass
     return vec4(col, treeAlpha(V));
   })();
-  m.roughnessNode = pRough;
   m.emissiveNode = pEmis;
   m.aoNode = pAO;
   // never flip the normal on back faces: foliage cards shade with the crown normal on both sides
