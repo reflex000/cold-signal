@@ -152,6 +152,14 @@ export function buildFields(inp: FieldInput): Fields {
     }
   }
 
+  // groves and clearings (40 to 150 m forms): on the 8 m grid, interpolated below
+  const clumpG = new Float32Array(CN * CN);
+  for (let cj = 0; cj < CN; cj++) {
+    for (let ci = 0; ci < CN; ci++) {
+      const x = -EXT + ci * CC, z = -EXT + cj * CC;
+      clumpG[cj * CN + ci] = smooth01(-0.45, 0.25, nf.fbm(x / 150, z / 150, 3) + 0.4 * nr.fbm(x / 42, z / 42, 2));
+    }
+  }
   const wl = wf.lee, we = wf.exposure, wh = wf.hollow, ww2 = wf.windward;
   for (let j = 0; j < N; j++) {
     const z = -EXT + j * CELL;
@@ -195,8 +203,7 @@ export function buildFields(inp: FieldInput): Fields {
       if (f > 0) {
         f *= 1 - smooth01(TAN30, TAN40, g);
         f *= smooth01(5, 16, sdf);
-        const clump = nf.fbm(x / 150, z / 150, 3) + 0.4 * nr.fbm(x / 42, z / 42, 2);
-        f *= smooth01(-0.45, 0.25, clump);
+        f *= clumpG[q] * w00 + clumpG[q + 1] * w10 + clumpG[q + CN] * w01 + clumpG[q + CN + 1] * w11;
         f *= 1 - 0.5 * exp;
         f *= 1 - 0.85 * rock;
         f *= 1 + 0.3 * smooth01(250, 140, hv);

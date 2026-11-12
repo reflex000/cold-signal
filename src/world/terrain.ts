@@ -146,7 +146,8 @@ function macro(x: number, z: number, nz: Noises, rr: RavineRow, ridgeZ: number, 
     const t = L.BENCH.h + L.BENCH.tiltZ * (z - L.BENCH.z) + L.BENCH.tiltX * (x - L.BENCH.x) + 3 * nz.med.at(x / 60, z / 60);
     h += (t - h) * wb * 0.92;
   }
-  const wc = plateauWeight(CIRQUE_RT, x, z, 0.1 * m);
+  // (the rock step under the cirque is broken into buttresses and gullies)
+  const wc = plateauWeight(CIRQUE_RT, x, z, 0.1 * m + 0.16 * (nz.med.ridged(x / 48 + 4.1, z / 36, 2) - 0.45));
   if (wc > 0) {
     const t = L.CIRQUE.h + L.CIRQUE.tiltZ * (z - L.CIRQUE.z) + 2 * nz.med.at(x / 60 + 3, z / 60);
     h += (t - h) * wc;
@@ -425,6 +426,10 @@ function steer(h: Float32Array, x: number, z: number, target: number, radius: nu
   }
 }
 
+/** Width of the level strip kept round the ice: a little more than a cell diagonal, so every point
+ * on the ice (lakeSdf < 0) interpolates between vertices that are all exactly at the ice level. */
+export const SHORE_FLAT = 2.9;
+
 /** Set every vertex over the lake to the ice level exactly (after anything that may touch it). */
 export function flattenLake(h: Float32Array, seed: number): void {
   const r = L.LAKE_R * 1.25;
@@ -435,8 +440,8 @@ export function flattenLake(h: Float32Array, seed: number): void {
       const x = -EXT + i * CELL, z = -EXT + j * CELL;
       const s = L.lakeSdf(x, z, seed);
       const k = j * N + i;
-      if (s <= 0) h[k] = L.LAKE_LEVEL;
-      else if (s < 3 && h[k] < L.LAKE_LEVEL + 0.12 * s) h[k] = L.LAKE_LEVEL + 0.12 * s;
+      if (s <= SHORE_FLAT) h[k] = L.LAKE_LEVEL;
+      else if (s < SHORE_FLAT + 4 && h[k] < L.LAKE_LEVEL + 0.15 * (s - SHORE_FLAT)) h[k] = L.LAKE_LEVEL + 0.15 * (s - SHORE_FLAT);
     }
   }
 }
@@ -515,7 +520,7 @@ export function buildTerrain(seed: number, progress: (p: number, label: string) 
       L.COULOIRS.forEach((cx, ci) => {
         if (Math.abs(x - cx) < Math.abs(colCoulDx[i])) {
           colCoulDx[i] = x - cx;
-          colCoulW[i] = 0.09 + 0.09 * ((ci * 0.618) % 1); // how fast each gully widens upward
+          colCoulW[i] = 0.2 + 0.12 * ((ci * 0.618) % 1); // how fast each gully widens into its funnel
         }
       });
     }
@@ -553,7 +558,7 @@ export function buildTerrain(seed: number, progress: (p: number, label: string) 
           const cd = colCoulDx[i];
           if (cd < 60 && cd > -60) {
             const floor = 1.15 * (s + 5);
-            const half = 2 + colCoulW[i] * (s + 5 > 0 ? s + 5 : 0) + 1.5 * nz.misc.at(x / 9, z / 9);
+            const half = 1.8 + colCoulW[i] * (s > 3 ? s - 3 : 0) + 1.2 * nz.misc.at(x / 9, z / 9);
             const vf = 1 - Math.abs(cd) / half;
             if (vf > 0 && add > floor) add -= (add - (floor > 0 ? floor : 0)) * vf;
           }

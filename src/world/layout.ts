@@ -192,39 +192,8 @@ export function ridgeZ(x: number): number {
 }
 export const RIDGE_H = 22;
 
-// ------------------------------------------------------------------------------------------
-// the walls that close the square: the flank is the head of a valley, held between two spur
-// ridges (west, east) that curl round to close the foot (south), and the summit wall (north).
-// They follow a rounded square; `boundaryDist` is the signed distance to it (negative inside).
-// ------------------------------------------------------------------------------------------
-export const WALL_EDGE = 812; // crest line, just outside the playable edge (800)
-export const WALL_CORNER = 230; // corner radius of the crest line
-export function boundaryDist(x: number, z: number): number {
-  const qx = Math.abs(x) - (WALL_EDGE - WALL_CORNER), qz = Math.abs(z) - (WALL_EDGE - WALL_CORNER);
-  const ox = qx > 0 ? qx : 0, oz = qz > 0 ? qz : 0;
-  const inner = qx > qz ? qx : qz;
-  return Math.sqrt(ox * ox + oz * oz) + (inner < 0 ? inner : 0) - WALL_CORNER;
-}
-
-/** The point of the crest line closest to (x, z) (used to key noise that runs across the walls). */
-export function boundaryPoint(x: number, z: number): [number, number] {
-  const a = WALL_EDGE - WALL_CORNER;
-  const ax = Math.abs(x), az = Math.abs(z);
-  const qx = ax - a, qz = az - a;
-  let px: number, pz: number;
-  if (qx > 0 && qz > 0) {
-    const l = Math.sqrt(qx * qx + qz * qz);
-    px = a + (qx / l) * WALL_CORNER;
-    pz = a + (qz / l) * WALL_CORNER;
-  } else if (qx > qz) {
-    px = WALL_EDGE;
-    pz = az;
-  } else {
-    px = ax;
-    pz = WALL_EDGE;
-  }
-  return [x < 0 ? -px : px, z < 0 ? -pz : pz];
-}
+// (The ground that closes the square, the mountainsides to the west, east and north and the
+// valley past the south edge, is built in terrain.ts: see walls().)
 
 export function smoothRange(a: number, b: number, v: number): number {
   let t = (v - a) / (b - a);
@@ -239,7 +208,7 @@ export interface Plateau { x: number; z: number; rx: number; rz: number; rot: nu
 /** The forested bench in the west that holds the cabin. */
 export const BENCH: Plateau = { x: -440, z: 122, rx: 190, rz: 105, rot: 0.17, fall: 120, h: 214, tiltZ: -0.05, tiltX: 0.008 };
 /** The floor of the cirque that holds the lake, perched on a rock step (the riegel) to the south. */
-export const CIRQUE: Plateau = { x: 198, z: 66, rx: 215, rz: 112, rot: 0, fall: 95, h: LAKE_LEVEL + 1, tiltZ: -0.02, tiltX: 0 };
+export const CIRQUE: Plateau = { x: 198, z: 66, rx: 215, rz: 112, rot: 0, fall: 122, h: LAKE_LEVEL + 1, tiltZ: -0.02, tiltX: 0 };
 /** The exposed shoulder in the upper east: a spur running down to the south-west from the east wall. */
 export const SHOULDER = { ax: 760, az: -470, bx: 400, bz: -262, w: 135, h: 34 };
 /** A creek along the foot of the west spur, draining the slopes below the cliff band. */

@@ -72,7 +72,7 @@ export function buildSpawn(ctx: SpawnCtx): SpawnOut {
   {
     const b = A('wreck:site.barrel');
     defs.push({ kind: 'fire', type: 'barrel', x: b.x, y: ground(b.x, b.z, b.y) + 0.9, z: b.z, shelter: 0.35 });
-    crate('wreck:fuselage.locker', 'locker', [{ item: 'flaregun', n: 1 }, { item: 'flare', n: 1 }, { item: 'cell', n: 1 }]);
+    crate('wreck:fuselage.locker', 'locker', [{ item: 'flaregun', n: 1 }, { item: 'flare', n: 1 }, { item: 'flashlight', n: 1 }, { item: 'cell', n: 1 }]);
     crate('wreck:fuselage.medkit', 'medkit', [{ item: 'bandage', n: 2 }]);
     crate('wreck:site.luggage1', 'luggage', [{ item: 'matches', n: 3 }, { item: 'ration', n: 1 }, { item: 'tinder', n: 1 }]);
     crate('wreck:site.luggage2', 'luggage', [{ item: 'thermos', n: 1 }, { item: 'bandage', n: 1 }]);
@@ -156,6 +156,7 @@ export function buildSpawn(ctx: SpawnCtx): SpawnOut {
   // --- scattered wood and sticks
   const distRoute = pathDistance(ctx.path);
   const okSpot = (x: number, z: number, y: number, r: number) =>
+    x > -760 && x < 760 && z > -760 && z < 760 &&
     ctx.walkable(x, z) && !ctx.onIce(x, z) && ctx.trailAt(x, z) < 0.35 && !ctx.inClearing(x, z, 1) && !ctx.blocked(x, y + 0.2, z, r);
 
   // luggage burst open along the skid scar

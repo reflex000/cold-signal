@@ -76,3 +76,28 @@ Read their code (do not rely only on the reports), then make the game run end to
 Report: what runs, the CS API as built, the scenarios and their results (numbers), every edit you made outside
 your own files, and a frank list of what is weak or missing for the next milestone.
 
+
+STATE ON DISK (your handoff note: docs/status/GAME.md, create it first). Nothing of yours exists yet except the
+contract src/game/view.ts and a placeholder src/main.ts. SIM+NET, ENGINE, KIT, AUDIO, MUSIC and UI are finished:
+read their handoff notes in docs/status/ (the "## Final report" section at the end of each is the API summary)
+before reading their code. WORLD is still being polished by its engineer while you work: createWorld(seed) in
+src/world/index.ts already exists and works (tools/world-map.mjs uses it); its terrain may change under you, so do
+not hard-code heights, and do not edit src/world.
+
+Build in this order so an interruption costs little: (1) boot + main loop + View + input + camera with the
+stand-in world, walkable and on screen; (2) the CS hook and tools/play.mjs with the first scenario; (3) focus,
+save, the remaining scenarios; (4) the checks in item 11.
+
+Notes from the module engineers that concern you:
+- SIM: JUMP is level-triggered (send it as a one-tick pulse); sendInput sets seq itself; stop sending input while
+  the solo host is paused; Host.tick() returns the tick's events.
+- ENGINE: engine.add(sys) then await engine.warmup() then engine.frame({ dt, time, view }) per frame; call
+  engine.compile(obj) before scene.add for anything created mid-game; post extension API in docs/status/ENGINE.md.
+- KIT: import './models/props' registers the models; createPropsSystem({ scene, camera }, props) is a GfxSystem.
+  The bench's hemisphere ground light (0.9) leaves faces turned from the sun nearly black over sunlit snow: in your
+  stand-in sky use a ground/bounce ambient of about 2x that, to match snow's albedo.
+- UI: emit bus 'mode', 'loading', 'place', 'toast'; release pointer lock while ui.wantsPointer(); headings and
+  bearings in radians, 0 = north, clockwise; ignore game keys while wantsPointer() is true.
+- AUDIO: createAudio() then unlock() from a user gesture; per frame setListener, setAmbience, update(dt);
+  start loop('stove', { pos }) for a burning stove.
+The user plays on phones too: the mobile scenario (touch controls, WebGL2 path) is a first-class check.

@@ -354,7 +354,7 @@ function simplify(pts: { x: number; z: number }[], tol: number, maxLen: number):
 // carving
 // ------------------------------------------------------------------------------------------
 /** Grade the track along `pts` (2 m apart) into the heightmap and write the trail mask. */
-function carve(h: Float32Array, seed: number, pts: { x: number; z: number }[], noCarve: boolean[], trail: Uint8Array, best: Float32Array, target: Float32Array, touched: number[]): void {
+function carve(h: Float32Array, pts: { x: number; z: number }[], noCarve: boolean[], trail: Uint8Array, best: Float32Array, target: Float32Array, touched: number[]): void {
   const n = pts.length;
   if (n < 2) return;
   // the profile: the ground, smoothed, then limited in grade both ways
@@ -411,7 +411,6 @@ function carve(h: Float32Array, seed: number, pts: { x: number; z: number }[], n
       }
     }
   }
-  void seed;
 }
 
 /** Distance from a point to a dense polyline, through a bucket grid of its points (approximate to
@@ -487,7 +486,7 @@ export function buildRoute(inp: RouteInput): RouteResult {
   const best = new Float32Array(N * N).fill(Infinity);
   const target = new Float32Array(N * N);
   const touched: number[] = [];
-  carve(h, seed, path, noCarve, trail, best, target, touched);
+  carve(h, path, noCarve, trail, best, target, touched);
   for (const v of touched) {
     const d = best[v];
     const w = d <= CORE ? 1 : 1 - smooth01(CORE, BLEND, d);

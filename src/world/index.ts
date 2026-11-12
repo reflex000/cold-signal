@@ -8,7 +8,7 @@
 import type { PartId, Surface } from '../sim/types';
 import { SITES, toWorld, type Pose } from './blueprints';
 import { ColliderIndex, KIND_ROCK, KIND_TREE, KIND_WALL, rayFloors, type RayHit } from './collide';
-import { datan, dcos, dlen, dsin, PI, smooth01, wrapPi } from './dmath';
+import { datan, dcos, dsin, PI, smooth01 } from './dmath';
 import { buildFields, SNOW_SCALE, type Clearing } from './fields';
 import { buildLake, iceCellOf } from './lake';
 import * as L from './layout';
@@ -232,8 +232,7 @@ export function createWorld(seed: number, onProgress?: (p: number, label: string
   const rhit = { t: Infinity, k: -1 };
   const terrainRay = (ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxT: number, step: number): number => {
     let t0 = 0;
-    let above = oy - heightAt(ox, oz);
-    if (above < 0) return 0; // starts under ground
+    if (oy < heightAt(ox, oz)) return 0; // starts under ground
     for (let t = step; t <= maxT + step; t += step) {
       const tt = t > maxT ? maxT : t;
       const y = oy + dy * tt;
@@ -248,11 +247,9 @@ export function createWorld(seed: number, onProgress?: (p: number, label: string
         }
         return hi;
       }
-      above = a;
       t0 = tt;
       if (tt >= maxT) break;
     }
-    void above;
     return Infinity;
   };
   const raycast = (ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number): RayHit | null => {
@@ -431,8 +428,6 @@ export function createWorld(seed: number, onProgress?: (p: number, label: string
     thinIce: lakeB.thin,
     stats: { routeLength: route.length, trees: trees.length, rocks: rocks.length, props: props.length, colliders: colList.length, defs: spawn.defs.length },
   };
-  void wrapPi;
-  void dlen;
   prog(1, 'Ready');
   return world;
 }
