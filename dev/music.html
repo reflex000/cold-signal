@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Cold Signal: the score</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        --bg: #0a0c0f;
+        --ink: #dfe3e6;
+        --dim: #7d8791;
+        --faint: #2a3038;
+        --amber: #e6a84a;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink); }
+      body {
+        font: 300 clamp(13px, 1.5vw, 15px) / 1.5 "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+        letter-spacing: 0.02em;
+        padding: clamp(14px, 3vw, 36px);
+        padding-left: max(clamp(14px, 3vw, 36px), env(safe-area-inset-left));
+        padding-right: max(clamp(14px, 3vw, 36px), env(safe-area-inset-right));
+      }
+      h1 { font-weight: 200; font-size: clamp(18px, 2.6vw, 26px); letter-spacing: 0.18em; text-transform: uppercase; margin: 0 0 2px; }
+      .sub { color: var(--dim); margin: 0 0 clamp(14px, 2.5vw, 28px); }
+      .row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px clamp(10px, 1.6vw, 22px); }
+      button {
+        font: inherit; color: var(--dim); background: none; border: 0; border-bottom: 1px solid transparent;
+        padding: 12px 2px; min-height: 44px; min-width: 44px; cursor: pointer; letter-spacing: 0.08em; text-transform: lowercase;
+      }
+      button:hover { color: var(--ink); }
+      button.on { color: var(--amber); border-bottom-color: var(--amber); }
+      button.want { color: var(--ink); border-bottom-color: var(--dim); }
+      #start { color: var(--bg); background: var(--ink); padding: 10px 22px; border: 0; margin-right: 12px; }
+      #start.live { color: var(--dim); background: none; border: 1px solid var(--faint); }
+      label { color: var(--dim); display: inline-flex; align-items: center; gap: 12px; min-height: 44px; }
+      input[type="range"] { appearance: none; -webkit-appearance: none; width: clamp(140px, 22vw, 280px); height: 44px; background: none; margin: 0; }
+      input[type="range"]::-webkit-slider-runnable-track { height: 1px; background: var(--dim); }
+      input[type="range"]::-moz-range-track { height: 1px; background: var(--dim); }
+      input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 3px; height: 22px; margin-top: -11px; background: var(--amber); border: 0; border-radius: 0; }
+      input[type="range"]::-moz-range-thumb { width: 3px; height: 22px; background: var(--amber); border: 0; border-radius: 0; }
+      input[type="checkbox"] { accent-color: var(--amber); width: 16px; height: 16px; }
+      #status { color: var(--dim); margin: clamp(10px, 2vw, 20px) 0 6px; min-height: 1.5em; font-variant-numeric: tabular-nums; }
+      #status b { color: var(--ink); font-weight: 300; }
+      #roll { display: block; width: 100%; height: clamp(230px, 42vh, 420px); }
+      #note { color: var(--dim); margin-top: 14px; max-width: 70ch; }
+    </style>
+  </head>
+  <body>
+    <h1>The score</h1>
+    <p class="sub">Six players, one motif. Pick a mood; it changes at the end of the phrase.</p>
+    <div class="row"><button id="start">Start audio</button><span id="moods" class="row"></span></div>
+    <div class="row">
+      <label>intensity <input id="intensity" type="range" min="0" max="1" step="0.01" value="0.5" /> <span id="ival">0.50</span></label>
+      <label><input id="wind" type="checkbox" /> wind bed</label>
+    </div>
+    <div id="status"></div>
+    <canvas id="roll"></canvas>
+    <p id="note">Each row is a player. A bar is a note: its length is how long it is held, its height in the row is its pitch, its brightness the dynamic. The line on the right is now.</p>
+    <script type="module" src="./music.ts"></script>
+  </body>
+</html>

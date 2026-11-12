@@ -40,6 +40,8 @@ export const U = {
   trailOrigin: uniform(new THREE.Vector2()), // world XZ of the map centre
   trailSize: uniform(64), // metres across
   trailOn: uniform(0), // 0 when the map is not available
+  // screen (written by the engine on resize)
+  resolution: uniform(new THREE.Vector2(1, 1)), // drawing-buffer size in pixels
 };
 
 /** Plain JS mirror for code that is not a shader (particles, audio, exposure, UI). */

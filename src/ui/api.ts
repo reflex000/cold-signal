@@ -15,6 +15,8 @@ export interface UiGame {
   map(): { canvas: HTMLCanvasElement; toUV(x: number, z: number): [number, number] } | null;
   /** Info for the settings screen. */
   gpu: { backend: 'webgpu' | 'webgl2'; adapter: string };
+  /** Optional: interface sounds (menu move, select, open, close). Wire to AudioApi.sfx. */
+  sfx?(name: 'ui_hover' | 'ui_click' | 'ui_open' | 'ui_close'): void;
 }
 
 export interface UiApi {

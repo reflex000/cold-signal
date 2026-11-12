@@ -49,6 +49,7 @@ export interface Ambience {
   onIce: number; // 0..1 (distant ice booms)
   cold: number; // 0..1 how cold the player is (shiver, breath, heartbeat, muffling)
   windDir: [number, number]; // world XZ unit vector the wind moves toward
+  cave?: number; // 0..1 inside the cave (stone reverb, the wind left at the mouth). Optional, added by AUDIO.
 }
 
 export interface AudioApi {

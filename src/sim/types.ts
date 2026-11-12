@@ -129,6 +129,8 @@ export interface PlayerEnt extends EntBase {
   radioDist: number; // metres to that source, -1 if none
   aim: number; // 0..1 rifle raised
   carry: NetId; // heavy log being carried, or 0
+  /** True while a second player holds the other end of `carry`: walking pace instead of a drag (read by move.ts). */
+  carryPair?: boolean;
   // --- co-op
   isolation: number; // 0..1 how alone the player is (wolves read this)
   kills: number;
