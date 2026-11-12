@@ -229,7 +229,7 @@ export class HudModel {
     if (this.playTime < 1.5) return '';
     if (want('move', touch ? 'Left thumb to move. Drag on the right to look.' : 'WASD to move, the mouse to look. Esc pauses.', 8)) return this.hint!.text;
     if (view.hud.focus && want('use', touch ? 'Press the hand to use what you look at.' : 'Press E to use what you look at. Hold it for long actions.')) return this.hint!.text;
-    if (me.core < 35.5 && want('cold', 'You are getting cold. Find shelter, or lay a fire with three sticks.', 9)) return this.hint!.text;
+    if (me.core < 35.5 && want('cold', touch ? 'You are getting cold. Find shelter, or lay a fire from the pack with three sticks.' : 'You are getting cold. Find shelter, or press B to lay a fire with three sticks.', 9)) return this.hint!.text;
     if (view.env.visibility < 60 && want('whiteout', 'Whiteout. Stay on the marked trail or wait it out by a fire.', 8)) return this.hint!.text;
     if (me.stamina < 0.2 && want('stamina', 'Out of breath. Sprinting warms you a little and tires you a lot.')) return this.hint!.text;
     return '';

@@ -10,25 +10,35 @@
 //    1  env        clock, storm, wind, gusts, air temperature             env.ts
 //    2  players    commands -> movement, footsteps, equip, starting kit   players.ts
 //    3  ice        lake ice stress, breaking, falling in, climbing out
-//    4  logs       heavy logs: carry, drag, release (sets carryPair)
-//    5  items      focus + USE: pick up, open crates, consume, drop, give
-//    6  tools      axe, flashlight, flare gun and flares, rifle, radio
-//    7  fire       build, ignite, feed, burn, wind and snow
-//    8  thermal    shelter, wind chill, wetness, core temperature, stamina limits
+//    4  wood       the axe (chop dead wood) and heavy logs: carry, drag, release (sets carryPair)   wood.ts
+//    5  items      focus + USE: pick up, open crates, consume, drop, give                           items.ts
+//    6  tools      flashlight, flare gun and flares, rifle, radio (the axe is wood's)
+//    7  fire       build, ignite, feed, burn, wind and snow                                          fire.ts
+//    8  thermal    shelter, wind chill, wetness, hunger, core temperature                            thermal.ts
 //    9  wolves     packs, moods, attacks
-//   10  health     damage, downed, bleed-out, revive, death, respawn
-//   11  objective  parts, panel, generator, transmit, helicopter, stages, checkpoints
+//   10  vitals     health, falls, downed, bleed-out, revive, death, respawn, checkpoints, isolation  vitals.ts
+//   11  objective  parts, panel, generator, transmit, helicopter, stages
 //
 // Movement (players) runs before anything that reacts to where people are standing, so ice,
 // fire warmth and wolves all see this tick's positions.
-// Owner: SIM.
+// Owner: SIM (the survival lines: SURVIVAL).
 import type { System } from '../api';
 import { env } from './env';
+import { fire } from './fire';
+import { items } from './items';
 import { players } from './players';
 import { spawn } from './spawn';
+import { thermal } from './thermal';
+import { vitals } from './vitals';
+import { wood } from './wood';
 
 export const SYSTEMS: System[] = [
   spawn,
   env,
   players,
+  wood,
+  items,
+  fire,
+  thermal,
+  vitals,
 ];

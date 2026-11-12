@@ -23,7 +23,7 @@ import type { World } from '../../world/types';
 import { hash01 } from '../../core/rng';
 import { FU, createProxyMaterial, createTreeDepthMaterial, createTreeMaterial } from './treemat';
 import { SNAG_H, TREE_H, proxyGeometry, treeGeometry, type GeoKind, type GeoLod } from './treegen';
-import { bakeImpostors, createImpostorMaterial, impostorGeometry, type ImpostorAtlas } from './impostor';
+import { bakeImpostors, createImpostorDepthMaterial, createImpostorMaterial, impostorGeometry, type ImpostorAtlas } from './impostor';
 import { RU, createRockMaterial, rockAssets } from './rocks';
 import { createCover, type CoverLayer } from './cover';
 
@@ -34,6 +34,8 @@ export interface ForestSystem extends GfxSystem {
   readonly group: THREE.Group;
   /** Draw statistics of the last frame (instances per level). */
   readonly counts: { full: number; mid: number; snag: number; rockNear: number; rockMid: number; impostorBakeMs: number };
+  /** The baked impostor atlas (albedo + coverage, aux = normal xz, AO, snow potential), for debugging. */
+  readonly impostorAtlas: { albedo: THREE.Texture; aux: THREE.Texture } | null;
   /** Bench / debug: tint by level of detail. */
   setLodTint(on: boolean): void;
   /** Bench: freeze the wind (0) or scale it. */
@@ -224,7 +226,9 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
   const casters: THREE.Mesh[] = [];
   const level = (kind: GeoKind, lod: GeoLod): InstanceSet => {
     const set = new InstanceSet(treeGeometry(kind, lod), ['iA', 'iB'], 1024);
-    const depth = makeMesh(set, createTreeDepthMaterial(kind, lod), `forest-${kind}-${lod}-depth`, 1, kind === 'snag');
+    // prepasses go first of everything (render order -2): the terrain and whatever else stands
+    // behind the trees is then rejected by early depth testing instead of being shaded
+    const depth = makeMesh(set, createTreeDepthMaterial(kind, lod), `forest-${kind}-${lod}-depth`, lod === 'full' ? -2 : -1, kind === 'snag');
     const lit = makeMesh(set, createTreeMaterial(kind, lod), `forest-${kind}-${lod}`, 2, false);
     lit.castShadow = false;
     depth.receiveShadow = false;
@@ -258,18 +262,24 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
     console.error('[forest] impostor bake failed; far trees are off', e);
   }
   let impostors: THREE.Mesh | null = null;
+  let impostorDepth: THREE.Mesh | null = null;
   if (atlas) {
     const g = impostorGeometry();
     g.setAttribute('iA', new THREE.InstancedBufferAttribute(tA, 4));
     g.setAttribute('iB', new THREE.InstancedBufferAttribute(tB, 4));
     g.instanceCount = nT;
+    impostorDepth = new THREE.Mesh(g, createImpostorDepthMaterial(atlas));
+    impostorDepth.name = 'forest-impostors-depth';
+    impostorDepth.frustumCulled = false;
+    impostorDepth.castShadow = false;
+    impostorDepth.renderOrder = -1;
     impostors = new THREE.Mesh(g, createImpostorMaterial(atlas));
     impostors.name = 'forest-impostors';
     impostors.frustumCulled = false;
     impostors.receiveShadow = true;
     impostors.castShadow = false;
     impostors.renderOrder = 4;
-    group.add(impostors);
+    group.add(impostorDepth, impostors);
   }
 
   // ---------------- rocks ----------------
@@ -417,7 +427,7 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
     const near = Math.max(20, q.treeNear);
     FU.nearEnd.value = near;
     FU.nearBand.value = Math.min(20, Math.max(6, near * 0.15));
-    FU.fullEnd.value = Math.min(60, Math.max(12, near * 0.38));
+    FU.fullEnd.value = Math.min(55, Math.max(12, near * 0.3));
     FU.fullBand.value = Math.min(8, Math.max(3, near * 0.06));
     FU.thin0.value = Math.max(14, near * 0.3);
     FU.thin1.value = (FU.thin0.value as number) + Math.max(8, near * 0.25);
@@ -439,6 +449,7 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
     name: 'forest',
     group,
     counts,
+    impostorAtlas: atlas ? { albedo: atlas.albedo, aux: atlas.aux } : null,
     update(_f: Frame): void {
       const cam = engine.camera;
       cam.updateMatrixWorld();
@@ -469,8 +480,9 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
         (m.material as THREE.Material).dispose();
         (m.geometry as THREE.InstancedBufferGeometry).dispose();
       }
-      if (impostors) {
+      if (impostors && impostorDepth) {
         (impostors.material as THREE.Material).dispose();
+        (impostorDepth.material as THREE.Material).dispose();
         impostors.geometry.dispose();
       }
       atlas?.dispose();

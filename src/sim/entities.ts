@@ -5,7 +5,7 @@
 import type { SpawnDef } from '../world/types';
 import { PITCH_LIMIT } from './move';
 import type {
-  CrateEnt, DeviceEnt, Entity, EntityKind, Env, FireEnt, FireType, FlareEnt, HeliEnt, InputCmd, ItemId, LogEnt, Objective,
+  CrateEnt, DeviceEnt, Entity, EntityKind, Env, FireEnt, FireType, FlareEnt, HeliEnt, InputCmd, Inventory, ItemId, LogEnt, Objective,
   PickupEnt, PlayerEnt, SimState, Stats, WolfEnt, WoodEnt,
 } from './types';
 
@@ -112,6 +112,25 @@ export function makeCrate(type: CrateEnt['type'], loot: { item: ItemId; n: numbe
   const copy: { item: ItemId; n: number }[] = [];
   for (const l of loot) copy.push({ item: l.item, n: l.n });
   return { id: 0, kind: 'crate', x, y, z, yaw, rev: 0, type, loot: copy, open: false };
+}
+
+/** How many of each item one pack holds. Tools and radio parts: one each. (Owner of the numbers: SURVIVAL.) */
+export const CARRY_LIMIT: Readonly<Record<ItemId, number>> = {
+  axe: 1, flashlight: 1, flaregun: 1, rifle: 1, radio: 1,
+  stick: 12, log: 4, tinder: 6, matches: 30,
+  flare: 6, ammo: 20, cell: 4,
+  bandage: 6, ration: 6, thermos: 2,
+  part_battery: 1, part_handset: 1, part_coil: 1, part_tube: 1, part_fuse: 1,
+};
+
+/** True for a real item id (actions arrive from clients and are checked against this). */
+export function isItemId(v: unknown): v is ItemId {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CARRY_LIMIT, v);
+}
+
+/** How many more of `item` fit in a pack. */
+export function packRoom(inv: Inventory, item: ItemId): number {
+  return Math.max(0, CARRY_LIMIT[item] - (inv[item] ?? 0));
 }
 
 /** Chops needed to fell or clear each kind of dead wood, before `scale`. */

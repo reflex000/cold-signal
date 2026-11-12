@@ -9,10 +9,16 @@ import { buildFarMap, type FarMap } from './ring';
 
 export interface TerrainData {
   far: FarMap;
-  /** world.heightmap as R32F (read with textureLoad). */
+  /**
+   * world.heightmap and its filtered mip levels, packed in one R32F atlas (read with textureLoad):
+   * level 0 (n x n) at the origin, levels 1.. stacked in a column to its right (see mipAtlas).
+   */
   heightTex: THREE.DataTexture;
-  /** far map as R32F (read with textureLoad). */
+  /** The far map and its mip levels, packed the same way. */
   farTex: THREE.DataTexture;
+  /** Mip levels in each atlas (level 0 included). */
+  fineLevels: number;
+  farLevels: number;
   /** RGBA8 over the heightmap: rg slope dh/dx, dh/dz as 0.5 + atan(s) / pi, b curvature (0.5 flat, > 0.5 hollow), a snow depth (1 = 1 m). */
   normFineTex: THREE.DataTexture;
   /** RGBA8 over the domain: rg slope (as above), b curvature, a forest cover of the far ring. */
@@ -32,10 +38,10 @@ export interface TerrainData {
   dispose(): void;
 }
 
-function floatTex(data: Float32Array, n: number): THREE.DataTexture {
+function floatTex(data: Float32Array, w: number, h: number): THREE.DataTexture {
   // Nearest + no mips: R32F is not filterable on WebGL2 (or WebGPU without float32-filterable);
   // a linear filter would make the texture incomplete and texelFetch would read zeros.
-  const t = new THREE.DataTexture(data, n, n, THREE.RedFormat, THREE.FloatType);
+  const t = new THREE.DataTexture(data, w, h, THREE.RedFormat, THREE.FloatType);
   t.minFilter = THREE.NearestFilter;
   t.magFilter = THREE.NearestFilter;
   t.generateMipmaps = false;
@@ -43,6 +49,39 @@ function floatTex(data: Float32Array, n: number): THREE.DataTexture {
   t.colorSpace = THREE.NoColorSpace;
   t.needsUpdate = true;
   return t;
+}
+
+/**
+ * Vertex-aligned mip pyramid of an n x n height grid (n = 2^k + 1), packed into one atlas so a coarse
+ * LOD can read heights filtered to its own cell size: no single noisy sample becomes a dent in a
+ * coarse mesh, and distant silhouettes do not alias. Level 0 sits at (0, 0); level L >= 1 (size
+ * (n - 1) / 2^L + 1) sits at x = n, y = (n - 1) * (1 - 2^(1 - L)) + (L - 1). Each level is a 1-2-1
+ * tent filter of the one below, sampled at its even vertices.
+ */
+export function mipAtlas(src: Float32Array, n: number, levels: number): { data: Float32Array; w: number; h: number } {
+  const w = n + (n >> 1) + 1;
+  const h = n;
+  const out = new Float32Array(w * h);
+  for (let j = 0; j < n; j++) out.set(src.subarray(j * n, j * n + n), j * w);
+  let prev = src, pn = n;
+  for (let L = 1; L < levels; L++) {
+    const m = (pn - 1) / 2 + 1;
+    const cur = new Float32Array(m * m);
+    const at = (i: number, j: number) => prev[Math.min(pn - 1, Math.max(0, j)) * pn + Math.min(pn - 1, Math.max(0, i))];
+    for (let j = 0; j < m; j++) {
+      for (let i = 0; i < m; i++) {
+        const ci = 2 * i, cj = 2 * j;
+        let sum = 0;
+        for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) sum += at(ci + di, cj + dj) * (di === 0 ? 2 : 1) * (dj === 0 ? 2 : 1);
+        cur[j * m + i] = sum / 16;
+      }
+    }
+    const yo = Math.round((n - 1) * (1 - Math.pow(2, 1 - L)) + (L - 1));
+    for (let j = 0; j < m; j++) out.set(cur.subarray(j * m, j * m + m), (yo + j) * w + n);
+    prev = cur;
+    pn = m;
+  }
+  return { data: out, w, h };
 }
 
 function byteTex(data: Uint8Array, w: number, h: number, format: THREE.PixelFormat, mips: boolean): THREE.DataTexture {
@@ -157,8 +196,12 @@ export function buildTerrainData(world: World): TerrainData {
   const cell = (hm.extent * 2) / (n - 1);
 
   const far = buildFarMap(world);
-  const heightTex = floatTex(hm.data, n);
-  const farTex = floatTex(far.data, far.n);
+  const fineLevels = 8; // 2 m .. 256 m
+  const farLevels = 6; // 24 m .. 768 m
+  const fa = mipAtlas(hm.data, n, fineLevels);
+  const ra = mipAtlas(far.data, far.n, farLevels);
+  const heightTex = floatTex(fa.data, fa.w, fa.h);
+  const farTex = floatTex(ra.data, ra.w, ra.h);
 
   // --- fine normals + curvature + snow depth ---
   const nf = new Uint8Array(n * n * 4);
@@ -223,7 +266,7 @@ export function buildTerrainData(world: World): TerrainData {
   const minmax = new MinMax(world, far);
 
   return {
-    far, heightTex, farTex, normFineTex, normFarTex, maskTex, lakeTex, lakeMaxThick: LAKE_MAX_THICK,
+    far, heightTex, farTex, fineLevels, farLevels, normFineTex, normFarTex, maskTex, lakeTex, lakeMaxThick: LAKE_MAX_THICK,
     lake: { minX: L.minX, minZ: L.minZ, size: Math.max(1, L.n) * L.cell },
     minmax,
     fineN: n, fineCell: cell, fineExtent: hm.extent,

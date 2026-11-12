@@ -135,7 +135,7 @@ export function variantShape(kind: GeoKind, inst: Inst): Shape {
     const dead: N = max(step(hN, cb), dropped);
     const fLive: N = f.mul(asym).mul(dead.oneMinus());
     // dead twigs show only where a branch is gone, low on the trunk
-    const fDead: N = dead.mul(step(hN, 0.56)).mul(j.mul(0.5).add(0.75));
+    const fDead: N = dead.mul(step(hN, 0.5)).mul(step(0.45, hash11(hash.mul(17.3).add(v.mul(3.3))))).mul(j.mul(0.4).add(0.55));
     const fb: N = select(part.equal(PART.DEAD), fDead, fLive);
     k = mix(float(1), fb, isBranch);
     p = attach.add(p0.sub(attach).mul(k));
@@ -209,12 +209,12 @@ function surface(kind: GeoKind, I: SurfaceIn): Surface {
     alpha.assign(aSharp);
     // snow catches on the up-facing side of the sprays, more where they are dense
     const up: N = smoothstep(0.08, 0.6, faceUp);
-    potential.assign(I.pot.mul(up).mul(dense.mul(0.55).add(0.45)).add(nz.x.sub(0.5).mul(0.3)));
+    potential.assign(I.pot.mul(up).mul(dense.mul(0.55).add(0.45)).mul(nz.x.mul(0.6).add(0.7)));
     rough.assign(0.74);
   }).ElseIf(part.equal(PART.DEAD), () => {
     albedo.assign(tex.rgb.mul(vec3(0.92, 0.88, 0.85)));
     alpha.assign(aSharp);
-    potential.assign(I.pot.mul(smoothstep(0.1, 0.7, faceUp)).add(nz.x.sub(0.5).mul(0.3)));
+    potential.assign(I.pot.mul(smoothstep(0.1, 0.7, faceUp)).mul(nz.x.mul(0.6).add(0.7)));
     rough.assign(0.9);
   }).ElseIf(part.equal(PART.SNOW), () => {
     // what the impostor shows where the load is too light for snow: the needles under the slab
@@ -258,10 +258,11 @@ function visibleFace(p: N, toEye: N): N {
 //
 // Foliage is drawn in two passes so each pixel is lit once, however many cards overlap:
 //   depth  cheap: alpha test (atlas alpha, slab coverage, LOD dither) and depth only
-//   lit    the full shading, depth test EQUAL, no depth write, no discard: early depth rejection
-//          leaves only the front-most fragment of every pixel to shade
-// Both materials share one position node, so their depths match exactly. Shadows come from a
-// separate cheap proxy (createProxyMaterial), not from the cards.
+//   lit    the full shading, depth test LESS-EQUAL with a small offset toward the eye, no depth
+//          write: early depth testing rejects everything behind the front-most fragment
+// Both share one position node and the same alpha decision. (EQUAL was tried: the two programs'
+// vertex code is compiled separately and does not give bit-identical depth, so whole triangles
+// failed and became invisible occluders.) Shadows come from a separate cheap proxy.
 // ------------------------------------------------------------------------------------------
 
 interface Vary { part: N; misc: N; fade: N }
@@ -351,14 +352,18 @@ export function createTreeDepthMaterial(kind: GeoKind, lod: GeoLod): THREE.MeshB
   return m;
 }
 
-/** The lit pass of a tree level: depth EQUAL against its prepass. */
+/** The lit pass of a tree level: depth test against its prepass, no depth write. */
 export function createTreeMaterial(kind: GeoKind, lod: GeoLod): THREE.MeshStandardNodeMaterial {
   const m = new ForestMaterial();
   m.name = `forest-${kind}-${lod}`;
   m.side = THREE.DoubleSide;
   m.metalness = 0;
   m.depthWrite = false;
-  m.depthFunc = THREE.EqualDepth;
+  m.depthFunc = THREE.LessEqualDepth;
+  m.polygonOffset = true;
+  m.polygonOffsetFactor = -0.5;
+  m.polygonOffsetUnits = -2;
+  m.alphaTest = 0.5;
   const V = varyings();
   m.positionNode = treePosition(kind, lod);
 
@@ -382,7 +387,8 @@ export function createTreeMaterial(kind: GeoKind, lod: GeoLod): THREE.MeshStanda
     pRough.assign(mix(s.rough, 0.86, c));
     pEmis.assign(sh.emissive.mul(c));
     pAO.assign(mix(s.ao, 1, c.mul(0.6)));
-    return vec4(col, 1);
+    // the same coverage decision as the depth pass
+    return vec4(col, treeAlpha(V));
   })();
   m.roughnessNode = pRough;
   m.emissiveNode = pEmis;
@@ -400,23 +406,29 @@ export function createTreeMaterial(kind: GeoKind, lod: GeoLod): THREE.MeshStanda
 export function createProxyMaterial(kind: GeoKind): THREE.MeshBasicNodeMaterial {
   const m = new THREE.MeshBasicNodeMaterial();
   m.name = `forest-${kind}-proxy`;
-  m.side = THREE.DoubleSide;
-  m.alphaTest = 0.5;
+  // front faces outward: the shadow pass draws the back faces (one layer per tier) and, with no
+  // discard anywhere, keeps early depth rejection
+  m.side = THREE.FrontSide;
   m.fog = false;
-  const vFade: N = varyingProperty('float', 'pFade');
+  m.colorWrite = false;
   m.positionNode = Fn(() => {
     const inst = instanceData(kind);
     const aB: N = attribute('aB', 'vec4');
     const aC: N = attribute('aC', 'vec4');
     const p0: N = positionLocal;
     const v: N = inst.variant;
+    // fades (shrinks to the trunk) before the impostors take over: an impostor is never shadowed
+    // by its own proxy; thinned trees shrink with their tree
+    const d: N = lodDistance(inst.base, inst.height);
+    const fade: N = smoothstep(FU.nearEnd.sub(FU.nearBand.mul(1.8)), FU.nearEnd.sub(FU.nearBand), d).max(
+      smoothstep(FU.thin0, FU.thin1, d).mul(step(FU.density, inst.rnd))).oneMinus();
     // tiers below the variant's crown base are gone; a fuller side as on the tree
     const isTier: N = step(0.00001, aB.y);
     const cb: N = crownBase(v);
     const alive: N = step(cb, aC.x).max(isTier.oneMinus());
     const az: N = p0.z.atan(p0.x);
     const asym: N = cos(az.sub(v.mul(2.1))).mul(hash11(v.mul(5.3).add(1.7)).mul(0.32)).add(1);
-    const k: N = mix(float(1), asym.mul(alive), isTier);
+    const k: N = mix(float(1), asym.mul(alive), isTier).mul(fade);
     const attach: N = vec3(0, aB.x, 0);
     let p: N = attach.add(p0.sub(attach).mul(vec3(k, 1, k)));
     p = vec3(p.x, mix(p.y, aB.x, alive.oneMinus().mul(isTier)), p.z);
@@ -428,23 +440,11 @@ export function createProxyMaterial(kind: GeoKind): THREE.MeshBasicNodeMaterial 
     const world: N = inst.base.add(rotY(pl, inst.yaw)).toVar();
     const g: N = gustAt(inst.base.xz);
     world.addAssign(treeSway(pl.y.max(0), inst.height, inst.rnd, g).mul(FU.wind));
-    // fades out before the impostors take over (an impostor is never shadowed by its own proxy)
-    const d: N = lodDistance(inst.base, inst.height);
-    const lo: N = smoothstep(FU.nearEnd.sub(FU.nearBand.mul(1.7)), FU.nearEnd.sub(FU.nearBand), d).max(
-      smoothstep(FU.thin0, FU.thin1, d).mul(step(FU.density, inst.rnd)));
-    vFade.assign(lo);
-    return mix(world, inst.base, step(0.999, lo));
-  })();
-  m.colorNode = Fn(() => {
-    // light through the crown: holes in the envelope
-    const wp: N = positionWorld;
-    const nz: N = noiseAt(vec2(wp.x.add(wp.y.mul(0.5)), wp.z.sub(wp.y.mul(0.4))).mul(0.55));
-    const hole: N = step(0.3, nz.x.mul(0.7).add(nz.w.mul(0.3)));
-    const n: N = ditherNoise();
-    return vec4(0, 0, 0, hole.mul(step(vFade, n)));
+    return mix(inst.base, world, step(0.001, fade));
   })();
   return m;
 }
+
 // ------------------------------------------------------------------------------------------
 // Bake material: renders every (variant, view) frame of a kind into the impostor atlas at once
 // ------------------------------------------------------------------------------------------

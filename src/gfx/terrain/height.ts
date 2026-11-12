@@ -6,7 +6,7 @@
 //   - far map (R32F, 24 m): bilinear outside the heightmap square, blended in over EDGE_BLEND.
 // Float textures are read with textureLoad (no filtering exists for R32F on WebGL2 or on WebGPU
 // without float32-filterable). Owner: TERRAIN.
-import { Fn, If, clamp, float, floor, ivec2, max, min, mix, smoothstep, textureLoad, vec2 } from 'three/tsl';
+import { Fn, If, clamp, exp2, float, floor, ivec2, log2, max, min, mix, smoothstep, step, textureLoad, vec2 } from 'three/tsl';
 import { EDGE_BLEND, FAR_CELL, FAR_N, FAR_ORIGIN } from './config';
 import type { TerrainData } from './data';
 
@@ -17,6 +17,11 @@ export interface HeightFns {
   fineWeight(xz: N): N;
   /** Height at world xz. cubic: Catmull-Rom on the heightmap (16 loads) instead of bilinear (4). */
   height(xz: N, cubic: boolean): N;
+  /**
+   * Height at world xz filtered for a mesh of cell0 * 2^lod metres (lod a float node, >= the first
+   * LOD with 2 m cells): the heightmap and far-map mip level whose samples match that cell.
+   */
+  heightLod(xz: N, lod: N): N;
   /** Height from the far map only (bilinear). */
   farHeight(xz: N): N;
   /** UV of a texel-centred texture over the heightmap square (normal map, masks). */
@@ -25,7 +30,7 @@ export interface HeightFns {
   farUV(xz: N): N;
 }
 
-export function createHeightFns(data: TerrainData): HeightFns {
+export function createHeightFns(data: TerrainData, cell0: N, cubicLod: N): HeightFns {
   const hT = data.heightTex;
   const fT = data.farTex;
   const n = data.fineN;
@@ -33,6 +38,24 @@ export function createHeightFns(data: TerrainData): HeightFns {
   const ext = data.fineExtent;
 
   const load = (tex: N, i: N, j: N): N => textureLoad(tex, ivec2(i, j)).x;
+
+  /** Bilinear read of mip level L (float, integer-valued) of an atlas built by data.mipAtlas. */
+  const bilinearLevel = (tex: N, xz: N, origin: number, c: number, size0: number, L: N): N => {
+    const scale = exp2(L);
+    const size = float(size0 - 1).div(scale).add(1);
+    const up = step(0.5, L);
+    const xo = up.mul(size0);
+    const yo = floor(float(size0 - 1).mul(exp2(L.oneMinus()).oneMinus()).add(L.sub(1)).add(0.5)).mul(up);
+    const g = xz.sub(origin).div(scale.mul(c));
+    const i0 = clamp(floor(g), vec2(0), vec2(size.sub(2)));
+    const f = clamp(g.sub(i0), vec2(0), vec2(1));
+    const bx = i0.x.add(xo), by = i0.y.add(yo);
+    const a = load(tex, bx, by);
+    const b = load(tex, bx.add(1), by);
+    const cc = load(tex, bx, by.add(1));
+    const d = load(tex, bx.add(1), by.add(1));
+    return mix(mix(a, b, f.x), mix(cc, d, f.x), f.y);
+  };
 
   const bilinear = (tex: N, xz: N, origin: number, c: number, size: number): N => {
     const g = xz.sub(origin).div(c);
@@ -90,6 +113,21 @@ export function createHeightFns(data: TerrainData): HeightFns {
 
   const farHeight = (xz: N): N => bilinear(fT, xz, FAR_ORIGIN, FAR_CELL, FAR_N);
 
+  const heightLod = Fn(([xz, lod]: N[]) => {
+    const cellL = cell0.mul(exp2(lod));
+    const lf = clamp(lod.sub(cubicLod), 0, data.fineLevels - 1).toVar();
+    const lr = clamp(floor(log2(cellL.div(FAR_CELL))), 0, data.farLevels - 1).toVar();
+    const w = fineWeight(xz).toVar();
+    const h = float(0).toVar();
+    If(w.greaterThan(0), () => {
+      h.assign(bilinearLevel(hT, xz, -ext, cell, n, lf));
+    });
+    If(w.lessThan(1), () => {
+      h.assign(mix(bilinearLevel(fT, xz, FAR_ORIGIN, FAR_CELL, FAR_N, lr), h, w));
+    });
+    return h;
+  });
+
   const heightBil = Fn(([xz]: N[]) => {
     const w = fineWeight(xz).toVar();
     const h = float(0).toVar();
@@ -117,6 +155,7 @@ export function createHeightFns(data: TerrainData): HeightFns {
   return {
     fineWeight,
     height: (xz: N, cubic: boolean): N => (cubic ? heightCubic(xz) : heightBil(xz)),
+    heightLod: (xz: N, lod: N): N => heightLod(xz, lod),
     farHeight,
     fineUV: (xz: N): N => xz.add(ext).div(cell).add(0.5).div(n),
     farUV: (xz: N): N => xz.sub(FAR_ORIGIN).div(FAR_CELL).add(0.5).div(FAR_N),

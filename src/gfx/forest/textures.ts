@@ -232,16 +232,16 @@ function curtain(ctx: Ctx, pen: Pen, r: Region, st: NeedleStyle, density: number
 function deadTwigs(ctx: Ctx, pen: Pen, r: Region): void {
   const grow = (x: number, y: number, a: number, L: number, w: number, depth: number): void => {
     const pts = twigPath(pen, x, y, a, L, pen.r(-0.4, 0.4), 5);
-    const g = 70 + pen.r(-10, 14);
-    strokePath(ctx, pts, w, w * 0.6, rgb(g * 1.05, g * 0.95, g * 0.85));
+    const g = 64 + pen.r(-10, 12);
+    strokePath(ctx, pts, w, w * 0.65, rgb(g * 1.05, g * 0.95, g * 0.85));
     if (depth <= 0) return;
     const nk = 2 + Math.floor(pen.next() * 2);
     for (let k = 0; k < nk; k++) {
       const i = 1 + Math.floor(pen.r(0, pts.length - 2));
-      grow(pts[i][0], pts[i][1], a + (pen.next() < 0.5 ? 1 : -1) * pen.r(0.4, 0.9), L * pen.r(0.35, 0.6), w * 0.65, depth - 1);
+      grow(pts[i][0], pts[i][1], a + (pen.next() < 0.5 ? 1 : -1) * pen.r(0.4, 0.9), L * pen.r(0.35, 0.6), w * 0.72, depth - 1);
     }
   };
-  for (let i = 0; i < 3; i++) grow(r.x + r.w / 2 + pen.r(-20, 20), r.y + 4, Math.PI / 2 + pen.r(-0.5, 0.5), r.h * pen.r(0.6, 0.9), 3, 3);
+  for (let i = 0; i < 3; i++) grow(r.x + r.w / 2 + pen.r(-20, 20), r.y + 4, Math.PI / 2 + pen.r(-0.5, 0.5), r.h * pen.r(0.6, 0.9), 5.5, 3);
 }
 
 /** Dry grass tuft: blades from the bottom centre, arching out. */
@@ -254,7 +254,7 @@ function grass(ctx: Ctx, pen: Pen, r: Region): void {
     const pts = twigPath(pen, bx + pen.r(-14, 14), by, a, L, curve, 6);
     const g = pen.r(0.75, 1.15);
     const dead = pen.next() < 0.35;
-    const col = dead ? rgb(120 * g, 104 * g, 80 * g) : rgb(150 * g, 128 * g, 82 * g);
+    const col = dead ? rgb(118 * g, 108 * g, 92 * g) : rgb(160 * g, 146 * g, 112 * g);
     strokePath(ctx, pts, 2.6, 0.7, col);
   }
 }
@@ -263,12 +263,12 @@ function grass(ctx: Ctx, pen: Pen, r: Region): void {
 function shrub(ctx: Ctx, pen: Pen, r: Region): void {
   const grow = (x: number, y: number, a: number, L: number, w: number, depth: number): void => {
     const pts = twigPath(pen, x, y, a, L, pen.r(-0.3, 0.3), 5);
-    strokePath(ctx, pts, w, w * 0.55, rgb(78 + pen.r(-8, 8), 44 + pen.r(-6, 6), 34));
+    strokePath(ctx, pts, w, w * 0.55, rgb(68 + pen.r(-8, 8), 52 + pen.r(-6, 6), 43));
     if (depth <= 0) {
       // a few dry leaves / buds
       for (let k = 0; k < 3; k++) {
         const p = pts[pts.length - 1 - k];
-        ctx.fillStyle = rgb(96, 62, 40);
+        ctx.fillStyle = rgb(88, 72, 54);
         ctx.beginPath();
         ctx.ellipse(p[0], p[1], 2.2, 1.4, a, 0, Math.PI * 2);
         ctx.fill();
@@ -333,7 +333,7 @@ function boxBlur(src: Float32Array, w: number, h: number, ch: number, rad: numbe
 }
 
 /** Build the mip chain from RGBA8 pixels (sRGB colour, linear alpha). */
-export function buildAlphaMips(px: Uint8ClampedArray | Uint8Array, w: number, h: number): { data: Uint8Array; width: number; height: number }[] {
+export function buildAlphaMips(px: Uint8ClampedArray | Uint8Array, w: number, h: number, regions: Region[] = [{ x: 0, y: 0, w, h }]): { data: Uint8Array; width: number; height: number }[] {
   // 1. bleed colour into transparent texels: premultiplied blur, then un-premultiply
   const pm = new Float32Array(w * h * 4);
   for (let i = 0; i < w * h; i++) {
@@ -362,10 +362,13 @@ export function buildAlphaMips(px: Uint8ClampedArray | Uint8Array, w: number, h:
     }
     base[i * 4 + 3] = a;
   }
-  // 2. coverage at full size
-  let pass0 = 0;
-  for (let i = 0; i < w * h; i++) if (base[i * 4 + 3] >= 128) pass0++;
-  const target = pass0 / (w * h);
+  // 2. coverage at full size, per region (a sparse region must not be judged by a dense one)
+  const target = regions.map((r) => {
+    let n = 0;
+    for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) if (base[(y * w + x) * 4 + 3] >= 128) n++;
+    return n / (r.w * r.h);
+  });
+  const scales = regions.map(() => 1);
   const mips = [{ data: base, width: w, height: h }];
   let prev = base, pw = w, ph = h;
   // the unscaled (averaged) alpha of the previous level: the coverage scale must not compound
@@ -397,17 +400,27 @@ export function buildAlphaMips(px: Uint8ClampedArray | Uint8Array, w: number, h:
         raw[y * nw + x] = a / 4;
       }
     }
-    // scale alpha so that the same fraction of texels passes the 0.5 test
-    let lo = 0.5, hi = 8;
-    for (let it = 0; it < 18; it++) {
-      const mid = (lo + hi) / 2;
-      let n = 0;
-      for (let i = 0; i < nw * nh; i++) if (raw[i] * mid >= 128) n++;
-      if (n / (nw * nh) > target) hi = mid;
-      else lo = mid;
+    // per region: scale alpha so that the same fraction of its texels passes the 0.5 test (a
+    // region smaller than 4 texels keeps the scale it had)
+    const f = w / nw;
+    for (let ri = 0; ri < regions.length; ri++) {
+      const r = regions[ri];
+      const x0 = Math.floor(r.x / f), y0 = Math.floor(r.y / f), x1 = Math.max(x0 + 1, Math.floor((r.x + r.w) / f)), y1 = Math.max(y0 + 1, Math.floor((r.y + r.h) / f));
+      if (x1 - x0 >= 4 && y1 - y0 >= 4) {
+        let lo = 0.5, hi = 8;
+        const cnt = (x1 - x0) * (y1 - y0);
+        for (let it = 0; it < 16; it++) {
+          const mid = (lo + hi) / 2;
+          let n = 0;
+          for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if (raw[y * nw + x] * mid >= 128) n++;
+          if (n / cnt > target[ri]) hi = mid;
+          else lo = mid;
+        }
+        // never more than a 2.5x boost: past that the cut-out turns into a solid card
+        scales[ri] = Math.min(2.5, (lo + hi) / 2);
+      }
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) out[(y * nw + x) * 4 + 3] = Math.min(255, Math.round(raw[y * nw + x] * scales[ri]));
     }
-    const sc = (lo + hi) / 2;
-    for (let i = 0; i < nw * nh; i++) out[i * 4 + 3] = Math.min(255, Math.round(raw[i] * sc));
     mips.push({ data: out, width: nw, height: nh });
     prev = out;
     prevRaw = raw;
@@ -452,7 +465,7 @@ export function getFoliageAtlas(): THREE.DataTexture {
   clip(R.shrub, () => shrub(ctx, pen, R.shrub));
   clip(R.juniper, () => juniper(ctx, pen, R.juniper));
   const img = ctx.getImageData(0, 0, SIZE, SIZE);
-  const mips = buildAlphaMips(img.data, SIZE, SIZE);
+  const mips = buildAlphaMips(img.data, SIZE, SIZE, Object.values(R));
   const t = new THREE.DataTexture(mips[0].data, SIZE, SIZE, THREE.RGBAFormat, THREE.UnsignedByteType);
   t.mipmaps = mips as any;
   t.generateMipmaps = false;

@@ -227,11 +227,11 @@ export function createCover(world: World): CoverLayer {
     let type: number, size: number, sink: number, tv = 0;
     if ((pick -= wTwig) < 0) {
       type = T_TWIG;
-      size = 0.35 + 0.9 * h(13);
+      size = 0.25 + 0.5 * h(13);
       sink = 0.02;
     } else if ((pick -= wGrass) < 0) {
       type = T_GRASS;
-      size = 0.22 + 0.4 * h(13);
+      size = 0.16 + 0.3 * h(13);
       sink = 0.05 + 0.1 * h(14);
     } else {
       type = T_SHRUB;

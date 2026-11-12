@@ -38,11 +38,12 @@ export interface LodConfig {
 /** quality.terrainDetail (0..3) -> mesh layout. Detail 0 is the phone tier. */
 export function lodConfig(detail: number): LodConfig {
   const d = Math.max(0, Math.min(3, Math.round(detail)));
+  // [quads per node, finest cell, range / node size]. Cells per LOD band = n * k: the mesh density.
   const table: [number, number, number][] = [
-    [16, 0.5, 2.5], // mobile: 40 cells per LOD band, 0.5 m at the feet
-    [16, 0.25, 2.6], // low
-    [32, 0.25, 2.5], // medium: 80 cells per band, 0.25 m within ~20 m
-    [32, 0.25, 3.2], // high / ultra
+    [16, 0.5, 2.5], // mobile: 40 cells per band, 0.5 m cells within 20 m
+    [16, 0.5, 3.0], // low: 48
+    [16, 0.25, 3.4], // medium: 54, 0.25 m cells within 14 m, 2 m from 55 m
+    [32, 0.25, 3.0], // high / ultra: 96
   ];
   const [n, cell0, k] = table[d];
   const s0 = n * cell0;

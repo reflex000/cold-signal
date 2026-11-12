@@ -15,6 +15,8 @@ import { createBench } from './bench';
 import { createWorld } from '../src/world/index';
 import { U } from '../src/gfx/shared';
 import { createForestSystem, type ForestSystem } from '../src/gfx/forest';
+import { getFoliageAtlas } from '../src/gfx/forest/textures';
+import { proxyGeometry, treeGeometry } from '../src/gfx/forest/treegen';
 
 const { positionWorld, vec3, float, mx_noise_float } = TSL as any;
 
@@ -71,31 +73,52 @@ function terrain(cx: number, cz: number, half: number, step: number, drop: numbe
 }
 
 // ---------------- views ----------------
-interface ViewDef { x: number; z: number; up: number; az: number; pitch: number; dist: number }
+// A view is an eye (x, z, height above the ground) and what it looks at: either a point (tx, tz,
+// height above the ground there) or a direction (az: 0 = north, clockwise; pitch: degrees up)
+// followed down to the ground. The bench's orbit target goes where the look meets the ground, so
+// its stand-in shadow box covers what is looked at.
+interface ViewDef { x: number; z: number; up: number; tx?: number; tz?: number; tup?: number; az?: number; pitch?: number }
 const VIEWS: Record<string, ViewDef> = {
-  // inside the dense forest near the ranger cabin, eye height, looking along the slope
-  forest: { x: -446, z: 194, up: 1.7, az: 58, pitch: 2, dist: 14 },
-  // in the open below the forest edge, looking upslope (north) at it
-  edge: { x: 10, z: 196, up: 1.7, az: 2, pitch: 6, dist: 30 },
+  // inside the dense forest beside the ranger cabin, eye height, looking west between the trunks
+  forest: { x: -442, z: 187, up: 1.7, tx: -470, tz: 186, tup: 3.5 },
+  // in the open below a forest edge, looking up the slope at it
+  edge: { x: 490, z: 670, up: 1.7, tx: 442, tz: 613, tup: 7 },
   // 300 m above the southern slope, looking north over the forest toward the lake
-  aerial: { x: -260, z: 520, up: 300, az: 8, pitch: -27, dist: 120 },
+  aerial: { x: -260, z: 560, up: 300, az: 8, pitch: -28 },
   // standing in a clearing ringed by forest
-  clearing: { x: -400, z: 20, up: 1.7, az: 250, pitch: 4, dist: 30 },
+  clearing: { x: -400, z: 20, up: 1.7, az: 250, pitch: 4 },
   // the snag cluster beside the cabin
-  snags: { x: -462, z: 222, up: 1.7, az: 300, pitch: 6, dist: 16 },
+  snags: { x: -452, z: 194, up: 1.7, tx: -478, tz: 183, tup: 5 },
 };
 const V = VIEWS[view] ?? VIEWS.forest;
 const DEG = Math.PI / 180;
-const camY = world.heightAt(V.x, V.z) + V.up;
 {
-  const az = V.az * DEG, el = -V.pitch * DEG;
-  // bench orbit: the camera sits `dist` behind the target; place the target ahead of our eye
-  orbit.az = bench.num('az', V.az);
-  orbit.el = bench.num('el', -V.pitch);
-  orbit.dist = bench.num('dist', V.dist);
-  orbit.target.set(V.x + Math.sin(az) * Math.cos(el) * V.dist, camY - Math.sin(el) * V.dist, V.z - Math.cos(az) * Math.cos(el) * V.dist);
+  const eye = new THREE.Vector3(V.x, world.heightAt(V.x, V.z) + V.up, V.z);
+  let target: THREE.Vector3;
+  if (V.tx !== undefined && V.tz !== undefined) {
+    target = new THREE.Vector3(V.tx, world.heightAt(V.tx, V.tz) + (V.tup ?? 0), V.tz);
+  } else {
+    const az = (V.az ?? 0) * DEG, el = (V.pitch ?? 0) * DEG;
+    const dir = new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el));
+    target = eye.clone().addScaledVector(dir, 40);
+    for (let t = 2; t < 2500; t += 2) {
+      const p = eye.clone().addScaledVector(dir, t);
+      if (p.y <= world.heightAt(p.x, p.z)) {
+        target = p;
+        break;
+      }
+    }
+    if (el >= 0) target = eye.clone().addScaledVector(dir, 40);
+  }
+  const d = target.clone().sub(eye);
+  const dist = d.length();
+  // bench orbit: az 0 looks north, el > 0 looks down; the camera sits `dist` behind the target
+  orbit.az = bench.num('az', Math.atan2(d.x, -d.z) / DEG);
+  orbit.el = bench.num('el', -Math.asin(d.y / dist) / DEG);
+  orbit.dist = bench.num('dist', dist);
+  orbit.target.copy(target);
 }
-scene.add(terrain(V.x, V.z, view === 'aerial' ? 700 : 560, 2, 0));
+scene.add(terrain(V.x, V.z, view === 'aerial' ? 760 : 560, 2, 0));
 scene.add(terrain(0, 0, 1024, 8, 0.8));
 
 // ---------------- the forest ----------------
@@ -124,7 +147,24 @@ if (bench.param('forest') !== '0') {
 }
 const tForest = performance.now() - t1;
 (window as any).FOREST = forest;
+// debug: ?atlas=1 (albedo) or ?atlas=2 (aux) shows the impostor atlas over the frame
+if (forest?.impostorAtlas && bench.param('atlas')) {
+  const a = bench.param('atlas');
+  const tex = a === '3' ? getFoliageAtlas() : a === '2' ? forest.impostorAtlas.aux : forest.impostorAtlas.albedo;
+  const { texture: ttex, vec2: v2, mix: tmix, vec3: tv3 } = TSL as any;
+  engine.post.addOverlay('forest-atlas', 900, (color: any, uv: any) => {
+    const t: any = ttex(tex, v2(uv.x, uv.y.oneMinus()));
+    const bg: any = tmix(tv3(0.25, 0.3, 0.35), tv3(0.4, 0.45, 0.5), uv.x.mul(31).floor().add(uv.y.mul(15).floor()).mod(2));
+    return tmix(bg, t.rgb.div(t.a.max(0.004)).pow(1 / 2.2), t.a);
+  });
+}
 (window as any).WORLD = world;
+{
+  const tri = (g: THREE.BufferGeometry): number => (g.index ? g.index.count / 3 : 0);
+  const kinds = ['spruce', 'fir', 'snag'] as const;
+  console.log('[forest bench] triangles ' + kinds.map((k) => `${k} ${tri(treeGeometry(k, 'full'))}/${tri(treeGeometry(k, 'mid'))}`).join('  ') +
+    `  proxy ${tri(proxyGeometry('spruce'))}/${tri(proxyGeometry('fir'))}`);
+}
 console.log(`[forest bench] world ${tWorld.toFixed(0)} ms, forest ${tForest.toFixed(0)} ms (impostor bake ${forest?.counts.impostorBakeMs.toFixed(0) ?? '-'} ms), view ${view}`);
 
 // info line

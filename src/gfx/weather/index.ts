@@ -124,7 +124,7 @@ export function createWeatherSystem(engine: Engine, world: World | null = null):
     U.visibility.value = visibility;
 
     // Fog: Koschmieder (3.9 / visibility) in snow; clear air keeps distant ridges readable.
-    const haze = 0.11 + 0.89 * smooth(0.0, 0.32, storm);
+    const haze = 0.085 + 0.915 * smooth(0.0, 0.32, storm);
     U.fogDensity.value = (3.9 / visibility) * haze;
     U.fogHeight.value = 1 / (650 + 2600 * smooth(0.05, 0.5, storm));
     const sa = U.skyAmbient.value, ga = U.groundAmbient.value;
@@ -150,7 +150,7 @@ export function createWeatherSystem(engine: Engine, world: World | null = null):
     VOLU.windDir.value.set(wdx, wdz);
     VOLU.contrast.value = 0.55 + 0.35 * gust + 0.1 * storm;
     VOLU.frame.value = frameNo++ % 64;
-    VOLU.streaks.value = volActive ? 0 : smooth(0.12, 0.55, storm) * 0.85;
+    VOLU.streaks.value = volActive ? 0 : smooth(0.12, 0.55, storm) * 0.55;
 
     // Camera velocity (for the streaks of the falling snow), smoothed.
     const cx = cam.x, cy = cam.y, cz = cam.z;

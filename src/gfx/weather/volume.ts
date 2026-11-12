@@ -19,7 +19,7 @@ import { getNoise2D, getNoise3D } from '../sky/textures';
 
 const {
   Fn, If, Loop, uniform, texture, texture3D, passTexture, context, uv, vec2, vec3, vec4, float, abs, clamp, max, min, dot, exp, mix, smoothstep,
-  length, normalize, interleavedGradientNoise, screenCoordinate, NodeUpdateType,
+  length, normalize, interleavedGradientNoise, screenCoordinate, NodeUpdateType, reference, perspectiveDepthToViewZ,
 } = TSL as any;
 
 /** Dev: 1 shows the volume transmittance, 2 its in-scattered light (set before the graph builds). */
@@ -81,16 +81,22 @@ export class StormVolumeNode extends THREE.Node {
   private mat: THREE.NodeMaterial | null = null;
   private out: N;
   private depthTex: N;
-  private worldPosAt: (at: N) => N = () => vec3(0);
+
   private steps = 10;
   private scale = 0.5;
   /** The scene camera's world matrix (by reference, so always current): a post quad's own
    *  cameraPosition is the quad's camera, not the eye. */
   readonly camWorld: N;
+  private projInv: N;
+  private camNear: N;
+  private camFar: N;
 
   constructor(camera: THREE.Camera) {
     super('vec4');
     this.camWorld = uniform(camera.matrixWorld);
+    this.projInv = uniform(camera.projectionMatrixInverse);
+    this.camNear = reference('near', 'float', camera);
+    this.camFar = reference('far', 'float', camera);
     this.rt = new THREE.RenderTarget(1, 1, { depthBuffer: false, type: THREE.HalfFloatType, generateMipmaps: false });
     this.rt.texture.name = 'StormVolume';
     this.rt.texture.minFilter = THREE.LinearFilter;
@@ -103,7 +109,7 @@ export class StormVolumeNode extends THREE.Node {
   /** Bind the inputs of the current post graph (called by the stage builder on every rebuild). */
   bind(i: HdrStageInput, steps: number, scale: number): void {
     this.depthTex = i.depth;
-    this.worldPosAt = i.worldPosAt;
+
     this.steps = Math.max(2, steps | 0);
     this.scale = scale;
   }
@@ -137,15 +143,24 @@ export class StormVolumeNode extends THREE.Node {
     const tex3 = texture3D(getNoise3D());
     const steps = this.steps;
     const march = Fn(() => {
+      // The view ray of this pixel from the camera's own matrices (uv has its origin top left),
+      // and its length from the linear view depth.
       const eye = this.camWorld.element(3).xyz;
-      const wp = this.worldPosAt(uvN);
-      const toP = wp.sub(eye);
-      const dist = max(length(toP), 0.01);
-      const d = toP.div(dist);
-      const tEnd = min(dist, VOL_RANGE);
+      const ndc = vec2(uvN.x.mul(2).sub(1), uvN.y.mul(-2).add(1));
+      const vh = this.projInv.mul(vec4(ndc, 1, 1));
+      const vdir = normalize(vh.xyz.div(vh.w));
+      const d = normalize(this.camWorld.mul(vec4(vdir, 0)).xyz);
+      // Depth read with an explicit level: at half resolution an implicit one picks a mip the
+      // depth texture does not have.
+      const viewZ = perspectiveDepthToViewZ(this.depthTex.sample(uvN).level(0).r, this.camNear, this.camFar).negate();
+      const dist = max(viewZ.div(max(vdir.z.negate(), 1e-4)), 0.01);
+      const share = AIR.volShare;
+      // March only as far as there is light left to lose (about 6 optical depths of the mean
+      // density); past that the analytic tail is exact enough. In a whiteout that is 15 m, so the
+      // steps stay short where everything happens.
+      const tEnd = min(min(dist, VOL_RANGE), float(6).div(max(G.fogDensity.mul(share), 1e-5)));
       // Blue-noise-like jitter, rotated every frame by the golden ratio.
       const j = interleavedGradientNoise(screenCoordinate.xy).add(VOLU.frame.mul(0.618034)).fract();
-      const share = AIR.volShare;
       const T = float(1).toVar();
       const tPrev = float(0).toVar();
       const Ls = float(0).toVar(); // in-scattered light, in units of the fog colour
@@ -154,8 +169,9 @@ export class StormVolumeNode extends THREE.Node {
       Loop(steps, ({ i }: { i: N }) => {
         // Denser near the eye, where the structure is big on screen.
         const u1 = float(i).add(j).div(steps);
-        const t = u1.mul(u1).mul(tEnd);
-        const dt = t.sub(tPrev);
+        const t = u1.mul(u1).mul(tEnd).toVar();
+        // materialise before tPrev changes: an expression node is emitted where it is used
+        const dt = t.sub(tPrev).toVar();
         tPrev.assign(t);
         const p = eye.add(d.mul(t));
         // the shared height falloff of the fog
@@ -172,7 +188,6 @@ export class StormVolumeNode extends THREE.Node {
       // the last stretch to the end of the march, and the analytic remainder past it
       const tail = fogDepth(dist, d.y, share).sub(fogDepth(tEnd, d.y, share)).max(0);
       const tLast = fogDepth(tEnd, d.y, share).sub(fogDepth(tPrev, d.y, share)).max(0);
-      if (VOL_DEBUG.mode === 3) return vec4(dist.div(200), share, T, 1);
       const Trest = exp(tail.add(tLast).negate());
       const Tall = T.mul(Trest);
       return vec4(fogColor(d).mul(Ls.add(T.mul(Trest.oneMinus()))), Tall);
@@ -219,7 +234,7 @@ export function compositeVolume(i: HdrStageInput, vol: StormVolumeNode, scale: n
   }
   const v = acc.div(wsum);
   if (VOL_DEBUG.mode === 1) return vec3(v.a);
-  if (VOL_DEBUG.mode >= 2) return v.rgb;
+  if (VOL_DEBUG.mode === 2) return v.rgb;
   return i.color.mul(v.a).add(v.rgb);
 }
 
@@ -241,9 +256,9 @@ export function screenStreaks(i: HdrStageInput, camWorld: N): N {
   const b = tex.sample(vec2(p.x.mul(1.6).sub(t.mul(speed).mul(1.7)), p.y.mul(5.0).add(0.37))).g;
   const veil = smoothstep(0.42, 0.85, a).mul(0.7).add(smoothstep(0.5, 0.88, b).mul(0.3));
   const depth = i.viewDepth;
-  const near = smoothstep(1.0, 5.0, depth);
+  const near = smoothstep(2.0, 10.0, depth);
   const far = exp(depth.mul(G.fogDensity).mul(-0.7));
   const amount = veil.mul(VOLU.streaks).mul(near).mul(far.mul(0.75).add(0.25));
   const fogC = fogColor(normalize(i.worldPos.sub(camWorld.element(3).xyz))).mul(1.15);
-  return mix(i.color, fogC, clamp(amount, 0, 0.55));
+  return mix(i.color, fogC, clamp(amount, 0, 0.4));
 }

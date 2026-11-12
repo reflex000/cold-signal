@@ -17,7 +17,7 @@ import { getNoise2D } from './textures';
 
 const {
   Fn, If, Loop, uniform, texture, vec2, vec3, vec4, float, abs, clamp, max, min, dot, cross, normalize, exp, sqrt, mix, smoothstep,
-  select, length, fract, floor, sin, hash, dFdx, dFdy, positionLocal, positionWorldDirection, cameraViewMatrix, cameraProjectionMatrix,
+  select, length, fract, floor, sin, atan, hash, dFdx, dFdy, positionLocal, positionWorldDirection, cameraViewMatrix, cameraProjectionMatrix,
   interleavedGradientNoise, screenCoordinate,
 } = TSL as any;
 
@@ -119,9 +119,11 @@ function moonDisc(d: N, px: N): N {
   const m = vec3(U.moonDir);
   const rt = normalize(cross(m, vec3(0.0001, 1, 0)));
   const up = cross(rt, m);
-  const p = vec2(dot(d, rt), dot(d, up)).div(MOON_RADIUS);
+  // Drawn 1.7x its true size: at the true 0.52 degrees its phase is a few pixels at 1080p.
+  const R = MOON_RADIUS * 1.7;
+  const p = vec2(dot(d, rt), dot(d, up)).div(R);
   const r2 = dot(p, p);
-  const soft = px.div(MOON_RADIUS);
+  const soft = px.div(R);
   const inside = smoothstep(float(1).sub(soft), float(1).add(soft), sqrt(r2)).oneMinus().mul(select(dot(d, m).greaterThan(0.99), float(1), float(0)));
   const z = sqrt(max(r2.oneMinus(), 0));
   const n = rt.mul(p.x).add(up.mul(p.y)).sub(m.mul(z));
@@ -150,20 +152,24 @@ function aurora(d: N, steps: number, jitter: N, px: N): N {
       // Pixel footprint in curtain units -> explicit mip level (this runs in a per-pixel branch).
       const lod = clamp(dist.mul(px).div(max(d.y, 0.05)).mul(128 * 0.045).max(1e-4).log2(), 0, 6);
       // The auroral oval lies to the north (-Z), low over the ridge.
-      const gate = smoothstep(0.25, 1.4, p.y.negate()).mul(smoothstep(7.0, 14.0, p.y.negate()).oneMinus());
+      const gate = smoothstep(0.9, 2.6, p.y.negate()).mul(smoothstep(9.0, 16.0, p.y.negate()).oneMinus());
       // East-west arcs that fold and drift.
       const w1 = tex.sample(p.mul(0.045).add(vec2(t.mul(0.0035), t.mul(-0.0011)))).level(lod).r;
       const w2 = tex.sample(p.mul(0.11).add(vec2(t.mul(-0.0052), t.mul(0.0021)))).level(lod.add(1.3)).g;
-      const b = p.y.mul(0.42).add(w1.sub(0.5).mul(3.2)).add(w2.sub(0.5).mul(0.9));
+      const b = p.y.mul(0.24).add(w1.sub(0.5).mul(2.4)).add(w2.sub(0.5).mul(0.7));
       const f = abs(fract(b).sub(0.5));
-      const sheet = exp(f.mul(f).mul(-180));
+      // A sheet is hit between two steps: make it at least as wide as the ground one step covers
+      // (in band units), or the steps show as rungs.
+      const stepW = float(1.9 / steps).mul(length(vec2(d.x, d.z))).div(max(d.y, 0.035)).mul(0.24);
+      const k = clamp(float(0.35).div(stepW.mul(stepW).add(1e-5)), 40, 520);
+      const sheet = exp(f.mul(f).mul(k).negate());
       // Vertical rays: sampled along the arc only, so they stand upright.
       const rays = tex.sample(vec2(p.x.mul(0.55).add(w1.mul(2.0)).add(t.mul(0.004)), 0.37)).level(lod).b;
       const curtain = sheet.mul(rays.mul(1.1).add(0.25)).mul(gate);
       const green = exp(hh.sub(1.28).div(0.33).pow(2).negate()).mul(smoothstep(1.0, 1.07, hh));
       const red = smoothstep(1.55, 2.25, hh).mul(smoothstep(2.4, 2.9, hh).oneMinus());
       const hem = exp(hh.sub(1.035).div(0.045).pow(2).negate());
-      const col = vec3(0.1, 1.0, 0.32).mul(green).add(vec3(0.85, 0.1, 0.16).mul(red.mul(0.42))).add(vec3(0.55, 0.12, 1.0).mul(hem.mul(0.55)));
+      const col = vec3(0.12, 1.0, 0.36).mul(green).add(vec3(0.8, 0.12, 0.2).mul(red.mul(0.2))).add(vec3(0.5, 0.15, 1.0).mul(hem.mul(0.45)));
       acc.addAssign(col.mul(curtain));
     });
     acc.mulAssign(SKYU.auroraE.div(steps));
@@ -242,17 +248,19 @@ function clouds(d: N, steps: number, jitter: N, behind: N, px: N): N {
       S.assign(lit.mul(st.oneMinus()));
       T.assign(st);
     }
-    // Far clouds sink into the haze of the horizon.
-    const air = exp(tb.mul(-1 / 55));
-    const horizonFade = smoothstep(-0.02, 0.04, d.y);
-    const k = air.mul(horizonFade);
     // At full cover the deck closes into an even grey ceiling with soft darker rolls.
     const ovc = smoothstep(0.8, 0.99, cover);
     const roll = tex.sample(vec2(d.x, d.z).div(max(dy, 0.05)).mul(0.05).add(SKYU.cloudOffset.mul(0.02))).level(lod.sub(1).max(0)).r;
     const ceiling = vec3(SKY.overcast).mul(roll.mul(0.3).add(0.85));
-    const col = mix(behind.mul(T).add(S), ceiling, ovc);
-    const tr = mix(T, float(0), ovc);
-    res.assign(vec4(mix(behind, col, k), mix(float(1), tr, k)));
+    const S2 = mix(S, ceiling, ovc);
+    const T2 = mix(T, float(0), ovc);
+    // Far clouds sink into the haze of the horizon: the haze is added in front of them, it does
+    // not make them transparent (or the sun would show through a closed deck).
+    const air = exp(tb.mul(-1 / 55)).mul(smoothstep(-0.02, 0.04, d.y));
+    const az = atan(d.z, d.x).mul(1 / (2 * Math.PI)).add(0.5);
+    const haze = SKY.horizon.sample(vec2(az, 0.5)).level(0).rgb;
+    const scatter = mix(haze.mul(T2.oneMinus()), S2, air);
+    res.assign(vec4(behind.mul(T2).add(scatter), T2));
   });
   return res;
 }

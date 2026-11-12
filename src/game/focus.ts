@@ -4,6 +4,8 @@
 // crates; walls and terrain in between block it.
 // Owner: GAME.
 import { ITEM, PART_NAME } from '../ui/text';
+import { CRATE_HOLD } from '../sim/systems/items';
+import { REVIVE_RANGE } from '../sim/systems/vitals';
 import type { CrateEnt, DeviceEnt, Entity, FireEnt, LogEnt, PickupEnt, PlayerEnt, WoodEnt } from '../sim/types';
 import type { World } from '../world/types';
 import type { Camera, Focus, View, ViewEnt } from './view';
@@ -44,13 +46,14 @@ export function describe(e: Entity, me: PlayerEnt, keyLabel: string): Focus | nu
       return { ...base, verb: 'Take', name: itemName(e) };
     case 'crate':
       if (e.open) return null;
-      return { ...base, verb: 'Open', name: CRATE_NAME[e.type] ?? 'Crate' };
+      // a short hold opens it (sim/systems/items.ts): the ring follows the host's progress
+      return { ...base, verb: 'Open', name: CRATE_NAME[e.type] ?? 'Crate', hold: me.act === 'use' ? Math.min(1, me.actT / CRATE_HOLD) : null };
     case 'fire': {
+      // E feeds a stick (else a split log) to a lit fire or a bare hearth; tinder is kept for lighting
       const name = FIRE_NAME[e.type] ?? 'Fire';
-      if (e.lit) {
-        const wood = has(me, 'stick') || has(me, 'log') || has(me, 'tinder');
-        return { ...base, verb: 'Feed fire', name, ...(wood ? {} : { note: 'needs wood' }) };
-      }
+      const wood = has(me, 'stick') || has(me, 'log');
+      if (e.lit) return { ...base, verb: 'Feed fire', name, ...(wood ? {} : { note: 'needs wood' }) };
+      if (e.size <= 0) return { ...base, verb: 'Add wood', name, ...(wood ? {} : { note: 'needs wood' }) };
       if (e.embers > 0) return { ...base, verb: 'Light', name, note: 'embers' };
       return { ...base, verb: 'Light', name, ...(has(me, 'matches') ? {} : { note: 'needs matches' }) };
     }
@@ -59,7 +62,7 @@ export function describe(e: Entity, me: PlayerEnt, keyLabel: string): Focus | nu
     case 'log': {
       const l = e as LogEnt;
       if (me.carry === l.id) return { ...base, verb: 'Put down', name: 'Heavy log' };
-      if (l.a && l.b) return null;
+      if (me.carry || (l.a && l.b)) return null;
       return { ...base, verb: l.a || l.b ? 'Take the other end' : 'Lift', name: 'Heavy log' };
     }
     case 'device':
@@ -67,7 +70,9 @@ export function describe(e: Entity, me: PlayerEnt, keyLabel: string): Focus | nu
     case 'player': {
       const p = e as PlayerEnt;
       if (p.id === me.id || p.life !== 'downed') return null;
-      return { ...base, verb: 'Revive', name: p.name, hold: p.reviver === me.id ? p.revive : null };
+      // the host revives only within REVIVE_RANGE on the ground (sim/systems/vitals.ts)
+      const far = Math.hypot(p.x - me.x, p.z - me.z) > REVIVE_RANGE;
+      return { ...base, verb: 'Revive', name: p.name, hold: p.reviver === me.id ? p.revive : null, ...(far ? { note: 'move closer' } : {}) };
     }
     default:
       return null;

@@ -65,12 +65,6 @@ engine.add(withView(weather, view));
 }
 
 b.onFrame((_dt, time) => syncViewCamera(view, camera, time));
-if (q.get('fogtest') === '5') { const T: any = await import('three/tsl'); const v = T.positionWorld.sub(T.cameraPosition); scene.fogNode = T.fog(T.vec3(1, 0, 0), T.float(1).sub(T.exp(U.fogDensity.mul(T.length(v)).negate()))); }
-if (q.get('fogtest') === '6') { const T: any = await import('three/tsl'); const v = T.positionWorld.sub(T.cameraPosition); scene.fogNode = T.fog(T.vec3(1, 0, 0), T.float(1).sub(T.exp(U.fogDensity.mul(AIR.sceneShare).mul(T.length(v)).negate()))); }
-if (q.get('fogtest') === '3') { const T: any = await import('three/tsl'); const C: any = await import('../src/gfx/sky/common'); const v = T.positionWorld.sub(T.cameraPosition); const dist = T.length(v); scene.fogNode = T.fog(T.vec3(1, 0, 0), C.fogAmount(dist, v.div(dist))); }
-if (q.get('fogtest') === '4') { const T: any = await import('three/tsl'); const C: any = await import('../src/gfx/sky/common'); const v = T.positionWorld.sub(T.cameraPosition); const dist = T.length(v); scene.fogNode = T.fog(C.fogColor(v.div(dist)), T.float(0.5)); }
-if (q.get('fogtest') === '1') { const T: any = await import('three/tsl'); scene.fogNode = T.fog(T.vec3(1, 0, 0), T.float(0.5)); }
-if (q.get('fogtest') === '2') { const T: any = await import('three/tsl'); const v = T.positionWorld.sub(T.cameraPosition); scene.fogNode = T.fog(T.vec3(1, 0, 0), T.length(v).div(200).clamp(0, 1)); }
 
 sliderPanel(
   [

@@ -44,6 +44,7 @@ export interface TerrainUniforms {
   cell0: N; // LOD 0 cell size
   cubicLod: N; // LODs below this use Catmull-Rom
   detailFade: N; // vec2: detail noise fades out between these 2D distances
+  viewDist: N; // quality.viewDistance: small-scale material detail ends at a fraction of it
 }
 
 /** Look knobs, shared by every terrain material (tune live from a bench). */
@@ -52,7 +53,7 @@ export const TERRAIN_U = {
   sparkle: uniform(1),
   detail: uniform(1), // scale on all detail normals
   printDepth: uniform(0.14), // metres a full-strength footprint presses down
-  debug: uniform(0), // 0 off, 1 LOD colours, 2 horizon shadow, 3 normals, 4 masks
+  debug: uniform(0), // 0 off, 1 LOD colours, 2 horizon shadow, 3 normals, 4 masks, 5 NaN finder, 6 visible skirts
   skirt: uniform(1), // scale on the skirt depth (debug)
 };
 
@@ -79,6 +80,9 @@ class TerrainSkyNode extends THREE.LightingNode {
   static get type(): string {
     return 'ColdSignalTerrainSkyNode';
   }
+  constructor(private occlusion: N) {
+    super();
+  }
   setup(builder: any): any {
     const refl: N = positionViewDirection.negate().reflect(normalView);
     const dir: N = mix(refl, normalView, pow(roughness, 4)).normalize().transformDirection(cameraWorldMatrix);
@@ -87,7 +91,7 @@ class TerrainSkyNode extends THREE.LightingNode {
     const horizon: N = vec3(U.fogColor);
     const ground: N = vec3(U.groundAmbient).mul(0.5);
     const sky: N = mix(horizon, zenith, dir.y.max(0).pow(0.6));
-    builder.context.radiance.addAssign(mix(ground, sky, smoothstep(blur.negate(), blur, dir.y)));
+    builder.context.radiance.addAssign(mix(ground, sky, smoothstep(blur.negate(), blur, dir.y)).mul(this.occlusion));
     return null;
   }
 }
@@ -146,6 +150,8 @@ class TerrainNodeMaterial extends THREE.MeshStandardNodeMaterial {
     return 'ColdSignalTerrainMaterial';
   }
   surface: N = null;
+  /** Specular occlusion of the sky reflection (rough rock reflects little of the sky from its pits). */
+  skyOcclusion: N = float(1);
   terrainLighting: (() => THREE.LightingModel) | null = null;
 
   setupDiffuseColor(): void {
@@ -159,7 +165,7 @@ class TerrainNodeMaterial extends THREE.MeshStandardNodeMaterial {
 
   setupEnvironment(builder: any): any {
     const node = super.setupEnvironment(builder);
-    return node ?? new TerrainSkyNode();
+    return node ?? new TerrainSkyNode(this.skyOcclusion);
   }
 }
 
@@ -196,7 +202,9 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     If(lod.lessThan(tu.cubicLod), () => {
       y.assign(h.height(xz, true));
     }).Else(() => {
-      y.assign(h.height(xz, false));
+      // heights filtered for this LOD, blended toward the parent's level with the morph: at the
+      // join both sides read the same level, and no single noisy sample dents a coarse mesh
+      y.assign(mix(h.heightLod(xz, lod), h.heightLod(xz, lod.add(1)), k));
     });
 
     // Near the camera: small drifts so the snow has shape below the 2 m grid, and footprints.
@@ -222,10 +230,15 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     y.subAssign(skirt.mul(cell.mul(2).add(0.5)).mul(TERRAIN_U.skirt));
 
     // vertex normal from the baked normal maps (shadow normal bias, fallback shading)
-    const w: N = h.fineWeight(xz);
-    const nf: N = (texture(data.normFineTex, h.fineUV(xz)) as N).level(0);
-    const nr: N = (texture(data.normFarTex, h.farUV(xz)) as N).level(0);
-    const sl: N = tan(mix(vec2(nr.x, nr.y), vec2(nf.x, nf.y), w).sub(0.5).clamp(-0.497, 0.497).mul(Math.PI));
+    const w: N = h.fineWeight(xz).toVar();
+    const enc: N = vec2(0.5).toVar();
+    If(w.greaterThan(0), () => {
+      enc.assign((texture(data.normFineTex, h.fineUV(xz)) as N).level(0).xy);
+    });
+    If(w.lessThan(1), () => {
+      enc.assign(mix((texture(data.normFarTex, h.farUV(xz)) as N).level(0).xy, enc, w));
+    });
+    const sl: N = tan(enc.sub(0.5).clamp(-0.497, 0.497).mul(Math.PI));
     normalLocal.assign(vec3(sl.x.negate(), 1, sl.y.negate()).normalize());
     return vec3(xz.x, y, xz.y);
   })();
@@ -238,9 +251,11 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
   const pSSS: N = property('float', 'trSSS');
   const pGlint: N = property('float', 'trGlint');
   const pGlintN: N = property('vec3', 'trGlintN');
+  const pEnv: N = property('float', 'trEnv');
   const props: Props = { albedo: pAlbedo, normal: pNormal, rough: pRough, ao: pAO, sss: pSSS, glint: pGlint, glintN: pGlintN };
 
   const vLod: N = varying(aNode.w);
+  const vSkirt: N = varying(step(positionGeometry.y, -0.5));
 
   m.surface = Fn(() => {
     const p: N = positionWorld.toVar();
@@ -257,6 +272,8 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     const res = (lambda: number | N): N => clamp(float(lambda).div(fp).sub(2).div(4), 0, 1);
     /** The same for analytic bands with sharp edges (strata): 8 .. 20 px per band. */
     const resBand = (lambda: number): N => clamp(float(lambda).div(fp).sub(8).div(12), 0, 1);
+    /** 1 near .. 0 beyond ~12 % of quality.viewDistance: where small-scale detail stops (saves taps on low tiers). */
+    const nearD: N = smoothstep(tu.viewDist.mul(0.1), tu.viewDist.mul(0.14), dist).oneMinus().toVar();
     /** Linear map of world xz (or of its derivatives) to texture uv: (a x + b z, c x + d z) / s. */
     const lin = (a: number, b: number, c: number, d: number, s: number | N) => (v: N): N => vec2(v.x.mul(a).add(v.y.mul(b)), v.x.mul(c).add(v.y.mul(d))).div(s);
     /** Its transpose, for turning a texture-space gradient back into world xz. */
@@ -279,6 +296,7 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     const nfc: N = (texture(data.normFineTex, h.fineUV(xz)) as N).bias(2.5);
     const slc: N = tan(nfc.xy.sub(0.5).clamp(-0.497, 0.497).mul(Math.PI));
     const slopeC: N = vec3(slc.x.negate(), 1, slc.y.negate()).normalize().y.oneMinus().toVar();
+    const curvC: N = nfc.z.sub(0.5).toVar(); // curvature over ~8 m: couloirs, not the steps of the strata
 
     // ---- low-frequency variation ----
     // (one tile of the detail texture holds ~8 noise features: a tile of T metres gives ~T/8 features)
@@ -310,14 +328,14 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     const field: N = smoothstep(0.35, 0.75, tap(detTex, lin(0.6, 0.8, -0.8, 0.6, 140), 0.41, 0.19).x.add(lowVar.mul(0.5))).mul(0.7).add(0.3).toVar();
     // TA x TC: tile sizes along / across the wind (features about an eighth of that)
     const sastrugi = (LA: number, LC: number, amp: number, ox: number, oy: number): void => {
-      If(res(LC / 8).greaterThan(0), () => {
+      If(res(LC / 8).mul(nearD).greaterThan(0), () => {
         const S = lin(wx, wz, -wz, wx, 1);
         const s: N = tap(detTex, (v: N): N => S(v).div(vec2(LA, LC)), ox, oy);
         const c2: N = s.x.mul(2).sub(1);
         const dr: N = c2.div(sqrt(c2.mul(c2).add(0.02))).mul(-2); // d(1 - |2n-1|)/dn, softened
         const gs: N = grad(s).mul(dr).div(vec2(LA, LC));
         const gxz: N = vec2(gs.x.mul(wx).sub(gs.y.mul(wz)), gs.x.mul(wz).add(gs.y.mul(wx)));
-        sg.addAssign(gxz.mul(amp).mul(exposure).mul(field).mul(res(LC / 8)));
+        sg.addAssign(gxz.mul(amp).mul(exposure).mul(field).mul(res(LC / 8)).mul(nearD));
       });
     };
     sastrugi(37, 10.4, 0.3, 0.13, 0.71); // ~4.6 x 1.3 m
@@ -328,10 +346,10 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
       sg.addAssign(MT(grad(tap(detTex, M, 0.55, 0.55))).mul(0.4).mul(res(25 / 8)));
     });
     if (!o.mobile) {
-      If(res(3 / 8).greaterThan(0), () => {
+      If(res(3 / 8).mul(nearD).greaterThan(0), () => {
         // wind crust, ~0.4 m bumps of a centimetre
         const C = lin(0.34, -0.94, 0.94, 0.34, 3), CT = linT(0.34, -0.94, 0.94, 0.34, 3);
-        sg.addAssign(CT(grad(tap(detTex, C, 0.81, 0.81))).mul(0.05).mul(exposure.mul(0.5).add(0.5)).mul(res(3 / 8)));
+        sg.addAssign(CT(grad(tap(detTex, C, 0.81, 0.81))).mul(0.05).mul(exposure.mul(0.5).add(0.5)).mul(res(3 / 8)).mul(nearD));
       });
     }
     sg.mulAssign(TERRAIN_U.detail);
@@ -365,28 +383,42 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     // Far ring (24 m cells read gentler): ~42 deg, and wind-scoured crests. Snow fills gullies and
     // holds on ledges and benches of the strata.
     const crest: N = smoothstep(0.02, 0.12, curv.negate());
-    const steepIn: N = smoothstep(0.31, 0.43, mix(slope, slopeC, 0.6).add(broadN.sub(0.5).mul(0.14)));
     const steepFar: N = smoothstep(0.25, 0.37, slope.add(broadN.sub(0.5).mul(0.14)).add(crest.mul(0.08)));
     const maskRock: N = smoothstep(0.55, 0.8, mk.y.add(broadN.sub(0.5).mul(0.25))).mul(smoothstep(0.08, 0.22, slope));
-    const rockArea: N = max(maskRock, steepIn).mul(w).add(steepFar.mul(farW)).mul(mk.z.oneMinus()).mul(nearTrail.oneMinus()).clamp(0, 1).toVar();
+    // Cliff zones (a face within ~8 m): a noise in the plane of the face leaves some benches bare and
+    // breaks the snow on the others, so terraced cliffs do not read as regular stripes.
+    const cliffZone: N = smoothstep(0.16, 0.3, slopeC).mul(w).toVar();
+    const faceNoise: N = float(0.5).toVar();
+    If(cliffZone.greaterThan(0.01), () => {
+      const ax: N = smoothstep(0.3, 0.7, abs(nM.x).div(abs(nM.x).add(abs(nM.z)).max(1e-3)));
+      const TF = 60;
+      const fa: N = (texture(detTex, vec2(p.z, p.y).div(TF).add(0.21)) as N).grad(vec2(dpx.z, dpx.y).div(TF), vec2(dpy.z, dpy.y).div(TF));
+      const fb: N = (texture(detTex, vec2(p.x, p.y).div(TF).add(0.67)) as N).grad(vec2(dpx.x, dpx.y).div(TF), vec2(dpy.x, dpy.y).div(TF));
+      faceNoise.assign(mix(fb.x.mul(0.65).add(fb.w.mul(0.35)), fa.x.mul(0.65).add(fa.w.mul(0.35)), ax));
+    });
+    const benchRock: N = cliffZone.mul(smoothstep(0.52, 0.66, faceNoise));
+    // the face noise also roughens where rock gives way to snow, so gullies do not end in straight edges
+    const steepIn: N = smoothstep(0.31, 0.43, mix(slope, slopeC, 0.6).add(broadN.sub(0.5).mul(0.14)).add(faceNoise.sub(0.5).mul(0.24).mul(cliffZone)));
+    const rockArea: N = max(max(maskRock, steepIn), benchRock).mul(w).add(steepFar.mul(farW)).mul(mk.z.oneMinus()).mul(nearTrail.oneMinus()).clamp(0, 1).toVar();
     const rock: N = float(0).toVar();
     const nRock: N = nM.toVar();
     const rockAlb: N = vec3(0.045).toVar();
     const ledgeAO: N = float(1).toVar();
+    const rockTex: N = float(0).toVar();
     If(rockArea.greaterThan(0.002), () => {
       // strata: bands following the contours (world height), warped so they wander; 2.3 m beds
-      // up close, 19 m benches that still read on a cliff a kilometre away
+      // up close (ledges that catch snow), 19 m benches in the albedo only
       const warpS: N = tap(detTex, lin(1, 0, 0, 1, 450), 0.1, 0.4).x.mul(3.1);
       const s1: N = p.y.div(2.3).add(warpS).add(lowVar.mul(0.8));
       const s2: N = p.y.div(19).add(warpS.mul(0.6)).add(lowVar.mul(0.9));
       const prof = (b: N): N => smoothstep(0.0, 0.12, b).mul(smoothstep(0.55, 1.0, b).oneMinus()).sub(0.5);
-      // not every bed makes a ledge, and a ledge comes and goes along the cliff
+      // not every bed makes a ledge
       const h1: N = hash3(vec2(floor(s1).mul(7.31).add(13.7), 91.3)).x;
       const h2: N = hash3(vec2(floor(s2).mul(5.77).add(41.9), 17.9)).x;
-      const along2: N = tap(detTex, lin(1, 0, 0, 1, 500), 0.27, 0.61).w;
       const k1: N = smoothstep(0.25, 0.85, h1).mul(0.7).add(0.3);
-      const k2: N = smoothstep(0.6, 0.95, h2).mul(smoothstep(0.35, 0.65, along2.add(h2.sub(0.5).mul(0.4))));
-      const ledge: N = prof(fract(s1)).mul(resBand(2.3)).mul(0.6).mul(k1).add(prof(fract(s2)).mul(resBand(19)).mul(0.5).mul(k2)).toVar();
+      // only the near beds tilt the normal (and so catch snow); the 19 m benches stay in the albedo:
+      // as snow lines they would stripe whole cliffs
+      const ledge: N = prof(fract(s1)).mul(resBand(2.3)).mul(0.6).mul(k1).toVar();
       ledgeAO.assign(ledge.mul(0.3).add(0.85));
       if (o.mobile) {
         nRock.assign(nM.add(vec3(0, ledge.mul(0.5), 0)).normalize());
@@ -395,23 +427,33 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
         const bw: N = pow(abs(nM), vec3(4)).toVar();
         bw.divAssign(bw.x.add(bw.y).add(bw.z));
         const tp = (a: N, b: N, ga: N, gb: N, gc: N, gd: N, o2: number): N => (texture(detTex, vec2(a, b).div(6).add(o2)) as N).grad(vec2(ga, gb).div(6), vec2(gc, gd).div(6));
-        const gX: N = grad(tp(p.z, p.y, dpx.z, dpx.y, dpy.z, dpy.y, 0));
-        const gY: N = grad(tp(p.x, p.z, dpx.x, dpx.z, dpy.x, dpy.z, 0.5));
-        const gZ: N = grad(tp(p.x, p.y, dpx.x, dpx.y, dpy.x, dpy.y, 0.25));
-        const bump: N = vec3(gY.x.mul(bw.y).add(gZ.x.mul(bw.z)), gX.y.mul(bw.x).add(gZ.y.mul(bw.z)), gX.x.mul(bw.x).add(gY.y.mul(bw.y))).mul(0.1 / 6).mul(res(6 / 8));
+        const bump: N = vec3(0).toVar();
+        If(nearD.mul(res(6 / 8)).greaterThan(0), () => {
+          const sX: N = tp(p.z, p.y, dpx.z, dpx.y, dpy.z, dpy.y, 0);
+          const sY: N = tp(p.x, p.z, dpx.x, dpx.z, dpy.x, dpy.z, 0.5);
+          const sZ: N = tp(p.x, p.y, dpx.x, dpx.y, dpy.x, dpy.y, 0.25);
+          const gX: N = grad(sX), gY: N = grad(sY), gZ: N = grad(sZ);
+          const k: N = res(6 / 8).mul(nearD);
+          bump.assign(vec3(gY.x.mul(bw.y).add(gZ.x.mul(bw.z)), gX.y.mul(bw.x).add(gZ.y.mul(bw.z)), gX.x.mul(bw.x).add(gY.y.mul(bw.y))).mul(0.25 / 6).mul(k));
+          // lighter and darker patches of the same rock, a metre across
+          rockTex.assign(sX.x.mul(bw.x).add(sY.x.mul(bw.y)).add(sZ.x.mul(bw.z)).sub(0.5).mul(k));
+        });
         nRock.assign(nM.sub(bump).add(vec3(0, ledge.mul(0.4), 0)).normalize());
       }
       // snow is caught wherever the rock's own normal is flat enough, and fills the gullies
       const hold: N = tap(detTex, lin(1, 0, 0, 1, 30), 0.66, 0.66).x.sub(0.5).mul(res(30 / 8)).add(tap(detTex, lin(0, 1, -1, 0, 120), 0.12, 0.83).x.sub(0.5).mul(1.6).mul(res(120 / 8)));
       // xz-projected noise would streak down a cliff: on near-vertical faces only ledges hold snow
       const vert: N = smoothstep(0.3, 0.6, nM.y);
-      const gully: N = smoothstep(0.01, 0.12, curv).mul(0.35).mul(smoothstep(0.22, 0.45, nM.y));
-      const snowOnRock: N = smoothstep(0.6, 0.84, nRock.y.add(hold.mul(0.18).add(broadN.sub(0.5).mul(0.12)).mul(vert)).add(snowDepth.mul(0.25)).add(gully));
+      const gully: N = smoothstep(0.01, 0.08, mix(curv, curvC, w)).mul(0.35).mul(smoothstep(0.22, 0.45, nM.y));
+      // holding needs a bench, not a step one texel high: judge with the ~8 m normal as well
+      const holdY: N = mix(nRock.y, slopeC.oneMinus(), 0.55);
+      const faceN: N = faceNoise.sub(0.5).mul(vert.oneMinus());
+      const snowOnRock: N = smoothstep(0.6, 0.84, holdY.add(hold.mul(0.18).add(broadN.sub(0.5).mul(0.12)).mul(vert)).add(faceN.mul(0.55)).add(snowDepth.mul(0.25)).add(gully));
       rock.assign(rockArea.mul(snowOnRock.oneMinus()));
       // near-black; beds and whole faces vary a little
       const v1: N = fract(floor(s1).mul(0.6180339)).sub(0.5).mul(0.5).mul(resBand(2.3));
       const v2: N = h2.sub(0.5).mul(0.5).mul(resBand(19));
-      rockAlb.assign(vec3(0.032, 0.031, 0.031).mul(v1.add(v2).add(1)).mul(lowVar.mul(0.6).mul(vert).add(1)));
+      rockAlb.assign(vec3(0.024, 0.023, 0.023).mul(v1.add(v2).add(1)).mul(lowVar.mul(0.6).mul(vert).add(1)).mul(rockTex.mul(0.9).add(1)));
     });
 
     // ---- lake ice ----
@@ -430,12 +472,21 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
       const D = lin(wx, wz, -wz, wx, 1);
       const driftN: N = tap(detTex, (v: N): N => D(v).div(vec2(200, 44)), 0.33, 0.33).x;
       drift.assign(smoothstep(0.52, 0.66, driftN.add(mk.z.oneMinus().mul(0.9)).add(lowVar.mul(0.2))).mul(ice));
-      // fracture lines on Voronoi edges: 7 m and 1.5 m plates (the cell texture holds 10 cells per
-      // tile; r = (F2 - F1) / 0.6 in cell units), a few centimetres wide plus a pixel of anti-aliasing
-      const c1: N = tap(cellTex, lin(1, 0, 0, 1, 70), 0.1, 0.1).x;
-      const c2: N = tap(cellTex, lin(0, 1, 1, 0, 15), 0.6, 0.6).x;
-      const w1: N = fp.mul(1.5).add(0.04).div(7 * 0.6), w2: N = fp.mul(1.5).add(0.025).div(1.5 * 0.6);
-      crack.assign(smoothstep(0.0, w1, c1).oneMinus().max(smoothstep(0.0, w2, c2).oneMinus().mul(0.6)).mul(res(0.5)));
+      // Fractures on the edges of warped Voronoi cells (the cell texture holds 10 cells per tile;
+      // r = (F2 - F1) / 0.6 in cell units): long main cracks across 30 m plates, and a finer network
+      // only in the zones where the ice has worked. Warping bends the edges; a slow noise decides
+      // which stretches show, so the pattern never reads as tiles.
+      const wq: N = tap(detTex, lin(1, 0, 0, 1, 90), 0.71, 0.37);
+      const warp: N = vec2(wq.x, wq.w).sub(0.5);
+      const zone: N = tap(detTex, lin(0.6, -0.8, 0.8, 0.6, 260), 0.15, 0.55).x;
+      const uv1: N = xz.div(300).add(warp.mul(0.09));
+      const uv2: N = vec2(xz.y, xz.x).div(48).add(warp.mul(0.35));
+      const c1: N = (texture(cellTex, uv1) as N).grad(gx.div(300), gy.div(300)).x;
+      const c2: N = (texture(cellTex, uv2) as N).grad(vec2(gx.y, gx.x).div(48), vec2(gy.y, gy.x).div(48)).x;
+      const w1: N = fp.mul(1.5).add(0.05).div(30 * 0.6), w2: N = fp.mul(1.5).add(0.03).div(4.8 * 0.6);
+      const show1: N = smoothstep(0.3, 0.55, zone.add(wq.w.sub(0.5).mul(0.6)));
+      const show2: N = smoothstep(0.55, 0.75, zone.add(wq.x.sub(0.5).mul(0.5)));
+      crack.assign(smoothstep(0.0, w1, c1).oneMinus().mul(show1).max(smoothstep(0.0, w2, c2).oneMinus().mul(show2).mul(0.55)).mul(res(0.5)).mul(nearD.mul(0.7).add(0.3)));
       const polished: N = smoothstep(0.55, 0.75, tap(cellTex, lin(1, 0, 0, 1, 170), 0.7, 0.7).z);
       iceAlb.assign(mix(vec3(0.012, 0.022, 0.034), vec3(0.11, 0.12, 0.13), thin).add(vec3(0.3, 0.33, 0.36).mul(crack)));
       roughIce.assign(mix(float(0.16), float(0.035), polished).add(crack.mul(0.4)));
@@ -475,7 +526,7 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     n.assign(n.normalize());
 
     const roughSnow: N = mix(float(0.82), float(0.66), exposure.mul(res(0.37))).sub(trail.mul(0.16)).sub(print.mul(0.2));
-    const rough: N = roughSnow.mul(snowW).add(float(0.72).mul(rock)).add(roughIce.mul(iceW).mul(rock.oneMinus())).add(float(0.9).mul(forestFar)).toVar();
+    const rough: N = roughSnow.mul(snowW).add(float(0.8).mul(rock)).add(roughIce.mul(iceW).mul(rock.oneMinus())).add(float(0.9).mul(forestFar)).toVar();
     // detail lost to the footprint shows up as roughness, not as shimmer
     rough.assign(rough.add(smoothstep(0.02, 0.6, fp).mul(0.08)).clamp(0.03, 1));
 
@@ -515,7 +566,9 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
       albedo.assign(mix(albedo, vec3(rock, ice, trail).mul(0.8).add(vec3(0, 0, print)), step(3.5, dbg).mul(step(dbg, 4.5))));
       // 5: NaN finder (red: macro normal, green: rock / snow weights, blue: detail gradient)
       const bad = (v: N): N => select(v.equal(v), float(0), float(1));
-      albedo.assign(mix(albedo, vec3(bad(nM.x.add(nM.y).add(curv)), bad(rock.add(snowW).add(rough)), bad(sg.x.add(sg.y).add(fp))).add(0.05), step(4.5, dbg)));
+      albedo.assign(mix(albedo, vec3(bad(nM.x.add(nM.y).add(curv)), bad(rock.add(snowW).add(rough)), bad(sg.x.add(sg.y).add(fp))).add(0.05), step(4.5, dbg).mul(step(dbg, 5.5))));
+      // 6: skirts that show (magenta)
+      albedo.assign(mix(albedo, mix(vec3(0.05), vec3(1, 0, 1), step(0.001, vSkirt)), step(5.5, dbg)));
     });
 
     pAlbedo.assign(albedo);
@@ -523,6 +576,7 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     pRough.assign(rough);
     pAO.assign(ao);
     pSSS.assign(snowW.mul(0.55).mul(print.mul(0.5).oneMinus()));
+    pEnv.assign(float(1).sub(rock.mul(0.65)).sub(forestFar.mul(0.6)));
     return albedo;
   })();
 
@@ -530,6 +584,7 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
   m.roughnessNode = pRough;
   m.metalnessNode = float(0);
   m.aoNode = pAO;
+  m.skyOcclusion = pEnv;
   m.terrainLighting = () => new TerrainLighting(hz, props, o.sparkle);
   return m;
 }

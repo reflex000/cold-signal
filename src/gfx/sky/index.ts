@@ -40,9 +40,9 @@ const MOON_TINT = [0.72, 0.84, 1.0]; // moonlight reads blue to night-adapted ey
 const NIGHT_FLOOR = [0.0042, 0.0052, 0.0085]; // airglow + starlight, radiance
 const LIFT = 0.42; // twilight lift per degree of solar depression (see sky brightness note below)
 const SUN_DISC_K = 180;
-const MOON_DISC_K = 16;
+const MOON_DISC_K = 9; // the disc is drawn 1.7x larger (nodes.ts), so dimmer per pixel
 const STAR_FLUX = 3.2e-7;
-const AURORA_K = 1.6;
+const AURORA_K = 0.7;
 const BASE_ALT_KM = 1.5; // the mountain's base above sea level
 const SNOW_ALBEDO = 0.85;
 
@@ -117,6 +117,7 @@ export function createSkySystem(engine: Engine, world: World | null = null): Sky
     scene.add(hemi);
   }
   const envSig = new Float64Array(12);
+  const sigNow = new Float64Array(12);
   let envAge = 99;
 
   // ---- key light with cascaded shadows ----
@@ -159,7 +160,10 @@ export function createSkySystem(engine: Engine, world: World | null = null): Sky
   const eClear = new THREE.Vector3();
   const eSky = new THREE.Vector3();
   const eGround = new THREE.Vector3();
-  const tmpC = new THREE.Color();
+  const moonSkyCpu = new THREE.Vector3();
+  const above = new THREE.Vector3();
+  const eOvc = new THREE.Vector3();
+  const gTot = new THREE.Vector3();
   const starM = new Array<number>(9);
   const horizonData = horizonTexture.image.data as Uint16Array;
   const toHalf = THREE.DataUtils.toHalfFloat;
@@ -274,7 +278,7 @@ export function createSkySystem(engine: Engine, world: World | null = null): Sky
     SKY.moonE.value.copy(moonScaleSky);
     SKY.nightFloor.value.set(NIGHT_FLOOR[0], NIGHT_FLOOR[1], NIGHT_FLOOR[2]);
     const sunSkyCpu = SUN_E * lift;
-    const moonSkyCpu = moonScaleSky.clone().multiplyScalar(1 / Math.max(1e-12, moonLut.scale));
+    moonSkyCpu.copy(moonScaleSky).multiplyScalar(1 / Math.max(1e-12, moonLut.scale));
 
     // Irradiance on an up-facing surface from the clear sky: pi * mean radiance over cosine samples.
     eClear.set(0, 0, 0);
@@ -288,14 +292,14 @@ export function createSkySystem(engine: Engine, world: World | null = null): Sky
 
     // Under a closed deck the light comes through grey: a fraction of everything above it.
     const sinS = Math.max(0, bodies.sun.y), sinM = Math.max(0, bodies.moon.y);
-    const above = new THREE.Vector3(
+    above.set(
       eClear.x + sunTop.x * sinS + moonDirect.x * sinM,
       eClear.y + sunTop.y * sinS + moonDirect.y * sinM,
       eClear.z + sunTop.z * sinS + moonDirect.z * sinM,
     );
     const ovcT = 0.36 - 0.16 * storm;
     const aLum = lum(above.x, above.y, above.z);
-    const eOvc = new THREE.Vector3(
+    eOvc.set(
       (aLum * 0.7 + above.x * 0.3) * ovcT,
       (aLum * 0.7 + above.y * 0.3) * ovcT,
       (aLum * 0.7 + above.z * 0.3) * ovcT * 1.04,
@@ -374,7 +378,7 @@ export function createSkySystem(engine: Engine, world: World | null = null): Sky
     SKYU.cloudLight.value.set(T[0] * cs * ctint[0], T[1] * cs * ctint[1], T[2] * cs * ctint[2]);
     SKYU.cloudLightDir.value.set(cd.x, cd.y, cd.z);
     SKYU.cloudAmbTop.value.copy(eClear).multiplyScalar(0.85 / Math.PI);
-    const gTot = new THREE.Vector3().copy(eSky).addScaledVector(sunDirect, sinS).addScaledVector(moonDirect, sinM);
+    gTot.copy(eSky).addScaledVector(sunDirect, sinS).addScaledVector(moonDirect, sinM);
     SKYU.cloudAmbBottom.value.copy(gTot).multiplyScalar((SNOW_ALBEDO * 0.55) / Math.PI);
     SKYU.auroraE.value = AURORA_K * auroraOn;
     SKYU.groundRad.value.copy(eGround).multiplyScalar(1 / Math.PI);
@@ -420,7 +424,9 @@ export function createSkySystem(engine: Engine, world: World | null = null): Sky
     // ---- environment ----
     if (env) {
       envAge += dt;
-      const sig = [bodies.sun.x, bodies.sun.y, bodies.sun.z, bodies.moon.y, cover, storm, auroraOn, Math.log(1e-4 + lum(eSky.x, eSky.y, eSky.z)), U.fogColor.value.r, U.fogDensity.value * 50, night, 0];
+      const sig = sigNow;
+      sig[0] = bodies.sun.x; sig[1] = bodies.sun.y; sig[2] = bodies.sun.z; sig[3] = bodies.moon.y; sig[4] = cover; sig[5] = storm;
+      sig[6] = auroraOn; sig[7] = Math.log(1e-4 + lum(eSky.x, eSky.y, eSky.z)); sig[8] = U.fogColor.value.r; sig[9] = U.fogDensity.value * 50; sig[10] = night;
       let change = 0;
       for (let i = 0; i < sig.length; i++) change = Math.max(change, Math.abs(sig[i] - envSig[i]));
       if (force) {
@@ -440,8 +446,13 @@ export function createSkySystem(engine: Engine, world: World | null = null): Sky
     // ---- auto exposure ----
     // What a sheet of flat snow returns: the eye adapts to that, but only partly (night stays dark).
     const keyLum = (SNOW_ALBEDO * lum(sunDirect.x * sinS + moonDirect.x * sinM + eSky.x, sunDirect.y * sinS + moonDirect.y * sinM + eSky.y, sunDirect.z * sinS + moonDirect.z * sinM + eSky.z)) / Math.PI;
-    const target = 0.86 * Math.min(1, Math.pow(Math.max(1e-6, keyLum) / 1.25, 0.82));
-    const expT = Math.min(3.2, Math.max(0.25, target / Math.max(1e-6, keyLum)));
+    // Daylight, sunny or overcast, is adapted to fully; below it the eye keeps less and less of
+    // the loss (slopes in log10: 0.55 through dusk, 0.95 at night), so night stays dark.
+    const lk = Math.log10(Math.max(1e-6, keyLum));
+    const DAY = Math.log10(0.6), DUSK = Math.log10(0.08);
+    const adapt = lk >= DAY ? 0 : lk >= DUSK ? 0.55 * (lk - DAY) : 0.55 * (DUSK - DAY) + 0.95 * (lk - DUSK);
+    const target = 0.86 * Math.pow(10, adapt);
+    const expT = Math.min(3.0, Math.max(0.25, target / Math.max(1e-6, keyLum)));
     if (force) expLog = Math.log(expT);
     else expLog += (Math.log(expT) - expLog) * (1 - Math.exp(-dt * 1.4));
     U.exposure.value = Math.exp(expLog) * Math.pow(2, sys.exposureBias);

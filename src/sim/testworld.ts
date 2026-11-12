@@ -13,6 +13,7 @@
 //   (0, -20)          a wall (box 8 x 0.3 m, turned 0.3 rad);  (20, 5) a low stump you step over
 //   (-20, 20)         a wooden floor 6 x 4 m raised 0.3 m, inside an indoor shelter volume
 //   (30, 30)          a deck 3 m up (too high to step on: you walk under it)
+//   (40, -40)         an outdoor windbreak: a 10 x 10 m shelter volume (0.75), not indoors
 // Owner: SIM.
 import { sat, smoothstep } from '../core/math';
 import { hash01 } from '../core/rng';
@@ -34,6 +35,8 @@ export const TEST_ROCK = { x: 15, z: -8, r: 1.2 };
 export const TEST_WALL = { x: 0, z: -20, hx: 4, hz: 0.15, yaw: 0.3 };
 export const TEST_FLOOR = { x: -20, z: 20, hx: 3, hz: 2, y: 0.3 };
 export const TEST_DECK = { x: 30, z: 30, hx: 2, hz: 2, y: 3 };
+/** An outdoor windbreak (a stand of firs, a rock wall): partial shelter, not indoors. (SURVIVAL) */
+export const TEST_LEE = { x: 40, z: -40, hx: 5, hz: 5, amount: 0.75 };
 
 const STEP = 0.4; // step height assumed by groundAt (matches move.ts STEP_HEIGHT)
 
@@ -158,6 +161,7 @@ export function createTestWorld(o: TestWorldOptions = {}): World {
   const props: PropInst[] = [];
   const shelters: ShelterVol[] = [
     { x: TEST_FLOOR.x, y: 1.5, z: TEST_FLOOR.z, hx: TEST_FLOOR.hx, hy: 1.5, hz: TEST_FLOOR.hz, yaw: 0, amount: 0.9, indoor: true, poi: 'cabin' },
+    { x: TEST_LEE.x, y: 1.5, z: TEST_LEE.z, hx: TEST_LEE.hx, hy: 2, hz: TEST_LEE.hz, yaw: 0, amount: TEST_LEE.amount, indoor: false },
   ];
 
   const raycast: World['raycast'] = (ox, oy, oz, dx, dy, dz, maxDist) => {

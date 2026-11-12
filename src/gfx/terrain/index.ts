@@ -46,7 +46,7 @@ export interface TerrainSystem extends GfxSystem {
    * outside (the near-camera detail noise of a few centimetres is not included).
    */
   heightAt(x: number, z: number): number;
-  /** 0 off, 1 LOD colours, 2 baked horizon shadow, 3 normals, 4 material masks, 5 NaN finder. */
+  /** 0 off, 1 LOD colours, 2 baked horizon shadow, 3 normals, 4 material masks, 5 NaN finder, 6 visible skirts. */
   debug: number;
   /** Draw the terrain as wireframe (with debug 1 it shows the LOD bands). */
   wireframe: boolean;
@@ -84,8 +84,6 @@ class TerrainSystemImpl implements TerrainSystem {
 
   constructor(private engine: Engine, private world: World) {
     this.data = buildTerrainData(world);
-    this.h = createHeightFns(this.data);
-    this.horizon = new HorizonMaps(this.data, this.h);
     this.tu = {
       lodCam: uniform(new THREE.Vector3()),
       hc: uniform(1.7),
@@ -93,7 +91,10 @@ class TerrainSystemImpl implements TerrainSystem {
       cell0: uniform(0.25),
       cubicLod: uniform(3),
       detailFade: uniform(new THREE.Vector2(24, 72)),
+      viewDist: uniform(2800),
     };
+    this.h = createHeightFns(this.data, this.tu.cell0, this.tu.cubicLod);
+    this.horizon = new HorizonMaps(this.data, this.h);
     this.object.name = 'terrain';
     engine.scene.add(this.object);
     this.setQuality(engine.quality);
@@ -104,7 +105,7 @@ class TerrainSystemImpl implements TerrainSystem {
   }
 
   set debug(v: number) {
-    TERRAIN_U.debug.value = Math.max(0, Math.min(5, Math.round(v)));
+    TERRAIN_U.debug.value = Math.max(0, Math.min(6, Math.round(v)));
   }
 
   get wireframe(): boolean {
@@ -134,6 +135,7 @@ class TerrainSystemImpl implements TerrainSystem {
     const cfg = lodConfig(q.terrainDetail);
     const tier = materialTier(q);
     this.shadowDist = q.shadowCascades > 0 ? q.shadowDistance * 1.15 : 0;
+    this.tu.viewDist.value = q.viewDistance;
     const cfgChanged = !this.cfg || this.cfg.n !== cfg.n || this.cfg.cell0 !== cfg.cell0 || this.cfg.k !== cfg.k;
     const tierChanged = !this.tier || this.tier.mobile !== tier.mobile || this.tier.sparkle !== tier.sparkle;
     if (cfgChanged) {

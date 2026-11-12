@@ -39,7 +39,7 @@ const VIEWS: Record<string, () => View> = {
   wreck: () => ({ x: poi('wreck').x + 6, z: poi('wreck').z + 30, up: 1.7, yaw: 18, pitch: 3 }),
   tail: () => ({ x: poi('tail').x, z: poi('tail').z + 6, up: 1.7, yaw: 352, pitch: 5 }),
   cabin: () => ({ x: poi('cabin').x + 20, z: poi('cabin').z + 24, up: 1.7, yaw: 62, pitch: 1 }),
-  lake: () => ({ x: poi('lake').x - 30, z: poi('lake').z + 175, up: 1.7, yaw: 8, pitch: -2 }),
+  lake: () => ({ x: poi('lake').x - 25, z: poi('lake').z + 128, up: 1.7, yaw: 8, pitch: -3 }),
   cave: () => ({ x: poi('cave').x + 10, z: poi('cave').z + 45, up: 1.7, yaw: 350, pitch: 10 }),
   camp: () => ({ x: poi('camp').x - 8, z: poi('camp').z + 12, up: 1.7, yaw: 228, pitch: -3 }),
   ridge: () => ({ x: poi('tower').x + 4, z: poi('tower').z + 26, up: 1.7, yaw: 182, pitch: -5 }),
@@ -100,7 +100,7 @@ if (b.param('prints') === '1') {
   const across = (yaw + 90) * DEG;
   const sx = Math.sin(across), sz = -Math.cos(across);
   const fx = Math.sin(yaw * DEG), fz = -Math.cos(yaw * DEG);
-  for (let k = -11; k <= 11; k++) {
+  for (let k = -10; k <= 10; k++) {
     const s = k * 0.7;
     const bend = 0.04 * s * s;
     const side = k % 2 === 0 ? 0.13 : -0.13;
@@ -127,8 +127,8 @@ if (b.param('prints') === '1') {
   ctx.lineCap = 'round';
   ctx.lineWidth = (0.35 / SIZE) * PX;
   ctx.beginPath();
-  const [a0, b0] = toPx(cx - sx * 7 + fx * 2.5, cz - sz * 7 + fz * 2.5);
-  const [a1, b1] = toPx(cx + sx * 7 + fx * 3.5, cz + sz * 7 + fz * 3.5);
+  const [a0, b0] = toPx(cx - sx * 6 + fx * 2.5, cz - sz * 6 + fz * 2.5);
+  const [a1, b1] = toPx(cx + sx * 6 + fx * 3.5, cz + sz * 6 + fz * 3.5);
   ctx.moveTo(a0, b0);
   ctx.lineTo(a1, b1);
   ctx.stroke();

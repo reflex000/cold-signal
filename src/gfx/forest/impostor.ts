@@ -168,20 +168,27 @@ export function impostorGeometry(): THREE.InstancedBufferGeometry {
   return g;
 }
 
-export function createImpostorMaterial(atlas: ImpostorAtlas): THREE.MeshStandardNodeMaterial {
-  const m = new ForestMaterial();
-  m.name = 'forest-impostor';
-  m.side = THREE.DoubleSide;
-  m.alphaTest = 0.5;
-  m.metalness = 0;
+// Two passes as for the 3D trees: a depth prepass decides coverage (alpha test), the lit pass
+// shades only the front-most fragment (depth LESS-EQUAL with a small offset, no depth write, the
+// same alpha decision). Both share the position node and the varyings below.
 
-  const vUV: N = varyingProperty('vec2', 'iUV');
-  const vF0: N = varyingProperty('vec4', 'iF0'); // frame origins (x, y) of [e0][a0], [e0][a1]
-  const vF1: N = varyingProperty('vec4', 'iF1'); // [e1][a0], [e1][a1]
-  const vW: N = varyingProperty('vec4', 'iW'); // wa, we, yaw, load
-  const vM: N = varyingProperty('vec4', 'iM'); // rnd, tB (fade), -, -
+interface ImpVary { uv: N; f0: N; f1: N; w: N; m: N }
+let impVary: ImpVary | null = null;
+function impVaryings(): ImpVary {
+  return (impVary ??= {
+    uv: varyingProperty('vec2', 'iUV'),
+    f0: varyingProperty('vec4', 'iF0'), // frame origins (x, y) of [e0][a0], [e0][a1]
+    f1: varyingProperty('vec4', 'iF1'), // [e1][a0], [e1][a1]
+    w: varyingProperty('vec4', 'iW'), // wa, we, yaw, load
+    m: varyingProperty('vec4', 'iM'), // rnd, tB (fade), -, -
+  });
+}
 
-  m.positionNode = Fn(() => {
+let impPosition: N = null;
+function impostorPosition(): N {
+  if (impPosition) return impPosition;
+  const V = impVaryings();
+  impPosition = Fn(() => {
     const iA: N = attribute('iA', 'vec4');
     const iB: N = attribute('iB', 'vec4');
     const kv: N = iB.y.add(0.5).floor();
@@ -199,8 +206,8 @@ export function createImpostorMaterial(atlas: ImpostorAtlas): THREE.MeshStandard
     const H: N = mix(float(TREE_H), float(SNAG_H), isSnag).mul(S);
     const base: N = iA.xyz;
     const C: N = vec3(0, y0.add(y1).mul(0.5).mul(S), 0);
-    const V: N = normalize(vec3(U.camPos).sub(base.add(C)));
-    const Vl: N = rotY(V, yaw.negate());
+    const Vd: N = normalize(vec3(U.camPos).sub(base.add(C)));
+    const Vl: N = rotY(Vd, yaw.negate());
     // frames around the view direction
     const phi: N = Vl.x.atan(Vl.z); // -pi..pi
     const a: N = fract(phi.div(Math.PI * 2).add(1)).mul(IMP.az);
@@ -215,16 +222,15 @@ export function createImpostorMaterial(atlas: ImpostorAtlas): THREE.MeshStandard
       const fy: N = floor(f.div(IMP.cols));
       return vec2(f.sub(fy.mul(IMP.cols)), fy);
     };
-    vF0.assign(vec4(frameXY(e0, a0), frameXY(e0, a1)));
-    vF1.assign(vec4(frameXY(e1, a0), frameXY(e1, a1)));
-    const load: N = effectiveSnow(iB.z);
-    vW.assign(vec4(fract(a), e.sub(e0).clamp(0, 1), yaw, load));
+    V.f0.assign(vec4(frameXY(e0, a0), frameXY(e0, a1)));
+    V.f1.assign(vec4(frameXY(e1, a0), frameXY(e1, a1)));
+    V.w.assign(vec4(fract(a), e.sub(e0).clamp(0, 1), yaw, effectiveSnow(iB.z)));
     // the quad faces the camera (elevation limited so the basis never degenerates)
     const thb: N = th.clamp(-0.35, 1.25);
     const right: N = vec3(cos(phi), 0, sin(phi).negate());
     const up: N = vec3(sin(thb).negate().mul(sin(phi)), cos(thb), sin(thb).negate().mul(cos(phi)));
     const uv: N = positionLocal.xy;
-    vUV.assign(uv);
+    V.uv.assign(uv);
     const halfW: N = hw.div(1 - 2 * IMP.marginX).mul(S);
     const halfH: N = y1.sub(y0).mul(0.5 / (1 - 2 * IMP.marginY)).mul(S);
     const local: N = C.add(right.mul(uv.x.sub(0.5).mul(2).mul(halfW))).add(up.mul(uv.y.sub(0.5).mul(2).mul(halfH)));
@@ -236,9 +242,69 @@ export function createImpostorMaterial(atlas: ImpostorAtlas): THREE.MeshStandard
     const tB: N = smoothstep(FU.nearEnd.sub(FU.nearBand), FU.nearEnd, d);
     const thin: N = smoothstep(FU.thin0, FU.thin1, d).mul(step(FU.density, rnd));
     const gone: N = max(max(step(tB, 0.0005), step(0.999, thin)), step(FU.farEnd, d));
-    vM.assign(vec4(rnd, tB, 0, 0));
+    V.m.assign(vec4(rnd, tB, 0, 0));
     return mix(world, base, gone);
   })();
+  return impPosition;
+}
+
+/** Atlas coordinates of the two frames this pixel blends, and the explicit mip level. */
+function impTaps(): { tA: N; tB: N; mip: N; wa: N } {
+  const V = impVaryings();
+  const inv: N = vec2(1 / IMP.cols, 1 / IMP.rows);
+  const uv: N = V.uv;
+  // the elevation row is picked per pixel by a dither (a stipple only while the view crosses
+  // between rows); the two azimuth frames of that row are blended: two taps per texture
+  const nE: N = fract(ditherNoise().add(0.5));
+  const hi: N = step(nE, V.w.y);
+  const fA: N = mix(V.f0.xy, V.f1.xy, hi), fB: N = mix(V.f0.zw, V.f1.zw, hi);
+  // explicit mip level: the frame switch makes the atlas uv jump between pixels
+  const texel: N = max(length(dFdx(uv.mul(vec2(IMP.fw, IMP.fh)))), length(dFdy(uv.mul(vec2(IMP.fw, IMP.fh))))).max(1e-6);
+  // the baked atlas runs top-down in v on both backends (frame row 0 and each frame's top at v = 0
+  // side of its cell, measured): flip into it
+  const at = (f: N): N => { const t: N = f.add(uv).mul(inv); return vec2(t.x, t.y.oneMinus()); };
+  return { tA: at(fA), tB: at(fB), mip: log2(texel).max(0), wa: V.w.x };
+}
+
+/** Depth prepass of the impostors: coverage only. */
+export function createImpostorDepthMaterial(atlas: ImpostorAtlas): THREE.MeshBasicNodeMaterial {
+  const m = new THREE.MeshBasicNodeMaterial();
+  m.name = 'forest-impostor-depth';
+  m.side = THREE.DoubleSide;
+  m.alphaTest = 0.5;
+  m.colorWrite = false;
+  m.fog = false;
+  const V = impVaryings();
+  m.positionNode = impostorPosition();
+  m.colorNode = vec4(0, 0, 0, impAlpha(atlas));
+  return m;
+}
+
+/** Coverage of an impostor pixel (depth and lit passes alike). */
+function impAlpha(atlas: ImpostorAtlas): N {
+  const V = impVaryings();
+  const t = impTaps();
+  const cover: N = texture(atlas.albedo, t.tA).level(t.mip).a.mul(t.wa.oneMinus()).add(texture(atlas.albedo, t.tB).level(t.mip).a.mul(t.wa));
+  // the mips average coverage away: give some back with distance so far crowns stay full
+  const a1: N = cover.mul(t.mip.mul(0.3).add(1));
+  const alpha: N = a1.sub(0.5).div(max(fwidth(a1), 0.0001)).add(0.5).clamp(0, 1);
+  return alpha.mul(step(ditherNoise(), V.m.y.sub(0.00001)));
+}
+
+/** The lit impostors: depth test against the prepass, no depth write. */
+export function createImpostorMaterial(atlas: ImpostorAtlas): THREE.MeshStandardNodeMaterial {
+  const m = new ForestMaterial();
+  m.name = 'forest-impostor';
+  m.side = THREE.DoubleSide;
+  m.metalness = 0;
+  m.depthWrite = false;
+  m.depthFunc = THREE.LessEqualDepth;
+  m.polygonOffset = true;
+  m.polygonOffsetFactor = -0.5;
+  m.polygonOffsetUnits = -2;
+  m.alphaTest = 0.5;
+  const V = impVaryings();
+  m.positionNode = impostorPosition();
 
   const pRough: N = property('float', 'csIRough');
   const pEmis: N = property('vec3', 'csIEmis');
@@ -246,46 +312,28 @@ export function createImpostorMaterial(atlas: ImpostorAtlas): THREE.MeshStandard
   const pN: N = property('vec3', 'csINormal');
 
   m.colorNode = Fn(() => {
-    const inv: N = vec2(1 / IMP.cols, 1 / IMP.rows);
-    const uv: N = vUV;
-    const wa: N = vW.x, we: N = vW.y;
-    // the elevation row is picked per pixel by a dither (a stipple only while the view crosses
-    // between rows); the two azimuth frames of that row are blended: four taps in all
-    const nE: N = fract(ditherNoise().add(0.5));
-    const hi: N = step(nE, we);
-    const fA: N = mix(vF0.xy, vF1.xy, hi), fB: N = mix(vF0.zw, vF1.zw, hi);
-    const tA: N = fA.add(uv).mul(inv), tB: N = fB.add(uv).mul(inv);
-    // explicit mip level: the frame switch makes the atlas uv jump between pixels
-    const texel: N = max(length(dFdx(uv.mul(vec2(IMP.fw, IMP.fh)))), length(dFdy(uv.mul(vec2(IMP.fw, IMP.fh))))).max(1e-6);
-    const mip: N = log2(texel).max(0);
-    const A: N = texture(atlas.albedo, tA).level(mip).mul(wa.oneMinus()).add(texture(atlas.albedo, tB).level(mip).mul(wa));
-    const B: N = texture(atlas.aux, tA).level(mip).mul(wa.oneMinus()).add(texture(atlas.aux, tB).level(mip).mul(wa));
-    // the mips average coverage away: give some back with distance so far crowns stay full
-    const cover: N = A.a;
-    const a1: N = cover.mul(mip.mul(0.3).add(1));
-    const alpha: N = a1.sub(0.5).div(max(fwidth(a1), 0.0001)).add(0.5).clamp(0, 1);
-    const k: N = float(1).div(cover.max(0.004));
-    const tint: N = treeTint(vM.x);
-    const albedo: N = A.rgb.mul(k).mul(tint).toVar();
+    const t = impTaps();
+    const A: N = texture(atlas.albedo, t.tA).level(t.mip).mul(t.wa.oneMinus()).add(texture(atlas.albedo, t.tB).level(t.mip).mul(t.wa));
+    const B: N = texture(atlas.aux, t.tA).level(t.mip).mul(t.wa.oneMinus()).add(texture(atlas.aux, t.tB).level(t.mip).mul(t.wa));
+    // the mips are premultiplied by coverage: divide it back out
+    const k: N = float(1).div(A.a.max(0.004));
+    const albedo: N = A.rgb.mul(k).mul(treeTint(V.m.x));
     const nx: N = B.x.mul(k).mul(2).sub(1), nz: N = B.y.mul(k).mul(2).sub(1);
     const nl: N = vec3(nx, sqrt(max(float(1).sub(nx.mul(nx)).sub(nz.mul(nz)), 0)), nz);
-    const nW: N = normalize(rotY(nl, vW.z));
+    const nW: N = normalize(rotY(nl, V.w.z));
     const ao: N = B.z.mul(k).clamp(0, 1);
     const pot: N = B.w.mul(k).clamp(0, 1);
-    const load: N = vW.w;
     const sh = snowShade(nW);
-    const c: N = snowCoverage(load, pot);
+    const c: N = snowCoverage(V.w.w, pot);
     const col: N = mix(albedo, sh.color, c).toVar();
     If(FU.lodTint.greaterThan(0.5), () => {
       col.mulAssign(vec3(0.5, 0.6, 1.7));
     });
-    const n: N = ditherNoise();
-    const keep: N = step(n, vM.y.sub(0.00001));
     pRough.assign(mix(0.76, 0.86, c));
     pEmis.assign(sh.emissive.mul(c));
     pAO.assign(mix(ao, 1, c.mul(0.6)));
     pN.assign(normalize(cameraViewMatrix.mul(vec4(nW, 0)).xyz));
-    return vec4(col, alpha.mul(keep));
+    return vec4(col, impAlpha(atlas));
   })();
   m.roughnessNode = pRough;
   m.emissiveNode = pEmis;

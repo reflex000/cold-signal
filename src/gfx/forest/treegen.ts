@@ -137,7 +137,7 @@ const SPRUCE: Species = {
   seed: 11,
   H: TREE_H,
   y0: 0.55,
-  step: 0.5,
+  step: 0.56,
   crownR: 2.35,
   // narrow subalpine cone, a little fuller in the lower third
   profile: (u) => Math.pow(1 - u, 0.92) * (1 + 0.12 * Math.sin(Math.PI * Math.min(1, u * 1.6))),
@@ -157,11 +157,11 @@ const FIR: Species = {
   seed: 23,
   H: TREE_H,
   y0: 0.45,
-  step: 0.41,
+  step: 0.5,
   crownR: 1.5,
   // a slender spire with a small skirt where the lowest branches layered in the snow
   profile: (u) => Math.pow(1 - u, 1.0) * (1 + 0.3 * Math.pow(1 - u, 8)),
-  perWhorl: (u) => (u < 0.6 ? 6 : u < 0.85 ? 5 : 4),
+  perWhorl: (u) => (u < 0.6 ? 5 : u < 0.85 ? 4 : 3),
   pitch: (u) => (u > 0.75 ? 0.3 : 0.06 - 0.1 * (1 - u)),
   droop: (u) => 0.06 + 0.22 * (1 - u),
   upturn: 0.1,
@@ -242,7 +242,7 @@ function addSpray(g: GeoBuilder, b: Branch, sp: Species, region: Region, widthK:
     const upN = norm(cross(tan, side)); // the card's up side
     const fl = upN[1] < 0 ? mul(upN, -1) : upN;
     const ao = (0.32 + 0.68 * Math.pow(Math.min(1, s), 0.7)) * (0.72 + 0.28 * b.u);
-    const pot = (0.28 + 0.5 * Math.sqrt(Math.min(1, s))) * (0.75 + 0.25 * b.u);
+    const pot = (0.18 + 0.46 * Math.sqrt(Math.min(1, s))) * (0.72 + 0.28 * b.u);
     const along = Math.min(1, s);
     for (let j = 0; j < 3; j++) {
       const x = (j - 1) * hw;
@@ -365,9 +365,9 @@ function buildConifer(sp: Species, lod: GeoLod): THREE.BufferGeometry {
   const g = new GeoBuilder();
   const full = lod === 'full';
   // trunk
-  const ringsFull = [-1.2, -0.3, 0.3, 1.0, 2.0, 3.2, 4.6, 6.2, 7.8, 9.4, 11.0, 12.4, 13.3, sp.H];
-  const ringsMid = [-1.2, 0.0, 1.0, 3.0, 6.0, 9.5, 12.5, sp.H];
-  addTrunk(g, sp.H, sp.trunkR, full ? 9 : 5, full ? ringsFull : ringsMid, 0.55, (y) => (y < 1.5 ? 0.7 : 0.5));
+  const ringsFull = [-1.2, -0.3, 0.4, 1.4, 3.0, 5.0, 7.4, 9.8, 12.0, 13.4, sp.H];
+  const ringsMid = [-1.2, 0.5, 4.0, 9.0, sp.H];
+  addTrunk(g, sp.H, sp.trunkR, full ? 8 : 5, full ? ringsFull : ringsMid, 0.55, (y) => (y < 1.5 ? 0.7 : 0.5));
 
   // whorls (the mid level keeps every other whorl, same branches, so hashes and variants agree)
   let w = 0;
@@ -392,14 +392,14 @@ function buildConifer(sp: Species, lod: GeoLod): THREE.BufferGeometry {
       };
       const rnd = (i: number): number => h01(sp.seed + 6 + i, w, k);
       const wk = full ? 1 : 1.42;
-      addSpray(g, b, sp, full ? sp.spray : sp.sprayMid, wk, full ? 4 : 3);
-      if (sp.curtain > 0 && b.L > 0.55 && u < 0.86) addCurtain(g, b, sp, full ? R.curtain : R.curtainMid, full ? 1 : 1.3, full ? 3 : 2);
-      if (sp.curtain === 0 && full && b.L > 0.45 && k % 2 === 0) {
+      addSpray(g, b, sp, full ? sp.spray : sp.sprayMid, wk, full ? 3 : 2);
+      if (sp.curtain > 0 && b.L > 0.55 && u < (full ? 0.86 : 0.7)) addCurtain(g, b, sp, full ? R.curtain : R.curtainMid, full ? 1 : 1.3, 2);
+      if (sp.curtain === 0 && full && b.L > 0.6 && u < 0.6 && k % 2 === 0) {
         // fir: a second, steeper spray rolled about the branch fills the side view
         const b2: Branch = { ...b, az: b.az + 0.12, p0: b.p0 - 0.32, L: b.L * 0.82, hash: b.hash };
         addSpray(g, b2, { ...sp, arch: -0.45 }, sp.spray, 0.7, 3);
       }
-      addSlab(g, b, sp, full ? 1 : 1.3, full ? 5 : 3, full ? 5 : 3, rnd);
+      addSlab(g, b, sp, full ? 1 : 1.3, full ? 3 : 2, full && sp === SPRUCE ? 5 : 3, rnd);
       if (u < 0.55) addDeadTwig(g, b);
     }
   }
@@ -468,14 +468,14 @@ function buildSnag(lod: GeoLod): THREE.BufferGeometry {
 
 function buildProxy(sp: Species): THREE.BufferGeometry {
   const g = new GeoBuilder();
-  const sides = 10;
+  const sides = 8;
   // trunk up to where the crown hides it
   addTrunk(g, sp.H, sp.trunkR, 5, [-1.0, 3.0, sp.H * 0.8], 0.3, () => 0.5);
-  const tiers = sp === FIR ? 9 : 8;
+  const tiers = sp === FIR ? 7 : 6;
   const span = sp.H - sp.y0;
   for (let t = 0; t < tiers; t++) {
     const yb = sp.y0 + (t / tiers) * span;
-    const yt = Math.min(sp.H, yb + (span / tiers) * 1.45);
+    const yt = Math.min(sp.H, yb + (span / tiers) * 1.4);
     const u = (yb - sp.y0) / span;
     // the branches droop: the envelope at a tier's foot reaches the radius of the whorls above it
     const rb = sp.crownR * sp.profile(Math.min(1, u + 0.04)) * 0.8;
@@ -490,9 +490,11 @@ function buildProxy(sp: Species): THREE.BufferGeometry {
         g.vert([c * r, y, s * r], [c, 0.5, s], [k / sides, e], [yb, 0.5, encodePart(PART.FOLIAGE, a), e], [u, 1, 0, 0]);
       }
     }
+    // outward-facing; a quarter of the panels left out lets light through the crown
     for (let k = 0; k < sides; k++) {
+      if (h01(sp.seed + 40, t, k) < 0.25) continue;
       const a = first + k;
-      g.quad(a, a + 1, a + sides + 2, a + sides + 1);
+      g.quad(a, a + sides + 1, a + sides + 2, a + 1);
     }
   }
   return g.build();
