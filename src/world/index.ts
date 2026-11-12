@@ -79,7 +79,7 @@ export function createWorld(seed: number, onProgress?: (p: number, label: string
     h, seed, stops, avoid,
     prefer: [{ ax: scar.ax, az: scar.az, bx: scar.bx, bz: scar.bz, w: 10 }],
   });
-  applyPads(h, terr.pads);
+  applyPads(h, terr.pads, true);
   flattenLake(h, seed);
 
   const heightAt = (x: number, z: number): number => sampleGrid(h, x, z);
@@ -401,6 +401,7 @@ export function createWorld(seed: number, onProgress?: (p: number, label: string
     },
     forestAt, slopeAt, trailAt: (x, z) => maskAt(3, x, z), onIce: onLake,
     inClearing: (x, z, pad) => clearGrid.has(x, z, pad), trees, path: route.path,
+    scar: { ax: scar.ax, az: scar.az, bx: scar.bx, bz: scar.bz },
   });
 
   const props: PropInst[] = st.props;

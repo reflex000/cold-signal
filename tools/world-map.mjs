@@ -113,29 +113,29 @@ for (let py = 0; py < S; py++) {
     const nl = Math.sqrt(gx * gx + 1 + gz * gz);
     const shade = Math.max(0, (-gx * lightX + lightY - gz * lightZ) / nl);
     const slope = (Math.atan(Math.sqrt(gx * gx + gz * gz)) * 180) / Math.PI;
-    // base: snow, cooler and greyer with height
-    const t = Math.min(1, Math.max(0, (hc - 60) / 520));
-    let r = 226 - 26 * t, g = 230 - 20 * t, b = 236 - 6 * t;
+    // snow: cream where lit, blue-grey in shade, a little greyer up high
+    const sh = Math.min(1, Math.max(0, (shade - 0.25) / 0.75));
+    const t = Math.min(1, Math.max(0, (hc - 60) / 600));
+    let r = 150 + 92 * sh - 8 * t, g = 163 + 76 * sh - 6 * t, b = 188 + 46 * sh;
     // forest
     const f = mAt(0, x, z);
-    r += (52 - r) * f * 0.62; g += (78 - g) * f * 0.62; b += (60 - b) * f * 0.62;
-    // rock
-    const rk = mAt(1, x, z);
-    r += (96 - r) * rk * 0.85; g += (92 - g) * rk * 0.85; b += (90 - b) * rk * 0.85;
-    // slope tint beyond walkable
-    if (slope > 40) { r = r * 0.7 + 60; g = g * 0.6 + 30; b = b * 0.6 + 30; }
-    else if (slope > 30) { r = r * 0.85 + 30; g = g * 0.85 + 20; b = b * 0.9; }
+    r += (34 + 30 * sh - r) * f * 0.7; g += (58 + 34 * sh - g) * f * 0.7; b += (48 + 26 * sh - b) * f * 0.7;
+    // bare rock: near black in shade, warm grey where lit
+    const rk = Math.max(mAt(1, x, z), slope > 38 ? Math.min(1, (slope - 38) / 10) : 0);
+    r += (52 + 108 * sh - r) * rk * 0.9; g += (49 + 98 * sh - g) * rk * 0.9; b += (48 + 90 * sh - b) * rk * 0.9;
     // trail
     const tr = mAt(3, x, z);
-    r += (200 - r) * tr * 0.35; g += (170 - g) * tr * 0.35; b += (120 - b) * tr * 0.35;
+    r += (210 - r) * tr * 0.3; g += (180 - g) * tr * 0.3; b += (130 - b) * tr * 0.3;
     // lake and ice thickness
     const ice = W.iceAt(x, z);
     if (ice > 0) {
       const k = Math.min(1, ice / 0.6);
-      r = 60 + 150 * k; g = 90 + 130 * k; b = 140 + 100 * k;
+      r = 70 + 140 * k; g = 100 + 125 * k; b = 150 + 95 * k;
       if (ice < 0.12) { r = 40; g = 55; b = 95; }
     }
-    let k = 0.42 + 0.78 * shade;
+    let k = ice > 0 ? 1 : 1.0;
+    // unwalkable ground: a faint hatch
+    if (slope > 42 && ice <= 0 && (px + py) % 5 === 0) { r *= 0.8; g *= 0.62; b *= 0.62; }
     // contours
     const c10 = Math.floor(hc / 10), c10x = Math.floor(hAt(x + MPP, z) / 10), c10z = Math.floor(hAt(x, z + MPP) / 10);
     if (ice <= 0 && (c10 !== c10x || c10 !== c10z)) {

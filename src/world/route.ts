@@ -271,7 +271,7 @@ function pullStraight(g: Grid, h: Float32Array, pts: { x: number; z: number }[])
   const out = [pts[0]];
   let i = 0;
   while (i < pts.length - 1) {
-    let j = Math.min(pts.length - 1, i + 30);
+    let j = Math.min(pts.length - 1, i + 13); // short chords: a trail bends with the ground
     while (j > i + 1 && !segmentOk(g, h, pts[i].x, pts[i].z, pts[j].x, pts[j].z, GRADE_MAX * 0.94)) j--;
     out.push(pts[j]);
     i = j;
@@ -412,6 +412,37 @@ function carve(h: Float32Array, seed: number, pts: { x: number; z: number }[], n
     }
   }
   void seed;
+}
+
+/** Distance from a point to a dense polyline, through a bucket grid of its points (approximate to
+ * half the point spacing). */
+export function pathDistance(path: { x: number; z: number }[]): (x: number, z: number) => number {
+  const C = 40, GN = Math.ceil((EXT * 2) / C);
+  const cells: number[][] = [];
+  for (let i = 0; i < GN * GN; i++) cells.push([]);
+  for (let k = 0; k < path.length; k++) {
+    const p = path[k];
+    const i = Math.floor((p.x + EXT) / C), j = Math.floor((p.z + EXT) / C);
+    if (i >= 0 && j >= 0 && i < GN && j < GN) cells[j * GN + i].push(k);
+  }
+  return (x, z) => {
+    const ci = Math.floor((x + EXT) / C), cj = Math.floor((z + EXT) / C);
+    let best = Infinity;
+    for (let r = 0; r < 10; r++) {
+      for (let j = cj - r; j <= cj + r; j++) {
+        for (let i = ci - r; i <= ci + r; i++) {
+          if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== r) continue;
+          if (i < 0 || j < 0 || i >= GN || j >= GN) continue;
+          for (const k of cells[j * GN + i]) {
+            const d = dlen(path[k].x - x, path[k].z - z);
+            if (d < best) best = d;
+          }
+        }
+      }
+      if (best < r * C) break;
+    }
+    return best;
+  };
 }
 
 // ------------------------------------------------------------------------------------------

@@ -152,9 +152,15 @@ export function buildFields(inp: FieldInput): Fields {
     }
   }
 
+  const wl = wf.lee, we = wf.exposure, wh = wf.hollow, ww2 = wf.windward;
   for (let j = 0; j < N; j++) {
     const z = -EXT + j * CELL;
     const jm = j > 0 ? j - 1 : j, jp = j < N - 1 ? j + 1 : j;
+    const inRav = z > L.RAVINE_TOP && z < 800;
+    const ravX = inRav ? L.ravineX(z) : 0, ravW = inRav ? L.ravineHalfFloor(z) : 0;
+    const fj = j / 4;
+    const cj = Math.min(CN - 2, Math.floor(fj));
+    const v = fj - cj;
     for (let i = 0; i < N; i++) {
       const x = -EXT + i * CELL;
       const k = j * N + i;
@@ -169,19 +175,22 @@ export function buildFields(inp: FieldInput): Fields {
       if (ldx > -180 && ldx < 180 && ldz > -180 && ldz < 180) sdf = L.lakeSdf(x, z, seed);
       const ice = sdf < 2 ? Math.max(0, Math.min(1, 0.5 - sdf / 2)) : 0;
       // wind fields (coarse, interpolated)
-      const fi = i / 4, fj = j / 4;
-      const ci = Math.min(CN - 2, Math.floor(fi)), cj = Math.min(CN - 2, Math.floor(fj));
-      const u = fi - ci, v = fj - cj;
+      const fi = i / 4;
+      const ci = Math.min(CN - 2, Math.floor(fi));
+      const u = fi - ci;
       const q = cj * CN + ci;
-      const lerp4 = (a: Float32Array) => a[q] + (a[q + 1] - a[q]) * u + (a[q + CN] - a[q]) * v + (a[q] - a[q + 1] - a[q + CN] + a[q + CN + 1]) * u * v;
-      const lee = lerp4(wf.lee), exp = lerp4(wf.exposure), hol = lerp4(wf.hollow), ww = lerp4(wf.windward);
+      const w00 = (1 - u) * (1 - v), w10 = u * (1 - v), w01 = (1 - u) * v, w11 = u * v;
+      const lee = wl[q] * w00 + wl[q + 1] * w10 + wl[q + CN] * w01 + wl[q + CN + 1] * w11;
+      const exp = we[q] * w00 + we[q + 1] * w10 + we[q + CN] * w01 + we[q + CN + 1] * w11;
+      const hol = wh[q] * w00 + wh[q + 1] * w10 + wh[q + CN] * w01 + wh[q + CN + 1] * w11;
+      const ww = ww2[q] * w00 + ww2[q + 1] * w10 + ww2[q + CN] * w01 + ww2[q + CN + 1] * w11;
       // bare rock: steep ground, and scoured ground above the trees
       let rock = smooth01(TAN32 + 0.04, TAN44, g);
       const scour = smooth01(0.45, 0.85, exp) * smooth01(335, 390, hv) * 0.75;
       if (scour > rock) rock = scour;
       if (ice > 0) rock *= 1 - ice;
       // forest
-      const alt = hv + 16 * nf.at(x / 90, z / 90);
+      const alt = hv > L.TREE_LINE - 100 && hv < L.TREE_LINE + 20 ? hv + 16 * nf.at(x / 90, z / 90) : hv;
       let f = 1 - smooth01(L.TREE_LINE - 80, L.TREE_LINE + 4, alt);
       if (f > 0) {
         f *= 1 - smooth01(TAN30, TAN40, g);
@@ -197,8 +206,8 @@ export function buildFields(inp: FieldInput): Fields {
         if (f < 0) f = 0;
       }
       // the ravine floor is a frozen stream: few trees on it
-      if (z > L.RAVINE_TOP && z < 800) {
-        const rd = Math.abs(x - L.ravineX(z)) - L.ravineHalfFloor(z);
+      if (inRav && f > 0) {
+        const rd = Math.abs(x - ravX) - ravW;
         if (rd < 3) f *= 0.2 + 0.8 * smooth01(-2, 3, rd);
       }
       // loose snow

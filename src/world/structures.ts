@@ -7,6 +7,7 @@ import { hash01 } from '../core/rng';
 import { blueprint, placeBlueprint, placeSite, SITES, toWorld, type PlacedSolid, type Pose } from './blueprints';
 import { dcos, dlen, dsin, PI, TAU } from './dmath';
 import * as L from './layout';
+import { pathDistance } from './route';
 import type { Floor, PoiId, PropInst, ShelterVol } from './types';
 
 export interface Circle { x: number; z: number; r: number }
@@ -137,7 +138,17 @@ export function buildStructures(inp: StructureInput): Structures {
     const s = scarLine();
     const ux = (s.bx - s.ax) / s.len, uz = (s.bz - s.az) / s.len; // from the break toward the touchdown
     const px = -uz, pz = ux; // across
-    const along = (t: number, off: number) => ({ x: s.ax + ux * t + px * off, z: s.az + uz * t + pz * off });
+    const dRoute = pathDistance(inp.path);
+    // a point on the scar, pushed sideways off the trail if it would land on it
+    const along = (t: number, off: number) => {
+      let x = s.ax + ux * t + px * off, z = s.az + uz * t + pz * off;
+      for (let k = 0; k < 8 && dRoute(x, z) < 3.6; k++) {
+        off += off >= 0 ? 2 : -2;
+        x = s.ax + ux * t + px * off;
+        z = s.az + uz * t + pz * off;
+      }
+      return { x, z };
+    };
     const yawAlong = L.PLACES.wreck.yaw; // the fuselage's heading
     const r = (k: number) => hash01(seed, 7100, k);
     // the torn-off wing and an engine: big pieces, off to the sides

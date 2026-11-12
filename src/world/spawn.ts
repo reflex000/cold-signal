@@ -11,6 +11,7 @@ import type { ItemId, PartId, Surface } from '../sim/types';
 import { hash01 } from '../core/rng';
 import type { Pose } from './blueprints';
 import { dcos, dlen, dsin, PI, TAU, wrapPi } from './dmath';
+import { pathDistance } from './route';
 import type { TreeObj } from './scatter';
 import type { PackDef, PoiId, SpawnCrate, SpawnDef, SpawnDevice, SpawnItem } from './types';
 
@@ -28,6 +29,8 @@ export interface SpawnCtx {
   inClearing(x: number, z: number, pad: number): boolean;
   trees: TreeObj[];
   path: { x: number; z: number }[];
+  /** The skid scar, from the fuselage break (a) to the touchdown point (b). */
+  scar: { ax: number; az: number; bx: number; bz: number };
 }
 
 export interface SpawnOut {
@@ -35,36 +38,6 @@ export interface SpawnOut {
   defs: SpawnDef[];
   packs: PackDef[];
   parts: Record<PartId, { poi: PoiId; x: number; y: number; z: number }>;
-}
-
-/** Distance from a point to the route, via a bucket grid of the path points. */
-function routeDistance(path: { x: number; z: number }[]): (x: number, z: number) => number {
-  const C = 40, EXT = 1024, GN = Math.ceil((EXT * 2) / C);
-  const cells: number[][] = [];
-  for (let i = 0; i < GN * GN; i++) cells.push([]);
-  for (let k = 0; k < path.length; k += 2) {
-    const p = path[k];
-    const i = Math.floor((p.x + EXT) / C), j = Math.floor((p.z + EXT) / C);
-    if (i >= 0 && j >= 0 && i < GN && j < GN) cells[j * GN + i].push(k);
-  }
-  return (x, z) => {
-    const ci = Math.floor((x + EXT) / C), cj = Math.floor((z + EXT) / C);
-    let best = Infinity;
-    for (let r = 0; r < 8; r++) {
-      for (let j = cj - r; j <= cj + r; j++) {
-        for (let i = ci - r; i <= ci + r; i++) {
-          if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== r) continue;
-          if (i < 0 || j < 0 || i >= GN || j >= GN) continue;
-          for (const k of cells[j * GN + i]) {
-            const d = dlen(path[k].x - x, path[k].z - z);
-            if (d < best) best = d;
-          }
-        }
-      }
-      if (best < r * C) break;
-    }
-    return best;
-  };
 }
 
 export function buildSpawn(ctx: SpawnCtx): SpawnOut {
@@ -181,9 +154,33 @@ export function buildSpawn(ctx: SpawnCtx): SpawnOut {
   };
 
   // --- scattered wood and sticks
-  const distRoute = routeDistance(ctx.path);
+  const distRoute = pathDistance(ctx.path);
   const okSpot = (x: number, z: number, y: number, r: number) =>
     ctx.walkable(x, z) && !ctx.onIce(x, z) && ctx.trailAt(x, z) < 0.35 && !ctx.inClearing(x, z, 1) && !ctx.blocked(x, y + 0.2, z, r);
+
+  // luggage burst open along the skid scar
+  {
+    const sc = ctx.scar;
+    const len = dlen(sc.bx - sc.ax, sc.bz - sc.az);
+    const ux = (sc.bx - sc.ax) / len, uz = (sc.bz - sc.az) / len;
+    const loots: { item: ItemId; n: number }[][] = [
+      [{ item: 'matches', n: 2 }, { item: 'flare', n: 1 }],
+      [{ item: 'ration', n: 1 }, { item: 'tinder', n: 1 }],
+      [{ item: 'bandage', n: 1 }, { item: 'cell', n: 1 }],
+    ];
+    const at = [36, 87, 141];
+    for (let k = 0; k < 3; k++) {
+      for (let tries = 0; tries < 40; tries++) {
+        const t = at[k] + (hash01(S, 51, k * 64 + tries) - 0.5) * 16;
+        const off = (hash01(S, 52, k * 64 + tries) - 0.5) * 14;
+        const x = sc.ax + ux * t - uz * off, z = sc.az + uz * t + ux * off;
+        const y = ctx.groundAt(x, z, 1e4).y;
+        if (!ctx.walkable(x, z) || ctx.blocked(x, y + 0.2, z, 0.7) || distRoute(x, z) < 3.5) continue;
+        defs.push({ kind: 'crate', type: 'luggage', loot: loots[k], x, y, z, yaw: wrapPi(hash01(S, 53, k) * TAU) });
+        break;
+      }
+    }
+  }
   const trees = ctx.trees;
   // snags and deadfall for the axe, mostly within reach of the route, spread out
   const wood: { x: number; z: number }[] = [];

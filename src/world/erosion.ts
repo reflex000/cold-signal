@@ -18,6 +18,8 @@ export interface ErodeOptions {
   k: number;
   /** Diffusion per iteration as a fraction of the 4-neighbour Laplacian (stable below 0.25). */
   diffuse: number;
+  /** Optional per-cell factor on both (0 = leave this cell alone: a carved feature to keep). */
+  hardness?: Float32Array;
 }
 
 /** Erode `h` (n x n, `cell` metres apart) in place. Border cells are fixed outlets. */
@@ -92,11 +94,13 @@ export function erode(h: Float64Array, n: number, cell: number, o: ErodeOptions)
       for (let k = 0; k < 8; k++) if (w[k] > 0) area[c + of[k]] += a * w[k];
     }
     // implicit stream power (m = 0.5, n = 1) toward the steepest receiver, lowest cells first
+    const hard = o.hardness;
     for (let p = 0; p < size; p++) {
       const c = order[p];
       const r = rcv[c];
       if (r < 0) continue;
-      const f = (kc * Math.sqrt(area[c])) / rdist[c];
+      const f = (kc * (hard ? hard[c] : 1) * Math.sqrt(area[c])) / rdist[c];
+      if (f <= 0) continue;
       h[c] = (h[c] + f * h[r]) / (1 + f);
     }
     // hillslope diffusion
@@ -105,7 +109,7 @@ export function erode(h: Float64Array, n: number, cell: number, o: ErodeOptions)
       for (let j = 1; j < n - 1; j++) {
         for (let i = 1; i < n - 1; i++) {
           const c = j * n + i;
-          tmp[c] = h[c] + d * (h[c - 1] + h[c + 1] + h[c - n] + h[c + n] - 4 * h[c]);
+          tmp[c] = h[c] + d * (hard ? hard[c] : 1) * (h[c - 1] + h[c + 1] + h[c - n] + h[c + n] - 4 * h[c]);
         }
       }
       for (let j = 1; j < n - 1; j++) for (let i = 1; i < n - 1; i++) h[j * n + i] = tmp[j * n + i];

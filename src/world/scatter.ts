@@ -88,10 +88,10 @@ export function scatterTrees(inp: ScatterInput): TreeObj[] {
       const z = X0 + (cj + hash01(S + 1, ci, cj)) * C;
       const f = maskAt(masks, 0, x, z);
       if (f < 0.02) continue;
-      const p = 0.82 * f * Math.sqrt(f);
+      const p = 0.53 * f * Math.sqrt(f);
       const roll = hash01(S + 2, ci, cj);
       // a few saplings and young trees seed into the edges of the forest
-      const edge = f < 0.35 && roll < p + 0.06 * smooth01(0.02, 0.2, f);
+      const edge = f < 0.35 && roll < p + 0.035 * smooth01(0.02, 0.2, f);
       if (roll >= p && !edge) continue;
       if (maskAt(masks, 3, x, z) > 0.25) continue; // the packed trail
       if (grad(h, x, z) > TAN40) continue;
@@ -99,7 +99,7 @@ export function scatterTrees(inp: ScatterInput): TreeObj[] {
       const kr = hash01(S + 3, ci, cj);
       const hv = heightAt(x, z);
       let kind: TreeInst['kind'];
-      if (edge || kr < 0.05 + 0.22 * (1 - f)) kind = 'sapling';
+      if (edge || kr < 0.04 + 0.14 * (1 - f)) kind = 'sapling';
       else if (kr > 0.97) kind = 'snag';
       else kind = hash01(S + 4, ci, cj) < 0.3 + 0.45 * smooth01(170, 330, hv) ? 'fir' : 'pine';
       const minD = kind === 'sapling' ? 1.3 : 2.4;
