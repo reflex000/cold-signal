@@ -8,7 +8,7 @@ import { texture, uniform } from 'three/tsl';
 const blank = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
 blank.needsUpdate = true;
 
-export const U = {
+const _U = {
   time: uniform(0),
   // wind
   windDir: uniform(new THREE.Vector2(1, 0)), // world XZ unit vector the air moves toward
@@ -43,6 +43,12 @@ export const U = {
   // screen (written by the engine on resize)
   resolution: uniform(new THREE.Vector2(1, 1)), // drawing-buffer size in pixels
 };
+
+/**
+ * The shared uniforms. Members are typed `any` on purpose: TSL node typings are strict about
+ * colour vs vec3 and get in the way; treat every member as a TSL node with a `.value`.
+ */
+export const U = _U as { [K in keyof typeof _U]: any };
 
 /** Plain JS mirror for code that is not a shader (particles, audio, exposure, UI). */
 export const ATMOS = {
