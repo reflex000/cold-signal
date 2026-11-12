@@ -30,6 +30,29 @@
 //   ground), sky exposure for snow (a part under another part gets less snow), and a snow push
 //   weight (welded, so caps of snow lift without opening cracks).
 // - Same seed, same model. Draw all randomness from b.rng.
+// - The material id is interpolated across a triangle. Change `mat` per vertex (part.each) only
+//   between neighbouring ids (BARK-WOOD, METAL-PAINT, CLOTH-PLASTIC); anything else gets its own
+//   part (charred wood is all MAT.CHAR, painted bark-brown where unburnt). Glass is per part.
+// - Emissive is scene radiance (embers 0.3 to 1, lamp lenses 2 to 8, beacons 10 to 30), not a
+//   brightness knob: the same value must hold by day and by night.
+// - Snow is the material's job: never paint snow white. Lower `snow` (ink) under roofs and near
+//   heat; build() already shelters parts under other parts and faces turned to the ground.
+//
+// BUILDER, in one screen (every primitive returns a Part, painted with the current ink):
+//   solids    box(w,h,d,{bevel})  plank(len,w,t)  extrude(polyXZ,h,{bevel,capBevel,rows})
+//             lathe(profile[r,y],{sides,closed,arc:[a0,a1]})  cyl(r,h,{r2,rows})  cone  tube(ro,ri,h)
+//             sphere(r|[rx,ry,rz])  capsule(r,h)  dome(r,h,sides)  pillow(w,h,d,{round,bulge})  (soft)
+//             rock(r,{detail,rough,facet,flat,squash})  mesh(points,faces,smooth)
+//   organic   log(len,r,{r2,ends:['saw'|'break'|'taper',..],bend,gnarl,peel,knots,bark,wood})
+//             cloth(w,h,{billow,wrinkle,tear,tearEdges,thickness})  (hangs from y = 0, both faces)
+//   along a path   sweep(radius|polygon, path, {closed,scale,twist,up})  pipe(path,r)  strap(path,w,t)
+//             cable(a,b,sag,r)  torus(R,r)    paths: Path.fillet / catenary / arc / spline
+//   lettering stencil(text,h,{align,weight})  (flat strokes facing +Z: crate marks, signs, numbers)
+//   Part      move rotX/Y/Z rot rotAxis scale aim(dir,at) span(a,b) | bend taper twist crumple
+//             noise dent warp recalcNormals flip | paint tint shade each sway ghost | clone mirror merge
+//   Builder   ink(paint) group(fn) part(name,fn,pivot,{axis,open}) anchor(name,at,yaw,extra)
+//             emitter(type,at,{dir,size,...}) light(at,{color,intensity,range,flicker}) array each
+//             build({ao,aoRadius,ground})  ->  ModelDef
 //
 // VERTEX LAYOUT of the geometries build() returns (read by material.ts):
 //   position  f32 x3
@@ -2052,7 +2075,9 @@ export class Builder {
           for (let k = 0; !hit && k < above.length; k++) hit = rayHits(above[k], x, y, z, s[0], s[1], s[2]);
           if (!hit) open += s[3];
         }
-        sky[i] = open;
+        // A face turned to the ground has never seen the sky; the shader would never snow on it
+        // in this pose anyway, but a lid or door that swings open must not show snow underneath.
+        sky[i] = open * sat(ny * 2.5 + 1.25);
       }
       bakedAO.push(ao);
       bakedSky.push(sky);

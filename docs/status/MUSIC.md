@@ -1,52 +1,78 @@
 # MUSIC — handoff note
 
-Owner files: src/audio/music/** (score.ts, instruments.ts, mixer.ts, index.ts), dev/music.html, dev/music.ts,
-tools/music-check.mjs. Do not touch the rest of src/audio (AUDIO engineer).
+Owner files: src/audio/music/** (index.ts, score.ts, instruments.ts, mixer.ts, score.test.ts), dev/music.html,
+dev/music.ts, tools/music-check.mjs. Do not touch the rest of src/audio (AUDIO engineer).
 
-## State
-- Session 2 started (2026-11-12). Files from session 1 exist on disk; no earlier handoff note was found.
-- All files exist and type-check clean. src/audio/index.ts (AUDIO) already calls createMusic(ctx, engine.bus.music),
-  setMood, update(dt), dispose().
-- Conductor (index.ts): added clash avoidance. A new mood's first phrase is held back (<= MAX_CLEAR 6 s) until no
-  note of the mood being left that is a semitone away from one of its notes is still sounding (old note counts until
-  its end or its section's fade is 16 dB down = `quiet`). `sounding` now stores { n: MusicNote, sec: Section }.
-  Playing has `start`; state() reports a rest while held back.
-- First check run (before fixes): loud moods (attack, holdout, rescue) hit the ceiling at -10.5 dBFS (pre-ceiling
-  ~-7); whiteout/tower ~-11; night only -33 peak; calm silence 54%, night 62%. Spectrograms showed: glass full-depth
-  mono beating; drum a continuous 50-100 Hz wall at 120 bpm; cello written below C2 (A1/Bb1) in whiteout/holdout;
-  piano bass notes ringing over each other (pedal always down); low semitone clusters in attack; holdout full = mud.
-- Fixes made: glass pair 0.66/0.34; drum decay = clamp(0.3*dur, 0.075, 0.13+0.1*vel); cello pedals moved into
-  range; score parser computes ScoreNote.damp (pedal(): damper falls when the line moves by step / repeats, or on
-  any next note below C3) -> conductor passes NoteOn.hold = damp*beat + PEDAL(0.1 s) to the piano; attack clusters
-  revoiced (seconds in the middle, bare fifth in the bass); holdout s4 piano moved up to bell strikes; calm and
-  night rests +4 / +2 beats. MusicOptions.mute (players left out) added for level analysis.
-- dev/music.ts render(): options { mute, image:false }, returns bands (energy share by band) and poly; drum strokes
-  drawn as ticks in the analysis lanes and live roll.
-- Scratch tool (not in project): per-player solo levels per mood, used to set trims. Findings: every player of
-  attack/holdout/rescue exceeded -14 alone; stalked's pont sat 13 dB (peak) / 23 dB (rms) under the drum; bands:
-  nothing harsh (>2.5 kHz < 0.5 %), energy mostly 60-250 Hz.
-- MusicOptions.raw (and render({ raw })) leaves the ceiling out so true peaks can be measured. Raw findings: attack's
-  piano clusters at f peaked -7.3 alone (hammer knocks of 4 notes adding up); holdout full's brass f triads -7.3
-  (9 saws through the mute's +7 dB peak); rescue is a sum of many players near -15 each.
-- Fixes: piano knock 1.1*amp -> 0.55*amp (decay 32 ms); attack piano written ~6 dB lower; attack drum accents
-  (f mp mf mp); drum slap is band-passed (190+380*vel Hz) instead of low-passed (no sub rumble); brass strip
-  0.6 -> 0.42; holdout s4b brass mf; tower/rescue ice written p; stalked p4 pont back to p/pp, pont factor 0.7.
-- Levels (per-mood `level` in the score), current: title -2, calm +1.5, cold -1, night +6, stalked -2, attack -10,
-  whiteout -7, shelter +2, tower -6, holdout -10.5, rescue -8.5, death 0. Ice strip 0.3 -> 0.4. Raw (no ceiling)
-  peaks at full intensity before the last tweaks: attack -14.3, tower -14.9, rescue -15.1, stalked -15.2;
-  holdout s4 drum then written mf/p and whiteout brass ppp to bring holdout/whiteout full (-12.7) down. Targets: loud moods ~-14 dBFS peak at full
-  intensity, middle moods -15/-16, quiet -18/-20, night ~-25. Kit draws from its own rnd stream (seed ^ 0x2545f491);
-  muted lines still draw conductor rnd so solo renders keep the full mix's timing.
-- music-check.mjs now prints low/body/bright energy shares and poly; fails on peak > -12.5, peak < -32 (lost
-  under the wind), calm/night silence < 60 %.
-- Bench page: chord names in one label per player; wider margin right of the now line.
+## State (session 2, 2026-11-12): complete
+- Everything type-checks; score tests pass; `node tools/music-check.mjs` exits 0 with a clean page console.
+- src/audio/index.ts (AUDIO) already calls createMusic(ctx, engine.bus.music), setMood, update(dt), dispose().
+- Spectrograms read and judged: shots/music_<mood>.png, music_<mood>_full.png, music_journey*.png.
 
-## Remaining (priority order)
-1. Type-check own files (npx tsc --noEmit -p . | grep audio/music|dev/music).
-2. Run node tools/music-check.mjs, read numbers + spectrograms in shots/music_*.png.
-3. Iterate on moods that are indistinct, harsh, muddy or busy; confirm peaks ~-14 dBFS, no clipping, silence fractions.
-4. Bench page dev/music.html: buttons per mood, intensity slider, active-player visual; console clean.
+## Remaining (optional polish only)
+1. Listen in the full game against the real wind bed (all judging so far is numbers + spectrograms, headless, muted).
+2. If the game sets intensities in a narrow band, retune per-mood `level` trims in score.ts.
+
+## Decisions and API facts
+- createMusic(ctx: BaseAudioContext, out, opts?) -> { setMood, update, dispose, state }. MusicOptions: seed, onNote,
+  mute (players left out), raw (no ceiling: true peaks for analysis). The game passes no options.
+- Conductor schedules LOOK = 0.45 s ahead on ctx.currentTime; notes later than LATE = 0.15 s are dropped (hidden tab).
+  Mood changes: at phrase boundaries (moods without rests continue on the next downbeat), forced after the old
+  mood's `wait`, `enter now` interrupts (attack, death), `leave now` cuts out (attack) then 2.5 s breath.
+- Clash guard: a new mood's first phrase is held back (<= MAX_CLEAR 6 s) until no note of an outgoing section a
+  semitone (mod 12) away from one of its notes is still sounding (old note counts until its end or its section's
+  fade is 16 dB down, `quiet`). `sounding` holds { n: MusicNote, sec: Section }; Playing.start for state().
+- Piano pedalling: score parser computes ScoreNote.damp (pedal(): damper falls when the line moves by step or
+  repeats, or on any next note below C3); conductor passes NoteOn.hold = damp*beat + PEDAL (0.1 s).
+- Conductor rnd = mulberry(seed); players draw from mulberry(seed ^ 0x2545f491); muted lines still draw conductor
+  rnd, so solo renders keep the full mix's timing.
+- Levels: per-mood `level` in the score: title -2, calm +1.5, cold -1, night +6, stalked -2, attack -10,
+  whiteout -7, shelter +2, tower -6, holdout -10.5, rescue -8.5, death 0. Strips: brass 0.42, ice 0.4. MASTER 0.5,
+  ceiling linear to -14 dBFS, soft to -10.5.
+- Instrument changes this session: glass pair 0.66/0.34 (mono beating dips ~10 dB, not to zero); drum decay
+  clamp(0.3*dur, 0.075, 0.13+0.1*vel), slap band-passed 190+380*vel Hz; piano knock 0.55*amp; cello onset scoop
+  and slow pitch wander; brass lip-up; pont factor 0.7.
+- Score changes: cello pedals in range (no A1/Bb1); attack clusters revoiced (seconds mid-range, fifth in the bass),
+  attack piano ~6 dB lower, drum accents; holdout s4 piano as high bells, drum mf/p, brass mf; calm/night rests
+  longer; stalked pont p; cold pull2 glass up an octave; tower/rescue ice p; whiteout brass ppp.
+
+## Measurements (final run, 60 s offline, seed 417)
+At intensity 0.5, peak dBFS / silence: title -15.5 / 16 %, calm -18.1 / 67 %, cold -15.7 / 51 %, night -23.0 / 67 %,
+stalked -15.3 / 15 %, attack -15.2 / 32 %, whiteout -16.8 / 1 %, shelter -18.1 / 49 %, tower -16.9 / 21 %,
+holdout -18.8 / 0 %, rescue -16.2 / 21 %, death -16.0 / 64 %. Full intensity: attack -14.3, holdout -13.7,
+rescue -14.6, tower -14.9, whiteout -13.2, stalked -14.2. Energy above 2.5 kHz < 1 % everywhere (nothing harsh).
 
 ## Test commands
 - npx tsc --noEmit -p . 2>&1 | grep -E "audio/music|dev/music"
-- node tools/music-check.mjs   (renders 60 s per mood offline in headless Chrome; writes shots/music_*.png)
+- npx vitest run src/audio/music/score.test.ts
+- node tools/music-check.mjs [--moods a,b] [--secs 60] [--intensity 0.5] [--wav 1]   (~10 min for everything)
+- node tools/shot.mjs "dev/music.html?auto=1&mood=stalked&intensity=0.7" --out music_bench --wait 20000
+
+## Final report
+
+**Files.** src/audio/music/index.ts (conductor), score.ts (the written score in plain text notation, and its
+parser), instruments.ts (cello, felt piano, bowed glass, frame drum, ice harmonics, muted brass: oscillators,
+noise and filters only), mixer.ts (channel strips, generated 5.5 s cold reverb, soft ceiling), score.test.ts
+(8 vitest checks: key family, player ranges, rests, pedalling, notation errors); dev/music.html + dev/music.ts
+(bench page, offline renderer); tools/music-check.mjs.
+
+**Public API** (src/audio/music/index.ts):
+- `createMusic(ctx: BaseAudioContext, out: AudioNode, opts?: MusicOptions): Music` (AudioContext or OfflineAudioContext).
+- `Music.setMood(mood: MusicMood, o?: { intensity?: number }): void` (cheap every frame), `update(dt: number): void`
+  (every frame; schedules 0.45 s ahead on the audio clock), `dispose(): void`, `state(): MusicState`.
+- `MusicOptions { seed?, onNote?, mute?, raw? }`, all optional and for tools; the game passes none.
+  src/audio/index.ts already calls `createMusic(ctx, engine.bus.music)`, setMood, update, dispose.
+
+**This session.** Conductor: a new mood's first phrase waits (up to 6 s) until no outgoing note a semitone away is
+still sounding; the piano pedals from the line; separate random streams. Score: cello parts back in range,
+attack clusters revoiced, holdout's top step given separate registers, longer rests in calm and night,
+per-mood level trims. Instruments: glass beating no longer cancels in mono, drum damps at fast tempi, softer
+piano knock, cello pitch scoop and wander, brass lip-up.
+
+**Measured** (60 s offline): at intensity 0.5 peaks run from -15.2 to -23 dBFS (night); at full intensity
+the loud moods peak at -13.2 to -14.9 dBFS; nothing clips (the ceiling bends above -14 and stops at -10.5).
+Silence: calm 67 %, night 67 %; whiteout, stalked and holdout are continuous. music-check exits 0; console clean.
+
+**Contract additions:** none.
+
+**Unsure:** everything was judged from spectrograms and numbers (headless, muted), not by ear. The level against
+the real wind bed should be checked in the full game mix.

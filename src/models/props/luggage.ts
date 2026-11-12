@@ -127,29 +127,49 @@ register(
       const cloth = r.pick([hex(0x8c2f1c), PAL.canvasOlive, hex(0x23324a), hex(0x2b2b2d)]);
       L = 0.64; Wd = 0.32; T = 0.27;
       b.ink({ color: cloth, mat: MAT.CLOTH, wear: r.range(0.35, 0.6) });
-      const bag = b.pillow(L, 0.3, Wd, { round: 0.12, bulge: 0.025, seg: 3, ring: 3 });
-      // slumped: the top sags, the sides spread, creases
+      const bag = b.pillow(L, 0.3, Wd, { round: 0.12, bulge: 0.02, seg: 4, ring: 3 });
+      // half full and slumped: the top sinks and flattens, the belly spreads on the ground, the
+      // ends fall in; then long creases across it and small wrinkles
       bag.warp((q) => {
-        const u = (q.y + 0.15) / 0.3;
-        q.y *= 0.9 - 0.08 * Math.cos((q.x / L) * Math.PI * 2) * u;
-        q.z *= 1 + 0.12 * (1 - u);
+        const u = (q.y + 0.15) / 0.3; // 0 bottom .. 1 top
+        const ex = Math.abs(q.x) / (L / 2);
+        q.y = -0.15 + (q.y + 0.15) * (0.78 - 0.1 * u * (1 - Math.cos(ex * Math.PI)) * 0.5);
+        q.z *= 1 + 0.2 * (1 - u) * (1 - u) - 0.06 * u;
       });
-      bag.crumple(0.012, 6).crumple(0.004, 18);
+      const fold = r.range(0, 6);
+      bag.warp((q) => {
+        q.y -= 0.009 * Math.max(0, Math.sin(q.x * 31 + fold)) ** 3 * Math.max(0, q.y + 0.05) * 6;
+      });
+      bag.crumple(0.016, 4.5).crumple(0.005, 15);
       const bb = bag.bounds();
       bag.move(0, -bb.min.y, 0);
       const top = bag.bounds().max.y;
-      // zip track along the top, two carry straps over it, a loose shoulder strap on the ground
+      /** Points hugging the bag's cross-section at x: from the ground on the front, over the top, to the ground at the back. */
+      const hug = (x: number, off: number, n = 14): V3[] => {
+        const cy = top * 0.45, pts: V3[] = [];
+        for (let i = 0; i <= n; i++) {
+          const a = -0.2 + ((Math.PI + 0.4) * i) / n; // just below horizontal on each side
+          const dy = Math.sin(a), dz = Math.cos(a);
+          let reach = 0;
+          for (let k = 0; k < bag.p.length; k += 3) {
+            if (Math.abs(bag.p[k] - x) > 0.03) continue;
+            reach = Math.max(reach, (bag.p[k + 1] - cy) * dy + bag.p[k + 2] * dz);
+          }
+          pts.push([x, Math.max(0.003, cy + dy * (reach + off)), dz * (reach + off)]);
+        }
+        return pts;
+      };
+      // zip track along the top, two webbing straps sewn round it, a loose shoulder strap on the ground
       b.ink(black);
-      b.strap(Path.spline([[-L * 0.38, top - 0.012, 0], [0, top + 0.002, 0.004], [L * 0.38, top - 0.012, 0]], 6), 0.02, 0.003, { up: [0, 1, 0] });
+      b.strap(Path.spline([[-L * 0.38, top - 0.016, 0.01], [0, top - 0.002, 0.012], [L * 0.38, top - 0.016, 0.01]], 6), 0.02, 0.003, { up: [0, 1, 0] });
       const web = { color: r.pick([PAL.webbing, PAL.nylonBlack, cloth]), mat: MAT.CLOTH, wear: 0.5 } as const;
       b.ink(web);
-      for (const x of [-0.13, 0.13]) {
-        const ring: V3[] = [];
-        for (let i = 0; i <= 12; i++) {
-          const a = Math.PI * (i / 12);
-          ring.push([x + (x > 0 ? -1 : 1) * 0.02 * Math.sin(a), 0.03 + Math.sin(a) * (top + 0.02), Math.cos(a) * (Wd / 2 + 0.03)]);
-        }
-        b.strap(ring, 0.035, 0.004, { up: [0, 0, 1] });
+      for (const x of [-0.14, 0.14]) {
+        b.strap(hug(x, 0.004), 0.035, 0.003, { up: [0, 0, 1] });
+        // the handle loop, lying over to the front where it fell
+        const h = hug(x, 0.012, 8);
+        const loop: V3[] = [h[4], [x, top + 0.02, 0.06], [x, top - 0.01, 0.13], h[2]];
+        b.strap(Path.spline(loop, 4), 0.03, 0.004, { up: [0, 1, 0] });
       }
       b.strap(Path.spline([[-0.15, 0.004, Wd / 2 + 0.02], [-0.05, 0.004, Wd / 2 + 0.18], [0.2, 0.004, Wd / 2 + 0.22], [0.32, 0.004, Wd / 2 + 0.06]], 6), 0.036, 0.004, { up: [0, 1, 0] });
       b.ink({ color: PAL.steelDark, mat: MAT.METAL, wear: 0.4 });

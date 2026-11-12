@@ -349,18 +349,27 @@ export function createPropMaterial(o: PropMaterialOpts = {}): THREE.MeshStandard
       porous.assign(1);
       grime.assign(0.5);
     }).ElseIf(id.equal(MAT.ROCK), () => {
-      const crack: N = line(abs(nMd.y.sub(0.5)), 0.035, 27);
-      col.mulAssign(nMd.x.mul(0.55).add(0.72).mul(nLo.x.mul(0.3).add(0.85)));
-      col.addAssign(smoothstep(0.68, 0.8, nHi.x).mul(0.05));
-      col.assign(mix(col, col.mul(vec3(1.18, 1.08, 0.9)), nLo.y.mul(0.5)));
-      col.mulAssign(crack.mul(-0.5).add(1));
-      h.assign(nMd.x.mul(0.007).add(nHi.x.mul(0.0012)).sub(crack.mul(0.004)));
+      // Granite: mineral grains (dark and pale specks a few millimetres across), tone drifting
+      // over the stone, rare thin veins where it fractured; weathered paler on top.
+      const sG = vec3(420, 420, 420);
+      const gr: N = noise2(det.mul(sG).add(2.9), lodIso(420));
+      const fadeG: N = smoothstep(2.0, 0.7, pix.mul(420));
+      const speck: N = smoothstep(0.62, 0.75, gr.x).mul(0.32).sub(smoothstep(0.38, 0.25, gr.y).mul(0.28)).mul(fadeG);
+      col.mulAssign(nMd.x.mul(0.36).add(0.8).mul(nLo.x.mul(0.3).add(0.85)).mul(speck.add(1)));
+      col.assign(mix(col, col.mul(vec3(1.15, 1.07, 0.92)), nLo.y.mul(0.5)));
+      const vein: N = line(abs(nLo.y.sub(0.5)), 0.012, 3.1).mul(smoothstep(0.45, 0.7, nMd.y));
+      col.mulAssign(vein.mul(-0.45).add(1));
+      h.assign(nMd.x.mul(0.006).add(nHi.x.mul(0.0012)).add(speck.mul(0.0006)).sub(vein.mul(0.003)));
       porous.assign(0.7);
     }).ElseIf(id.equal(MAT.CHAR), () => {
-      const sA = vec3(58, 21, 58);
+      // Charcoal alligators: deep checks along the grain, short cross checks between them, the
+      // blocks between slightly domed; the checks are what glows.
+      const sA = vec3(70, 9, 70);
       const g: N = noise2(det.mul(sA), lodAni(sA));
-      const crack: N = line(abs(g.x.sub(0.5)), 0.09, 58).max(line(abs(nMd.x.sub(0.5)), 0.07, 27).mul(0.6));
-      col.mulAssign(nHi.x.mul(0.9).add(0.5).mul(mix(1, 0.5, crack)));
+      const sB = vec3(14, 55, 14);
+      const g2: N = noise2(det.mul(sB).add(6.3), lodAni(sB));
+      const crack: N = line(abs(g.x.sub(0.5)), 0.06, 70).max(line(abs(g2.x.sub(0.5)), 0.045, 55).mul(smoothstep(0.35, 0.6, g.y)));
+      col.mulAssign(nHi.x.mul(0.6).add(0.7).mul(mix(1, 0.45, crack)));
       const ash: N = smoothstep(wear.oneMinus(), wear.oneMinus().add(0.18), nLo.x.mul(0.5).add(nMd.y.mul(0.5)));
       col.assign(mix(col, vec3(0.42, 0.41, 0.4).mul(nHi.y.mul(0.4).add(0.8)), ash.mul(0.85)));
       const pulse: N = sin(U.time.mul(2.3).add(nLo.y.mul(40))).mul(0.25).add(0.75);

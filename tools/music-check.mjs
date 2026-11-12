@@ -7,7 +7,7 @@
 // then peak, RMS, the fraction of silence and the note count, and a picture in shots/
 // (music_<mood>.png: the notes each player was given, over a log-frequency spectrogram).
 // Then three journeys that change mood and intensity on the way, to see the cross-fades:
-// music_journey.png, music_holdout.png, music_attack.png.
+// music_journey.png, music_journey_holdout.png, music_journey_attack.png.
 // --wav 1 also writes shots/music_<name>.wav to listen to.
 //
 // Each row also gives where the energy sits (low = below 250 Hz, body = 250-800 Hz, bright =
@@ -55,7 +55,7 @@ const JOURNEYS = [
     ],
   },
   {
-    name: 'holdout',
+    name: 'journey_holdout',
     secs: 140,
     cues: [
       { t: 0, mood: 'holdout', intensity: 0.1 },
@@ -66,7 +66,7 @@ const JOURNEYS = [
     ],
   },
   {
-    name: 'attack',
+    name: 'journey_attack',
     secs: 60,
     cues: [
       { t: 0, mood: 'stalked', intensity: 1 },
@@ -97,7 +97,7 @@ function row(name, r) {
   const pct = (x) => `${Math.round(x * 100)}`.padStart(3) + '%';
   const b = r.bands;
   return (
-    name.padEnd(10) +
+    name.padEnd(16) +
     `peak ${r.peakDb.toFixed(1).padStart(6)} dBFS  rms ${r.rmsDb.toFixed(1).padStart(6)} dBFS  silence ${pct(r.silence)}  notes ${String(r.notes).padStart(3)}  ` +
     `low ${pct(b.sub + b.low)} body ${pct(b.lowmid)} bright ${pct(b.high + b.air)}  poly ${String(r.poly).padStart(2)}  ` +
     `(${players || 'none'})`

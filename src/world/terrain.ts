@@ -164,6 +164,9 @@ function macro(x: number, z: number, nz: Noises, rr: RavineRow, ridgeZ: number, 
   }
   // the north ridge and the trough behind it
   h += (L.RIDGE_H + 6 * m) * bump((z - ridgeZ) / 74) - 15 * bump((z - (ridgeZ - 82)) / 42);
+  // knolls and rock ribs on the open slopes above the trees
+  const up = smooth01(295, 375, h);
+  if (up > 0) h += up * 10 * (nz.rib.ridged(wx / 115 + 7.3, wz / 125, 3) - 0.42);
   // spurs either side of the ravine make it deep
   if (z > 70 && z < 760) {
     const d = Math.abs(x - rr.cx);
@@ -200,38 +203,66 @@ function mountainside(s: number, along: number, hw: number, x: number, z: number
 /** Height after the ground that closes the square is applied to h. */
 function walls(h: number, x: number, z: number, nz: Noises): number {
   let rise = 0;
-  // west and east: the flank is held between two bigger mountainsides
-  if (x < -600) {
-    const s = -x - (700 + 24 * nz.wall.at(z / 190, 1.3) + 7 * nz.misc.at(x / 40, z / 40));
-    rise = mountainside(s, z, 215 * (1 + 0.22 * nz.wall.at(z / 260, 5.1)), x, z, nz, 0);
-  } else if (x > 600) {
-    const s = x - (700 + 24 * nz.wall.at(z / 190, 7.9) + 7 * nz.misc.at(x / 40, z / 40));
-    rise = mountainside(s, z, 215 * (1 + 0.22 * nz.wall.at(z / 260, 9.7)), x, z, nz, 31);
+  // west and east: the flank is held between two bigger mountainsides. The foot wanders in and
+  // out at two scales (bays and buttresses); even where it lies furthest out (712 m) the face is
+  // too steep to climb by about 778 m, inside the sim's hard clamp at 798.5 m.
+  if (x < -540) {
+    const s = -x - (670 + 30 * nz.wall.at(z / 270, 1.3) + 12 * nz.wall.at(z / 85, 3.1) + 5 * nz.misc.at(x / 40, z / 40));
+    rise = mountainside(s, z, 225 * (1 + 0.2 * nz.wall.at(z / 260, 5.1)), x, z, nz, 0);
+  } else if (x > 540) {
+    const s = x - (670 + 30 * nz.wall.at(z / 270, 7.9) + 12 * nz.wall.at(z / 85, 8.4) + 5 * nz.misc.at(x / 40, z / 40));
+    rise = mountainside(s, z, 225 * (1 + 0.2 * nz.wall.at(z / 260, 9.7)), x, z, nz, 31);
   }
   // north: the summit wall behind the trough, peaks beyond
   if (z < -640) {
-    const s = -z - (-L.ridgeZ(x) + 92 + 20 * nz.wall.at(x / 180, 4.4) + 7 * nz.misc.at(x / 40, z / 40 + 3));
+    const s = -z - (-L.ridgeZ(x) + 90 + 22 * nz.wall.at(x / 200, 4.4) + 10 * nz.wall.at(x / 80, 6.2) + 6 * nz.misc.at(x / 40, z / 40 + 3));
     const rn = mountainside(s, x, 330 * (1 + 0.15 * nz.wall.at(x / 260, 6.6)), x, z, nz, 57);
     if (rn > rise) rise = rn + 0.25 * rise;
     else rise += 0.25 * rn;
   }
   h += rise;
-  // south: the forest runs out to a near-vertical drop just past the edge, into a valley. The lip
-  // stays outside the sim's hard clamp (798.5 m), so nobody can step off into it and be stuck.
-  if (z > 700) {
-    const w = 1 - smooth01(640, 760, Math.abs(x));
-    if (w > 0) {
-      const lip = 804 + 4 * nz.wall.at(x / 70, 2.2);
-      const roll = smooth01(lip - 50, lip, z);
-      h -= 9 * roll * roll * w;
-      const g = smooth01(lip, lip + 18, z);
-      if (g > 0) {
-        const valley = 2 + 5 * nz.wall.at(x / 90, z / 90) + 190 * smooth01(930, 1024, z) * (0.6 + 0.4 * nz.peak.ridged(x / 200, z / 200, 3));
-        h += (valley - h) * g * w;
+  // south: the forest ends at an irregular cliff; below it a narrow valley runs along the foot of
+  // the square, and its far side rises as a cliff into more mountain. The valley floor falls to
+  // the ravine mouth, so anyone who falls or climbs down can walk out again up the ravine (no
+  // pit to be stuck in), and the far cliff, not the edge of the world, is what stops them.
+  if (z > 640) {
+    const ws = 1 - smooth01(610, 720, Math.abs(x)); // the mountainsides take the corners
+    if (ws > 0) {
+      // at the ravine mouth the valley is held to fixed numbers so the ravine floor runs out
+      // onto the valley floor at a walkable grade
+      const km = 1 - smooth01(25, 70, Math.abs(x - RAVINE_MOUTH_X));
+      const zf = southFarFoot(x, nz) * (1 - km) + 795 * km;
+      const zc = zf - (southValleyWidth(x, nz) * (1 - km) + 24 * km); // foot of the cliff
+      const zl = zc - 12; // its lip
+      const hv = 33 + 0.017 * Math.abs(x - 372) + 1.2 * nz.misc.at(x / 60, 5.3);
+      if (z > zl - 70) {
+        const roll = smooth01(zl - 70, zl, z);
+        h -= 7 * roll * roll * ws;
+        // the face, with buttresses and gullies in plan
+        const g = smooth01(zl, zc, z + 4 * (nz.peak.ridged(x / 38, 2.7, 2) - 0.45));
+        if (g > 0) h += (hv - h) * g * ws;
+        // the far side: a cliff straight off the valley floor, then more mountain
+        const s2 = z - zf - 2.5 * nz.misc.at(x / 25, 8.8);
+        if (s2 > 0) {
+          const far = 105 * smooth01(0, 24, s2) * (0.85 + 0.3 * nz.wall.at(x / 120, 12.1)) + 0.45 * s2 +
+            110 * smooth01(30, 230, s2) * (nz.peak.ridged(x / 190, z / 190, 3) - 0.3);
+          h += far * ws;
+        }
       }
     }
   }
   return h;
+}
+
+const RAVINE_MOUTH_X = L.ravineX(775);
+
+/** Foot of the far side of the south valley (z), between about 773 and 799. */
+export function southFarFoot(x: number, nz: Noises): number {
+  return 786 + 9 * nz.wall.at(x / 240, 2.2) + 4 * nz.wall.at(x / 80, 4.7);
+}
+/** Width of the south valley floor, 16 to 30 m. */
+export function southValleyWidth(x: number, nz: Noises): number {
+  return 23 + 7 * nz.wall.at(x / 150, 6.3);
 }
 
 // ------------------------------------------------------------------------------------------
@@ -405,7 +436,7 @@ export function buildTerrain(seed: number, progress: (p: number, label: string) 
     for (let i = 0; i < CN; i++) c[j * CN + i] = macro(-EXT + i * CCELL, z, nz, rr, colRidge[i], creek);
   }
   progress(0.06, 'Eroding the slopes');
-  erode(c, CN, CCELL, { iterations: 11, k: 0.016, diffuse: 0.05 });
+  erode(c, CN, CCELL, { iterations: 11, k: 0.0115, diffuse: 0.075 });
   // coarse gradient magnitude, for detail roughness
   const cs = new Float32Array(CN * CN);
   for (let j = 1; j < CN - 1; j++) {
@@ -422,10 +453,10 @@ export function buildTerrain(seed: number, progress: (p: number, label: string) 
   const wd = new Float32Array(MN * MN);
   for (let j2 = 0; j2 < MN; j2++) {
     const z = -EXT + j2 * MCELL;
-    const rowWall = z < -640 || z > 700;
+    const rowWall = z < -640 || z > 650;
     for (let i2 = 0; i2 < MN; i2++) {
       const x = -EXT + i2 * MCELL;
-      if (!rowWall && x >= -600 && x <= 600) continue;
+      if (!rowWall && x >= -540 && x <= 540) continue;
       const base = h[j2 * 2 * N + i2 * 2];
       wd[j2 * MN + i2] = walls(base, x, z, nz) - base;
     }
@@ -448,7 +479,7 @@ export function buildTerrain(seed: number, progress: (p: number, label: string) 
     const rr = ravineRow(z);
     const cj = Math.min(CN - 2, j >> 2), fv = (j & 3) / 4;
     const j2 = j >> 1, gv = (j & 1) * 0.5;
-    const rowWall = z < -640 || z > 700;
+    const rowWall = z < -640 || z > 650;
     for (let i = 0; i < N; i++) {
       const x = -EXT + i * CELL;
       const k = j * N + i;
@@ -470,8 +501,9 @@ export function buildTerrain(seed: number, progress: (p: number, label: string) 
         if (s > -36) {
           const t = smooth01(-1, 11, s + 2.5 * nz.misc.at(x / 18, z / 18));
           const tt = terrace(t, 4);
-          // the face varies along the band; the ground above it does not
-          let add = H * tt * (1 + colCliffN[i] * (1 - smooth01(12, 45, s)));
+          // the face varies along the band; the ground above it does not, and the step it makes
+          // in the slope fades out toward the ridge
+          let add = H * tt * (1 + colCliffN[i] * (1 - smooth01(12, 45, s))) * (1 - 0.55 * smooth01(40, 300, s));
           // a couloir cuts the face and fills toward the top
           if (colCoul[i] > 0 && s > -6) add -= H * colCoul[i] * t * (1 - smooth01(14, 70, s));
           v += add;
@@ -482,7 +514,7 @@ export function buildTerrain(seed: number, progress: (p: number, label: string) 
         }
       }
       // the walls, interpolated from the 4 m grid
-      if (rowWall || x < -600 || x > 600) {
+      if (rowWall || x < -540 || x > 540) {
         const i2 = i >> 1, gu = (i & 1) * 0.5;
         const m = j2 * MN + i2;
         const a = wd[m];

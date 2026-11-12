@@ -129,7 +129,7 @@ function probe(spec: CheckSpec, sr: number, o: Required<Pick<CheckOptions, 'lite
 
 function lengthOf(spec: CheckSpec, sr: number, o: Required<Pick<CheckOptions, 'lite' | 'seed'>>): number {
   if (spec.secs) return spec.secs;
-  if (spec.kind === 'step') return o.lite ? 4.6 : 6.2;
+  if (spec.kind === 'step') return 6.2;
   if (spec.kind === 'sfx') {
     const def = SFX[spec.name];
     const wet = (def.far ?? 0) > 0 || (def.local ?? 0) > 0;

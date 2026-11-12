@@ -40,10 +40,24 @@ dev/audio.html, dev/audio.ts, tools/audio-check.mjs.
   moan 5/3.2 -> 1.6/1.4; storm roar 1.5/1.1 -> 0.95/0.8.
 - Live path verified: shot.mjs "dev/audio.html?auto=1": ready, 8 voices, clean console.
 
-## Remaining (priority order)
-1. Re-measure scenes (targets: dusk -30, ridge -19, cabin -31, stalked -24, ice -27, cave -28 RMS).
-2. Look at sheets again for design issues; lite profile run (--lite 1).
-3. Final full run, report table.
+## Round 3 (done)
+- Wind index I re-scaled (strong mean ~0.6, gusts carry it to 1): storms swell again instead of one flat
+  roar; whistles sing in gusts only; storm roar lower with long waves; hiss (white >5 kHz) -9 dB, edge -6 dB.
+- Heartbeat: soft 250 Hz knock added so phones/laptops (no bass) still carry the beat.
+- Scenes now (RMS dBFS): dusk -33, ridge -19, cabin -27.5, stalked -25, ice -27, cave -28.
+
+## State at end of session 2
+- Complete. Full run: 102 checks, 0 failed, 3 HOT warnings (rifle, ridge scene, stress: pre-dynamics
+  headroom, by design). Phone profile (--lite 1): 0 failed. Bench ?auto=1 desktop + --mobile 1: clean console.
+- Possible next polish (not required): listen to WAVs (--wav 1) and tune by ear; howl variety across seeds
+  (--seed N); dusk bed is a little quiet (-33 vs -30 target) if the game wants more wind in calm weather.
+
+## API facts for other modules
+- createAudio(options?: { lite?: boolean }): AudioApi (src/audio/index.ts). unlock() from a gesture;
+  each frame setListener(...), setAmbience({...}) (cheap, partial ok), update(dt).
+- The ambience does not play the cabin stove: the game starts loop('stove', { pos }) when it burns.
+- sfx 'howl' picks its far character by distance itself; 'howl_far' is a distant pack chorus.
+- buildAudio(ctx, CoreOptions) builds the same synth on any (offline) context; check.ts uses it.
 
 Level targets (raw peak, dBFS): UI -24..-18; breath -36..-28; footsteps -22..-14; body hurt -18,
 downed/death -14; tools -16..-8; rifle -2 (loudest); howl near -8; ice crack -6; loops RMS: fire -28,
@@ -54,3 +68,17 @@ stove -30, generator -22, heli(1) peak -8.
 - node tools/audio-check.mjs [--only sfx,loop,step,scene,stress] [--names a,b] [--dry 1] [--lite 1] [--wav 1]
   pictures: shots/audio*/<id>.png, sheets shots/audio_sheet_<n>*.png (Read them)
 - node tools/shot.mjs "dev/audio.html?auto=1" --out audio_bench
+
+## Final report
+
+Files (AUDIO): src/audio/index.ts (createAudio, buildAudio, detectLite), engine.ts, dsp.ts, sfx.ts, loops.ts, ambience.ts; new this session: mix.ts (one dB level per sound), scenes.ts (six listening scenes + SceneRunner), check.ts (offline render, metrics, spectrograms; not imported by the game); dev/audio.html + dev/audio.ts (bench: every sfx, loop and surface, ambience sliders, placement, scenes row, moods, mix, meter; `?auto=1` drives the live path); tools/audio-check.mjs.
+
+Public API: `createAudio(options?: { lite?: boolean }): AudioApi`, exactly src/audio/api.ts (every member, every SfxName and LoopName; the compiler checks completeness). Call `unlock()` from a gesture; each frame `setListener(...)`, `setAmbience(partial)`, `update(dt)`. Loop handles survive the voice cap and respawn. The ambience never plays the cabin stove: start `loop('stove', { pos })` while it burns. `'howl'` picks its far character by distance itself; `'howl_far'` is a distant pack. `buildAudio(ctx, CoreOptions)` builds the same synth on any context.
+
+Contract: no additions this session (optional `Ambience.cave` from session 1 stands).
+
+Fixed this session: reverb returns and a cathedral-length mountain tail (raw peaks were +14 dBFS, the compressor squashing 15 dB); master is now 25 Hz high-pass, compressor -12 dB 4:1, soft limiter; per-sound mix table; storm gusts were flat (wind index saturated); harsh hiss, cabin sub-rumble, fire and stove balance, howl contour and timbre, heartbeat inaudible on small speakers.
+
+Measured (`node tools/audio-check.mjs`, 102 checks, 0 failed; master peaks, dBFS): UI -25..-16, footsteps -17..-15, body -25..-11, tools -24..-8, howl -7, rifle -5 (loudest), ice crack -7; loop RMS fire -28, stove -30, generator -24; scene RMS dusk -33, ridge -19, cabin -27.5, stalked -25, ice -27, cave -28; stress (38 voices over a storm) peak -4.7, no clipping. Only warnings: HOT pre-dynamics headroom on rifle, whiteout scene, stress (by design). Phone profile (`--lite 1`): 0 failed, scenes within 4 dB of desktop. Bench live path, desktop and phone viewport: clean console.
+
+Unsure: judged by meters and spectrograms, not by ear (`--wav 1` writes WAVs to listen to); the master compressor settles about 0.3 s after unlock.

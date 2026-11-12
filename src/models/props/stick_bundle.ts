@@ -42,7 +42,8 @@ register(
     // drop the bundle so its lowest stick rests on the ground
     const minY = Math.min(...sticks.map((s) => s.y - s.rad));
     for (const s of sticks) {
-      const bark = r.chance(0.5) ? PAL.bark : mixRGB(PAL.barkGrey, PAL.bark, r.range(0, 0.6));
+      // dead fall under the trees: grey, weathered bark, rarely the dark brown of live wood
+      const bark = r.chance(0.25) ? mixRGB(PAL.bark, PAL.barkGrey, 0.5) : mixRGB(PAL.barkGrey, PAL.deadwood, r.range(0.1, 0.45));
       b.ink({ color: bark, mat: MAT.BARK, wear: r.range(0.4, 0.8) });
       const p = b.log(s.len, s.rad, {
         r2: s.rad * r.range(0.6, 0.85),

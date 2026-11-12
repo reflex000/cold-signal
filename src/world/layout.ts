@@ -131,7 +131,7 @@ export function ravineX(z: number): number {
 /** Height of the ravine floor (the frozen stream) against z. */
 const RAVINE_FLOOR: [number, number][] = [
   [40, 262.4], [62, 261.6], [110, 249], [190, 213], [290, 167], [380, 133], [470, 108], [560, 87],
-  [650, 70], [700, 61], [740, 53], [776, 45], [800, 12], [1024, 2],
+  [650, 69], [700, 57], [740, 45], [760, 38.5], [771, 35], [790, 33], [799, 32], [807, 8], [1024, 2],
 ];
 export function ravineFloor(z: number): number {
   return spline(RAVINE_FLOOR, z);
@@ -144,7 +144,7 @@ export function ravineHalfFloor(z: number): number {
 export function ravineWall(z: number): number {
   return 1.0 + 0.5 * smoothRange(600, 690, z);
 }
-/** The boulder choke that seals the lower ravine (z of its centre). */
+/** Where the lower ravine narrows to a slot strewn with fallen blocks (z of its centre). */
 export const CHOKE_Z = 704;
 
 /**
@@ -174,12 +174,13 @@ export function cliffZ(x: number): number {
   return spline(CLIFF_Z, x);
 }
 export function cliffH(x: number): number {
-  return Math.max(0, spline(CLIFF_H, x));
+  // the band dies out smoothly to the east (no crease where it ends)
+  return Math.max(0, spline(CLIFF_H, x)) * smoothRange(CLIFF_X1, CLIFF_X1 - 110, x);
 }
-/** Two couloirs cut the band: 0..1 how much of the face is cut away at x (only near the face). */
-export function couloir(x: number): number {
-  return 0.82 * bump((x + 565) / 13) + 0.78 * bump((x + 205) / 11);
-}
+/** Couloirs: steep V-shaped gullies through the band, each with a scree fan below (x of the gully). */
+export const COULOIRS = [-712, -566, -436, -206, -128];
+/** The cave needs the face straight and full height for a few metres either side. */
+export const CAVE_X = -310;
 
 // ------------------------------------------------------------------------------------------
 // the north ridge, the trough behind it and the summit wall beyond

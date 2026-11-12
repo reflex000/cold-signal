@@ -27,7 +27,7 @@ register(
       const sr = r.range(0.07, 0.115);
       const rr = R + r.range(-0.035, 0.035);
       // field stones carried from the slope: granite grey to brown, broken faces
-      b.ink({ color: mixRGB(mixRGB(PAL.rock, PAL.concrete, r.range(0.25, 0.6)), PAL.rockBrown, r.next() * 0.5), mat: MAT.ROCK, wear: 0.3, vary: 0.15 });
+      b.ink({ color: mixRGB(mixRGB(PAL.rock, PAL.concrete, r.range(0.25, 0.6)), PAL.rockBrown, r.next() * 0.5), mat: MAT.ROCK, wear: 0.3, vary: 0.15, snow: stage === 1 || stage === 2 ? 0.3 : 1 }); // a live fire keeps its ring clear of snow
       const s = b.rock(sr, { detail: 1, rough: 0.8, facet: 0.7, flat: 0.45, squash: [r.range(0.85, 1.15), r.range(0.5, 0.75), r.range(0.7, 0.95)] });
       s.rotY(r.range(0, Math.PI * 2)).move(Math.cos(a) * rr, -sr * 0.1, Math.sin(a) * rr);
       if (stage > 0) {
@@ -48,7 +48,7 @@ register(
     if (stage > 0) {
       b.ink({ color: PAL.charcoal, mat: MAT.CHAR, wear: [0, 0.5, 0.62, 0.92][stage], emissive: glow, snow: stage === 3 ? 1 : 0.15 });
       // a flat, lumpy bed (2 to 3 cm), not a mound: ash settles level
-      const bed = b.lathe([[0, 0], [R * 0.84, 0], [R * 0.72, 0.007], [R * 0.5, 0.014], [R * 0.25, 0.02], [0, 0.024]], { sides: 18, smooth: true });
+      const bed = b.lathe([[0, 0], [R * 0.84, 0], [R * 0.72, 0.007], [R * 0.5, 0.014], [R * 0.25, 0.02], [0, 0.024]], { sides: 28, smooth: true });
       bed.noise(0.008, 6).noise(0.0035, 21);
       // a ragged outline where ash and charcoal were kicked out over the snow
       const os = r.int(0, 1 << 20);
@@ -75,7 +75,7 @@ register(
     }
 
     // ---- wood ----
-    const barkCol = (): RGB => (r.chance(0.5) ? PAL.bark : mixRGB(PAL.barkGrey, PAL.bark, r.range(0, 0.6)));
+    const barkCol = (): RGB => (r.chance(0.3) ? mixRGB(PAL.bark, PAL.barkGrey, 0.5) : mixRGB(PAL.barkGrey, PAL.deadwood, r.range(0.05, 0.4)));
     /** A stick from a to c. burnBelow: height under which it is charred; glowK: ember strength there. */
     const stick = (a: V3, c: V3, rad: number, burnBelow: number, glowK: number, ash: number): Part => {
       const len = Math.hypot(c[0] - a[0], c[1] - a[1], c[2] - a[2]);

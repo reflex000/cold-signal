@@ -9,8 +9,10 @@
 // ones are dropped. Nothing throws when audio is unavailable: the game just runs silent.
 //
 // Layout: dsp.ts (noise, impulse responses, the per-voice builder), engine.ts (buses, reverbs,
-// master dynamics, voice pool, spatial placement), sfx.ts / loops.ts (the sounds), ambience.ts
-// (wind, place, body), music/ (the score), check.ts (offline rendering for tools/audio-check.mjs).
+// master dynamics, voice pool, spatial placement), sfx.ts / loops.ts (the sounds), mix.ts (one
+// level per sound), ambience.ts (wind, place, body), music/ (the score), scenes.ts (listening
+// scenes for the bench page and the checker), check.ts (offline rendering and measurement for
+// tools/audio-check.mjs; not imported by the game).
 import type { Surface } from '../sim/types';
 import type { Ambience, AudioApi, LoopHandle, LoopName, MusicMood, SfxName } from './api';
 import { AmbienceSynth } from './ambience';
