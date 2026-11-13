@@ -8,7 +8,9 @@
 //   x 60 .. 70        a cliff: 20 m up over 10 m (71 degrees at its steepest), plateau beyond
 //   x -60 .. -80      a walkable ramp: 10 m up over 20 m (26.6 degrees), plateau beyond
 //   x -40..-20, z -30..-10   a drift of deep snow (0.5 m)
-//   (0, 120) r 30     the frozen lake, thin in the middle; ice surface at y = 0
+//   (0, 120) r 30     the frozen lake, thin in the middle; ice surface at y = 0; a thin patch at (14, 130)
+//                     and a thick safe line from the west shore to (-8, 120)
+//   (0, -150)         the tower: panel, generator (3 m east), the beacon and the pickup deck at (0, -138)
 //   (10, 0)           a pine trunk (cylinder r 0.35);  (15, -8) a boulder (cylinder r 1.2)
 //   (0, -20)          a wall (box 8 x 0.3 m, turned 0.3 rad);  (20, 5) a low stump you step over
 //   (-20, 20)         a wooden floor 6 x 4 m raised 0.3 m, inside an indoor shelter volume
@@ -37,6 +39,21 @@ export const TEST_FLOOR = { x: -20, z: 20, hx: 3, hz: 2, y: 0.3 };
 export const TEST_DECK = { x: 30, z: 30, hx: 2, hz: 2, y: 3 };
 /** An outdoor windbreak (a stand of firs, a rock wall): partial shelter, not indoors. (SURVIVAL) */
 export const TEST_LEE = { x: 40, z: -40, hx: 5, hz: 5, amount: 0.75 };
+/**
+ * On the lake (OBJECTIVE): a patch of thin ice, 0.05 m inside 0.45 r, back to the lake's own thickness at r;
+ * and the safe line, 0.6 m within `half` of the segment from the west shore toward the middle.
+ */
+export const TEST_THIN = { x: 14, z: 130, r: 6 };
+export const TEST_SAFE = { ax: -30, az: 120, bx: -8, bz: 120, half: 2 };
+/** The pickup deck at the tower (anchor 'tower:mast.deck'): the flare goes here, the winch comes down here. */
+export const TEST_PAD = { x: 0, z: -138 };
+/**
+ * Where tests put the tower's beacon and the cabin's door and bunk (devices; not in the spawn table, so
+ * the entity ids other tests see stay as they were).
+ */
+export const TEST_BEACON = { x: 0, z: -141 };
+export const TEST_BED = { x: -21.8, z: 21.2 };
+export const TEST_DOOR = { x: -18, z: 22 };
 
 const STEP = 0.4; // step height assumed by groundAt (matches move.ts STEP_HEIGHT)
 
@@ -88,7 +105,15 @@ export function createTestWorld(o: TestWorldOptions = {}): World {
     for (let cx = 0; cx < LN; cx++) {
       const x = lake.minX + (cx + 0.5) * LCELL, z = lake.minZ + (cz + 0.5) * LCELL;
       const d = Math.hypot(x - lake.x, z - lake.z);
-      lake.thickness[cz * LN + cx] = d < TEST_LAKE.r ? 0.1 + 0.3 * (d / TEST_LAKE.r) : 0;
+      let h = d < TEST_LAKE.r ? 0.1 + 0.3 * (d / TEST_LAKE.r) : 0;
+      if (h > 0) {
+        const dt = Math.hypot(x - TEST_THIN.x, z - TEST_THIN.z);
+        if (dt < TEST_THIN.r) h = Math.min(h, 0.05 + (h - 0.05) * smoothstep(TEST_THIN.r * 0.45, TEST_THIN.r, dt));
+        const s = TEST_SAFE, vx = s.bx - s.ax, vz = s.bz - s.az;
+        const u = sat(((x - s.ax) * vx + (z - s.az) * vz) / (vx * vx + vz * vz));
+        if (Math.hypot(s.ax + vx * u - x, s.az + vz * u - z) < s.half) h = Math.max(h, 0.6);
+      }
+      lake.thickness[cz * LN + cx] = h;
     }
   }
   const iceCell = (x: number, z: number): number => {
@@ -237,7 +262,13 @@ export function createTestWorld(o: TestWorldOptions = {}): World {
     }
   }
 
-  const world: World = {
+  // Named points like the real world's (src/world WorldEx.anchors), for systems that look for one.
+  const anchors: Record<string, { x: number; y: number; z: number; yaw: number }> = {
+    'tower:mast.deck': { ...at(TEST_PAD.x, TEST_PAD.z), yaw: 0 },
+  };
+
+  const world: World & { anchors: typeof anchors } = {
+    anchors,
     seed,
     size: half * 2,
     half,

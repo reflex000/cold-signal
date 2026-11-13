@@ -4,7 +4,10 @@
 // crates; walls and terrain in between block it.
 // Owner: GAME.
 import { ITEM, PART_NAME } from '../ui/text';
+import { SWIM_DEPTH } from '../sim/move';
+import { PULL_RANGE, PULL_TIME } from '../sim/systems/ice';
 import { CRATE_HOLD } from '../sim/systems/items';
+import { BED_TIME, DEVICE_AIM, INSTALL_TIME } from '../sim/systems/objective';
 import { REVIVE_RANGE } from '../sim/systems/vitals';
 import type { CrateEnt, DeviceEnt, Entity, FireEnt, LogEnt, PickupEnt, PlayerEnt, WoodEnt } from '../sim/types';
 import type { World } from '../world/types';
@@ -23,6 +26,15 @@ const SHAPE: Record<string, { r: number; y: number }> = {
   device: { r: 0.45, y: 0.9 },
   player: { r: 0.5, y: 0.35 },
 };
+/** A teammate in the water under the ice: aimed at by the head, just above the water. (OBJECTIVE) */
+const SWIMMER = { r: 0.5, y: SWIM_DEPTH + 0.1 };
+
+/** The shape of one entity: devices by type (the sim checks reach with the same table), swimmers by the head. */
+function shapeOf(e: Entity): { r: number; y: number } {
+  if (e.kind === 'device') return DEVICE_AIM[e.type] ?? SHAPE.device;
+  if (e.kind === 'player' && e.swim) return SWIMMER;
+  return SHAPE[e.kind];
+}
 
 const CRATE_NAME: Record<CrateEnt['type'], string> = {
   luggage: 'Suitcase', locker: 'Locker', crate: 'Crate', medkit: 'First aid kit', cupboard: 'Cupboard', toolbox: 'Toolbox',
@@ -69,7 +81,13 @@ export function describe(e: Entity, me: PlayerEnt, keyLabel: string): Focus | nu
       return describeDevice(e, me, base);
     case 'player': {
       const p = e as PlayerEnt;
-      if (p.id === me.id || p.life !== 'downed') return null;
+      if (p.id === me.id) return null;
+      if (p.swim && p.life !== 'dead' && p.life !== 'rescued') {
+        // a hold hauls them out of the hole (sim/systems/ice.ts): the ring is the puller's own act
+        const far = Math.hypot(p.x - me.x, p.z - me.z) > PULL_RANGE;
+        return { ...base, verb: 'Pull out', name: p.name, hold: me.act === 'use' ? Math.min(1, me.actT / PULL_TIME) : null, ...(far ? { note: 'move closer' } : {}) };
+      }
+      if (p.life !== 'downed') return null;
       // the host revives only within REVIVE_RANGE on the ground (sim/systems/vitals.ts)
       const far = Math.hypot(p.x - me.x, p.z - me.z) > REVIVE_RANGE;
       return { ...base, verb: 'Revive', name: p.name, hold: p.reviver === me.id ? p.revive : null, ...(far ? { note: 'move closer' } : {}) };
@@ -80,19 +98,22 @@ export function describe(e: Entity, me: PlayerEnt, keyLabel: string): Focus | nu
 }
 
 function describeDevice(d: DeviceEnt, me: PlayerEnt, base: { id: number; kind: Entity['kind']; hold: number | null; key: string }): Focus | null {
+  // (sim/systems/objective.ts: the panel's progress is the share of parts in, the generator's its charge)
   switch (d.type) {
     case 'panel': {
       const parts = (Object.keys(PART_NAME) as (keyof typeof PART_NAME)[]).filter((p) => has(me, `part_${p}`));
-      return parts.length ? { ...base, verb: 'Install', name: 'Transmitter', note: PART_NAME[parts[0]] } : { ...base, verb: 'Look', name: 'Transmitter' };
+      if (parts.length) return { ...base, verb: 'Install', name: 'Transmitter', note: PART_NAME[parts[0]], hold: me.act === 'use' ? Math.min(1, me.actT / INSTALL_TIME) : null };
+      const n = Math.round(d.progress * 5);
+      return { ...base, verb: 'Check', name: 'Transmitter', note: n >= 5 ? 'all five parts in' : `${n} of 5 parts in` };
     }
     case 'generator':
-      return { ...base, verb: 'Crank', name: 'Generator', hold: d.progress > 0 && d.progress < 1 ? d.progress : null };
+      return { ...base, verb: 'Crank', name: 'Generator', hold: me.act === 'crank' || (d.progress > 0 && d.progress < 1) ? d.progress : null };
     case 'door':
       return { ...base, verb: d.on || d.progress > 0.5 ? 'Close' : 'Open', name: 'Door' };
     case 'beacon':
-      return { ...base, verb: d.on ? 'Switch off' : 'Switch on', name: 'Beacon' };
+      return null; // it lights by itself when the call goes out
     case 'bed':
-      return { ...base, verb: 'Rest', name: 'Bed' };
+      return { ...base, verb: 'Rest', name: 'Bunk', hold: me.act === 'use' ? Math.min(1, me.actT / BED_TIME) : null };
     case 'note':
       return { ...base, verb: 'Read', name: 'Note' };
     default:
@@ -124,10 +145,10 @@ export class FocusPicker {
     const reach2 = (REACH + 0.8) * (REACH + 0.8);
     for (const kind of KINDS) {
       const list = view.list(kind) as ViewEnt[];
-      const sh = SHAPE[kind];
       for (let i = 0; i < list.length; i++) {
         const e = list[i];
         if (e.id === me.id) continue;
+        const sh = shapeOf(e);
         const ex = e.x - ox, ey = e.y + sh.y - oy, ez = e.z - oz;
         const d2 = ex * ex + ey * ey + ez * ez;
         if (d2 > reach2) continue;
@@ -146,7 +167,7 @@ export class FocusPicker {
     }
     let f: Focus | null = null;
     if (best) {
-      const sh = SHAPE[best.kind];
+      const sh = shapeOf(best);
       // Something solid in between (a wall, the ground) hides it. The segment stops short of the
       // thing itself: a crate or a stove stands inside its own collider.
       const tx = best.x - ox, ty = best.y + sh.y - oy, tz = best.z - oz;

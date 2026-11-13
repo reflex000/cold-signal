@@ -15,6 +15,8 @@ import { createStandinSky } from './standin/sky';
 import { createStandinStructures } from './standin/structures';
 import { createStandinTerrain } from './standin/terrain';
 import { createStandinWeather } from './standin/weather';
+// STRUCTURES: registers the wreck and every place's models under their blueprint names (so they replace the stand-ins) and drives their doors, crank, panel and lights.
+import { createStructureDriver } from '../models/structures';
 
 export type VisualName = 'sky' | 'weather' | 'terrain' | 'forest';
 const NAMES: readonly VisualName[] = ['sky', 'weather', 'terrain', 'forest'];
@@ -89,6 +91,8 @@ export async function addVisualSystems(engine: CsEngine, world: World, want: Set
   const structures = createStandinStructures(engine, world);
   engine.add(structures);
   engine.add(structures.props);
+  engine.add(createStructureDriver(structures.props));
   engine.add(createStandinMarkers(engine));
+  try { engine.add((await import('../gfx/fx')).createFxSystem(engine, world)); } catch (e) { console.warn('[visuals] src/gfx/fx failed to start:', e); } // FX: fire, flares, light pool, breath, goggle overlays
   return { used };
 }

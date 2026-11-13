@@ -128,6 +128,11 @@ export interface PlayerEnt extends EntBase {
   radioSig: number; // 0..1 strength of the nearest part / tower signal in the facing direction
   radioDist: number; // metres to that source, -1 if none
   aim: number; // 0..1 rifle raised
+  /**
+   * Flashlight output right now, 0..1: 0 when off or put away, 1 on a good cell, dimming below a
+   * quarter charge (the wolves read it; so may the light cone). (Optional member added by HUNT.)
+   */
+  beam?: number;
   carry: NetId; // heavy log being carried, or 0
   /** True while a second player holds the other end of `carry`: walking pace instead of a drag (read by move.ts). */
   carryPair?: boolean;
@@ -270,6 +275,12 @@ export interface IceCell {
   i: number; // cell index in world.lake grid
   stress: number; // 0..1; at 1 it breaks
   hole: boolean;
+  /**
+   * Metres of new ice over a cell that broke (present only on such cells). While `hole` is true it is the film
+   * forming on the open water; once it is thick enough to stand on, `hole` goes false and the cell is thin new
+   * ice of this thickness. Host-side detail: snapshots carry i / stress / hole. (Optional member added by OBJECTIVE.)
+   */
+  skin?: number;
 }
 
 export interface Stats {

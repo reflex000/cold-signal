@@ -83,7 +83,7 @@ export function makePlayer(name: string, slot: number, x: number, y: number, z: 
     feels: 0, shelter: 0, fireHeat: 0, huddle: 0, trend: 0,
     bleed: 0, revive: 0, reviver: 0,
     inv: {}, held: 'hands', act: 'none', actT: 0, loaded: 0, flareLoaded: 0, lightOn: false,
-    cellCharge: 1, radioCharge: 0, radioSig: 0, radioDist: -1, aim: 0, carry: 0, carryPair: false,
+    cellCharge: 1, radioCharge: 0, radioSig: 0, radioDist: -1, aim: 0, beam: 0, carry: 0, carryPair: false,
     isolation: 0, kills: 0,
   };
 }

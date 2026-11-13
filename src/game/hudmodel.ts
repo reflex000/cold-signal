@@ -138,12 +138,18 @@ export class HudModel {
         return left === 5 ? 'Find the five radio parts. The radio hears them.' : `Find the radio parts. ${5 - left} of 5 found.`;
       case 'tower':
         return 'Carry the parts to the signal tower on the north ridge.';
-      case 'power':
-        return o.generator < 1 ? 'Install the parts. Crank the generator.' : 'Send the call.';
+      case 'power': {
+        // (sim/systems/objective.ts: the call goes out while the generator holds charge)
+        const fitted = (Object.keys(PART_NAME) as PartId[]).filter((p) => o.parts[p] === 'installed').length;
+        if (fitted < 5) return `Fit the parts to the transmitter in the shed. ${fitted} of 5 in.`;
+        if (o.transmit <= 0) return 'Crank the generator until it runs full.';
+        return o.generator >= 0.3 ? 'Sending the call. Keep the generator turning.' : 'The set has dropped out. Crank the generator.';
+      }
       case 'holdout':
-        return o.eta > 0 ? `Hold out. The helicopter is ${Math.ceil(o.eta / 60)} min out.` : 'Hold out until the helicopter comes.';
+        // (the HUD shows the time left under this line)
+        return o.eta > 60 ? 'Hold the tower until the helicopter comes.' : 'Hold the tower. The helicopter is close: have a flare ready.';
       case 'rescue':
-        return o.signalled ? 'Get to the winch.' : 'Mark the landing with a flare.';
+        return o.signalled ? 'Get onto the deck below the mast. The winch takes you up.' : 'Fire a flare onto the deck below the mast.';
       default:
         return '';
     }
@@ -216,6 +222,9 @@ export class HudModel {
   }
 
   private hintLine(view: View, me: PlayerEnt): string {
+    // in the water the way out cannot wait for another line to time out, and goes once out of it
+    if (me.swim && !this.shown.has('swim')) this.hint = null;
+    if (!me.swim && this.hint && this.hint.id === 'swim') this.hint = null;
     const h = this.hint;
     if (h && this.time < h.until) return h.text;
     this.hint = null;
@@ -228,10 +237,28 @@ export class HudModel {
     };
     if (this.playTime < 1.5) return '';
     if (want('move', touch ? 'Left thumb to move. Drag on the right to look.' : 'WASD to move, the mouse to look. Esc pauses.', 8)) return this.hint!.text;
+    // the lake (sim/systems/ice.ts): the way out of a hole, and the poles that mark the thick ice
+    if (me.swim && want('swim', touch ? 'In the water. Swim to the edge of the hole and hold the hand to climb out.' : 'In the water. Swim to the edge of the hole and hold E to climb out.', 9)) return this.hint!.text;
     if (view.hud.focus && want('use', touch ? 'Press the hand to use what you look at.' : 'Press E to use what you look at. Hold it for long actions.')) return this.hint!.text;
+    if (me.surface === 'ice' && !me.swim && want('ice', 'Lake ice. It is thick along the line of poles; off them it can be thin.', 8)) return this.hint!.text;
     if (me.core < 35.5 && want('cold', touch ? 'You are getting cold. Find shelter, or lay a fire from the pack with three sticks.' : 'You are getting cold. Find shelter, or press B to lay a fire with three sticks.', 9)) return this.hint!.text;
     if (view.env.visibility < 60 && want('whiteout', 'Whiteout. Stay on the marked trail or wait it out by a fire.', 8)) return this.hint!.text;
     if (me.stamina < 0.2 && want('stamina', 'Out of breath. Sprinting warms you a little and tires you a lot.')) return this.hint!.text;
+    // the hunt and the tools (sim/systems/wolves.ts, tools.ts)
+    if (this.wolvesNear(view, me) && want('wolves', 'Wolves. Keep to the firelight and together. A light in their eyes, a flare or a shot drives them off.', 9)) return this.hint!.text;
+    if (me.held === 'radio' && want('radio', touch ? 'Hold the tool button to crank the radio. Turn until the tone is clearest.' : 'Hold the left button to crank the radio. Turn until the tone is clearest.', 9)) return this.hint!.text;
+    if (me.held === 'flaregun' && me.flareLoaded < 1 && (me.inv.flare ?? 0) > 0 && want('flaregun', touch ? 'Tap reload to load a cartridge.' : 'Press R to load a cartridge.')) return this.hint!.text;
+    if (me.held === 'rifle' && want('rifle', touch ? 'Hold aim to raise the rifle. Cold and tiredness make it sway.' : 'Hold the right button to raise the rifle. Cold and tiredness make it sway. R reloads.', 8)) return this.hint!.text;
+    if (me.held === 'flashlight' && !me.lightOn && (view.env.clock > 18 || view.env.clock < 6.5) && want('light', touch ? 'Tap the light button to switch it on.' : 'F switches the flashlight on and off.')) return this.hint!.text;
     return '';
+  }
+
+  /** A wolf on the hunt within 70 m. */
+  private wolvesNear(view: View, me: PlayerEnt): boolean {
+    for (const w of view.list('wolf')) {
+      if (w.mood !== 'stalk' && w.mood !== 'circle' && w.mood !== 'feint' && w.mood !== 'charge') continue;
+      if (Math.hypot(w.x - me.x, w.z - me.z) < 70) return true;
+    }
+    return false;
   }
 }
