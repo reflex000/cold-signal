@@ -9,7 +9,8 @@
 //   ?nosave=1        never read or write the save (tools)
 //   ?fresh=1         ignore stored settings (tools; nothing is written either)
 //   ?real=terrain,sky,weather,forest | all | none   which real gfx systems replace stand-ins (see visuals.ts)
-//   ?gpu=1           measure GPU time per frame (timestamp queries; CS.stats().gpuMs)
+//   ?gpu=1           measure GPU time per frame (timestamp queries; CS.stats().gpuMs) on WebGPU;
+//                    ?gpu=gl also on WebGL2 (its timer queries are noisy and warn with shadow cascades)
 // Owner: GAME.
 import type { Settings } from './view';
 
@@ -30,6 +31,7 @@ export interface Params {
   fresh: boolean;
   real: string | null;
   gpu: boolean;
+  gpuGL: boolean;
 }
 
 export const DEFAULT_SEED = 417;
@@ -69,6 +71,7 @@ export function readParams(search: string = typeof location !== 'undefined' ? lo
     noSave: flag(u, 'nosave'),
     fresh: flag(u, 'fresh'),
     real: u.get('real'),
-    gpu: flag(u, 'gpu'),
+    gpu: flag(u, 'gpu') || u.get('gpu') === 'gl',
+    gpuGL: u.get('gpu') === 'gl',
   };
 }

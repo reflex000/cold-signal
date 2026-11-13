@@ -15,7 +15,7 @@ import type { Engine, Frame, GfxSystem, Quality } from '../api';
 import type { PostApi } from '../post';
 import type { World } from '../../world/types';
 import { ATMOS, U } from '../shared';
-import { AIR, fogAmount, fogColor, syncGlobals } from '../sky/common';
+import { AIR, fogAmount, fogColor } from '../sky/common';
 import { SNOWU, SNOW_PERIOD, SnowLayer } from './snow';
 import { DRIFTU, Spindrift } from './spindrift';
 import { StormVolumeNode, VOLU, compositeVolume, screenStreaks } from './volume';
@@ -81,8 +81,10 @@ export function createWeatherSystem(engine: Engine, world: World | null = null):
   });
 
   // ---- snow ----
-  const near = new SnowLayer({ name: 'snow.near', max: 24000, half: 11, below: 4, above: 9, size: [0.006, 0.016], shutter: 1 / 40, opacity: 0.9, seed: 1 });
-  const mid = new SnowLayer({ name: 'snow.mid', max: 9000, half: 26, below: 8, above: 18, size: [0.012, 0.03], shutter: 1 / 20, opacity: 0.55, seed: 2 });
+  // (flakes and clumps of a wind-driven snowfall a little larger than single crystals, so that a
+  // storm reads as falling snow in a frame and not only as fog)
+  const near = new SnowLayer({ name: 'snow.near', max: 24000, half: 11, below: 4, above: 9, size: [0.009, 0.022], shutter: 1 / 40, opacity: 0.95, seed: 1 });
+  const mid = new SnowLayer({ name: 'snow.mid', max: 9000, half: 26, below: 8, above: 18, size: [0.016, 0.04], shutter: 1 / 20, opacity: 0.6, seed: 2 });
   scene.add(near.mesh, mid.mesh);
   const drift = new Spindrift(world);
   scene.add(drift.mesh);
@@ -122,6 +124,9 @@ export function createWeatherSystem(engine: Engine, world: World | null = null):
     U.storm.value = storm;
     U.snowfall.value = snowfall;
     U.visibility.value = visibility;
+    // Fresh snow on branches and props: a settled base (crowns stay dark green under it) that
+    // the snow laid down since the run began builds up (env.snowAccum, metres of new snow).
+    U.snowCover.value = Math.min(1, 0.5 + 4 * Math.max(0, env.snowAccum || 0) + 0.12 * snowfall);
 
     // Fog: Koschmieder (3.9 / visibility) in snow; clear air keeps distant ridges readable.
     const haze = 0.085 + 0.915 * smooth(0.0, 0.32, storm);
@@ -198,7 +203,6 @@ export function createWeatherSystem(engine: Engine, world: World | null = null):
     const e = U.exposure.value;
     const fc = U.fogColor.value;
     uWoCol.value.setRGB(displayOf(fc.r * e * 1.1), displayOf(fc.g * e * 1.1), displayOf(fc.b * e * 1.1));
-    syncGlobals();
   }
 
   return {

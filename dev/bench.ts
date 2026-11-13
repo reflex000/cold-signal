@@ -15,7 +15,7 @@
 //   ?hud=1                        show fps / draw calls / backend in a corner
 //   ?exp=1.2                      multiply the exposure       ?tm=agx    tone mapper (default aces)
 //   ?dyn=1                        dynamic resolution          ?ldr=1 ?depth=standard   fallback paths
-//   ?gpu=0                        no GPU timestamp queries
+//   ?gpu=0                        no GPU timestamp queries (?gpu=gl: also on WebGL2)
 //
 // The page must have <link rel="icon" href="data:,"> in its head. It sets window.BACKEND and, once
 // the picture is on screen, window.DONE = true (tools/shot.mjs waits for that).
@@ -145,6 +145,7 @@ export async function createBench(o: BenchOptions = {}): Promise<Bench> {
     forceLDR: flag('ldr'),
     depth: param('depth') === 'standard' ? 'standard' : 'auto',
     gpuTiming: param('gpu') !== '0',
+    gpuTimingWebGL: param('gpu') === 'gl',
     dynamicResolution: flag('dyn'),
   });
   (window as any).BACKEND = engine.backend;

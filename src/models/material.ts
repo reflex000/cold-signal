@@ -31,7 +31,7 @@ import {
   max, min, mix, modelWorldMatrix, modelWorldMatrixInverse, normalLocal, normalView, normalViewGeometry, normalize, positionLocal, positionView,
   positionViewDirection, pow, property, roughness, sin, smoothstep, sqrt, step, texture, uniform, vec2, vec3, vec4,
 } from 'three/tsl';
-import { U } from '../gfx/shared';
+import { HorizonPhysicalLighting, U } from '../gfx/shared';
 import { MAT } from './kit';
 
 // ------------------------------------------------------------------------------------------
@@ -121,6 +121,10 @@ class PropNodeMaterial extends THREE.MeshStandardNodeMaterial {
   setupEnvironment(builder: any): any {
     const node = super.setupEnvironment(builder);
     return node ?? new SkyReflectionNode();
+  }
+  /** Standard lighting plus TERRAIN's baked ridge shadow on the key light (see gfx/shared.ts). */
+  setupLightingModel(): any {
+    return new HorizonPhysicalLighting();
   }
 }
 

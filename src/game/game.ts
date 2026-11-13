@@ -97,6 +97,8 @@ export class Game {
   private rafId = 0;
   private lookSet = false;
   private thirdDev = false;
+  /** Rendered frames left during which the sky jumps straight to the light (after a debug env change). */
+  private skySnaps = 0;
   private tickMs = 0;
   private ticks = 0;
   private framesRendered = 0;
@@ -177,7 +179,7 @@ export class Game {
     // --- engine
     const device = await detectDevice();
     const quality = this.qualityName(this.settings.quality, device);
-    this.engine = await createEngine(this.canvas, { quality, forceWebGL: p.webgl, dynamicResolution: !p.still && !p.dev, gpuTiming: p.gpu });
+    this.engine = await createEngine(this.canvas, { quality, forceWebGL: p.webgl, dynamicResolution: !p.still && !p.dev, autoQuality: !p.still && !p.dev && this.settings.quality === 'auto', gpuTiming: p.gpu, gpuTimingWebGL: p.gpuGL });
     const engine = this.engine;
     engine.userScale = this.settings.renderScale;
     engine.post.userGrain = this.settings.grain;
@@ -447,7 +449,11 @@ export class Game {
     const e = this.engine;
     switch (key) {
       case 'quality':
-        if (e) e.setQuality(this.qualityName(v as Settings['quality']));
+        if (e) {
+          e.setQuality(this.qualityName(v as Settings['quality']));
+          // 'auto' may step a tier down when even the lowest resolution misses the frame target
+          e.autoQuality = v === 'auto' && !this.params.still && !this.params.dev;
+        }
         break;
       case 'renderScale':
         if (e) e.userScale = v as number;
@@ -568,6 +574,10 @@ export class Game {
 
     if (this.ui && this.ui.wantsPointer() && this.input.locked) this.input.exitLock();
     if (render) {
+      if (this.skySnaps > 0) {
+        this.skySnaps--;
+        this.engine.get<{ name: string; update(): void; snap?: () => void }>('sky')?.snap?.();
+      }
       this.engine.frame({ dt, time: this.view.time, view: this.view });
       this.framesRendered++;
     }
@@ -647,6 +657,9 @@ export class Game {
     }
     if (o.storm !== undefined) act({ t: 'debug', cmd: 'storm', args: [o.storm] });
     if (o.clock !== undefined) act({ t: 'debug', cmd: 'clock', args: [o.clock] });
+    // A tool jumping the weather or the hour wants the new light at once, not after the sky has
+    // eased its tables, environment and exposure over many frames (tools render few frames).
+    this.skySnaps = 8;
   }
 
   stats(): Record<string, unknown> {

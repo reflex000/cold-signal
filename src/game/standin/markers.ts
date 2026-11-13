@@ -6,6 +6,8 @@
 // nearest flames (a fixed count, so the lighting never recompiles).
 // Owner: GAME.
 import * as THREE from 'three/webgpu';
+import * as TSL from 'three/tsl';
+import { U } from '../../gfx/shared';
 import type { Frame, GfxSystem, Quality } from '../../gfx/api';
 import type { CsEngine } from '../../gfx/engine';
 import type { CrateEnt, DeviceEnt, FireEnt, ItemId, LogEnt, PickupEnt, PlayerEnt, WoodEnt } from '../../sim/types';
@@ -94,6 +96,58 @@ function done(pl: Pool): void {
   if (pl.mesh.instanceColor) pl.mesh.instanceColor.needsUpdate = true;
 }
 
+/** Three crossed vertical cards, 1 wide and 1 tall, standing on y = 0 (uv: x across, y up). */
+function flameGeometry(): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  for (let i = 0; i < 3; i++) parts.push(new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0).rotateY((i * Math.PI) / 3));
+  const pos: number[] = [], uv: number[] = [], idx: number[] = [];
+  for (const g of parts) {
+    const b = pos.length / 3;
+    pos.push(...(g.getAttribute('position').array as Float32Array));
+    uv.push(...(g.getAttribute('uv').array as Float32Array));
+    const ia = g.index!.array;
+    for (let k = 0; k < ia.length; k++) idx.push(b + ia[k]);
+    g.dispose();
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
+}
+
+/**
+ * A soft flame (stand-in until gfx/fx): additive, white-hot at the root, orange and thin toward a
+ * licking tip, flickering; the instance colour carries the fire colour times its strength.
+ */
+function flameMaterial(): THREE.MeshBasicNodeMaterial {
+  const { uv, float, smoothstep, sin, abs, mix, vec3, vec4, exp, length, positionWorld, instanceIndex } = TSL as any;
+  const m = new THREE.MeshBasicNodeMaterial();
+  m.name = 'standin-flame';
+  m.transparent = true;
+  m.depthWrite = false;
+  m.blending = THREE.AdditiveBlending;
+  m.side = THREE.DoubleSide;
+  // Additive light is dimmed by the air in front of it, never mixed toward the fog colour (that
+  // would paint a grey card into the storm): attenuate by the fog's transmittance instead.
+  m.fog = false;
+  const t = U.time;
+  const p = uv();
+  const v = p.y;
+  const ph = positionWorld.x.mul(3.1).add(positionWorld.z.mul(1.7)).add(float(instanceIndex).mul(1.3));
+  // the tongue sways and wavers more toward the tip
+  const sway = sin(t.mul(9.0).add(v.mul(5.0)).add(ph)).mul(0.07).add(sin(t.mul(15.0).sub(v.mul(9.0)).add(ph.mul(1.7))).mul(0.04)).mul(v);
+  const u = abs(p.x.sub(0.5).sub(sway)).mul(2);
+  const width = float(1).sub(v).pow(0.75).mul(0.85).add(0.06);
+  const body = smoothstep(width, width.mul(0.3), u);
+  const fade = smoothstep(0.0, 0.08, v).mul(smoothstep(1.0, 0.45, v.add(sin(t.mul(11.0).add(ph)).mul(0.06))));
+  const core = smoothstep(0.55, 0.0, v).mul(smoothstep(width.mul(0.55), 0.0, u));
+  const col = mix(vec3(0.55, 0.16, 0.04), vec3(1.0, 0.82, 0.55), core);
+  const seen = exp(U.fogDensity.mul(length(positionWorld.sub(U.camPos))).negate());
+  m.colorNode = vec4(col.mul(body.mul(fade)).mul(seen).mul(0.6), 1);
+  return m;
+}
+
 export function createStandinMarkers(engine: CsEngine): GfxSystem {
   const scene = engine.scene;
   const group = new THREE.Group();
@@ -107,7 +161,7 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
   const unitPost = new THREE.CylinderGeometry(1, 1, 1, 7).translate(0, 0.5, 0);
   const capsule = new THREE.CapsuleGeometry(0.5, 1, 4, 10).translate(0, 1, 0); // 2 tall
   const sphere = new THREE.IcosahedronGeometry(1, 1);
-  const flame = new THREE.ConeGeometry(1, 1, 7).translate(0, 0.5, 0);
+  const flame = flameGeometry();
   const stone = new THREE.IcosahedronGeometry(1, 0);
 
   const boxes = pool(unitBox, lit, 600, 'standin-boxes');
@@ -119,7 +173,8 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
   const bodies = pool(capsule, lit, 64, 'standin-bodies');
   const heads = pool(sphere, lit, 64, 'standin-heads');
   const stones = pool(stone, lit, 400, 'standin-stones');
-  const flames = pool(flame, glow, 64, 'standin-flames', false);
+  const flameMat = flameMaterial();
+  const flames = pool(flame, flameMat, 64, 'standin-flames', false);
   const sparks = pool(sphere, glow, 64, 'standin-glow', false);
   const all = [boxes, cyls, items, sticks, posts, bodies, heads, stones, flames, sparks];
   for (const p of all) group.add(p.mesh);
@@ -223,8 +278,8 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
         const base = e.type === 'barrel' ? 0.95 : e.type === 'stove' ? 0.25 : 0.05;
         if (e.lit) {
           const h = (e.type === 'stove' ? 0.25 : 0.55) * (0.5 + heat) * fl;
-          add(flames, e.x, e.y + base, e.z, t * 0.7, 0, 0, 0.22 * (0.6 + heat * 0.6), h, 0.22 * (0.6 + heat * 0.6), FIRE, 14 * heat);
-          add(flames, e.x, e.y + base, e.z, -t, 0, 0, 0.12, h * 1.35, 0.12, [1, 0.62, 0.25], 22 * heat);
+          add(flames, e.x, e.y + base, e.z, t * 0.7, 0, 0, 0.5 * (0.6 + heat * 0.6), h * 1.15, 0.5 * (0.6 + heat * 0.6), FIRE, 10 * heat);
+          add(flames, e.x, e.y + base, e.z, -t * 1.3, 0, 0, 0.26, h * 1.45, 0.26, [1, 0.62, 0.25], 12 * heat);
         } else add(sparks, e.x, e.y + base + 0.03, e.z, 0, 0, 0, 0.18, 0.04, 0.18, FIRE, 3);
         light(e.x, e.y + base + 0.5, e.z, 13 * heat * fl, FIRE, view);
       }
@@ -299,6 +354,7 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
     dispose(): void {
       scene.remove(group);
       for (const g of [unitBox, unitCyl, unitPost, capsule, sphere, flame, stone]) g.dispose();
+      flameMat.dispose();
       lit.dispose();
       glow.dispose();
     },

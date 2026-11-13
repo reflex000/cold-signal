@@ -23,7 +23,7 @@ import {
 } from 'three/tsl';
 import { U } from '../shared';
 import { ForestLambert, ditherNoise, effectiveSnow, gustAt, rotY, snowCoverage, snowShade, treeSway, type N } from './common';
-import { FU, KIND_INDEX, createBakeMaterial, lodDistance, treeTint, type BakeLayout } from './treemat';
+import { FU, KIND_INDEX, createBakeMaterial, lodDistance, lodNoise, treeTint, type BakeLayout } from './treemat';
 import { FRAME_BOX, SNAG_H, TREE_H, treeGeometry, type GeoKind } from './treegen';
 
 export const IMP = {
@@ -242,7 +242,9 @@ function impostorPosition(): N {
     const tB: N = smoothstep(FU.nearEnd.sub(FU.nearBand), FU.nearEnd, d);
     const thin: N = smoothstep(FU.thin0, FU.thin1, d).mul(step(FU.density, rnd));
     const gone: N = max(max(step(tB, 0.0005), step(0.999, thin)), step(FU.farEnd, d));
-    V.m.assign(vec4(rnd, tB, 0, 0));
+    // how far into the stand's own shade: distant trees get no cast shadows from their neighbours
+    // (impostors cast none), so they are shaded here instead and a forest seen from afar reads dark
+    V.m.assign(vec4(rnd, tB, smoothstep(FU.nearEnd, FU.nearEnd.mul(3.5), d), 0));
     return mix(world, base, gone);
   })();
   return impPosition;
@@ -288,7 +290,7 @@ function impAlpha(atlas: ImpostorAtlas): N {
   // the mips average coverage away: give some back with distance so far crowns stay full
   const a1: N = cover.mul(t.mip.mul(0.3).add(1));
   const alpha: N = a1.sub(0.5).div(max(fwidth(a1), 0.0001)).add(0.5).clamp(0, 1);
-  return alpha.mul(step(ditherNoise(), V.m.y.sub(0.00001)));
+  return alpha.mul(step(lodNoise(V.m.x), V.m.y.sub(0.00001)));
 }
 
 /** The lit impostors: depth test against the prepass, no depth write. */
@@ -326,6 +328,7 @@ export function createImpostorMaterial(atlas: ImpostorAtlas): THREE.MeshLambertN
     // keeps its share of dark needles instead of turning all white (or all dark) at once
     const c: N = snowCoverage(V.w.w, pot, t.mip.mul(0.09).add(0.08));
     const col: N = mix(albedo, sh.color, c).toVar();
+    col.mulAssign(mix(float(1), mix(float(0.42), float(0.38), c), V.m.z));
     If(FU.lodTint.greaterThan(0.5), () => {
       col.mulAssign(vec3(0.5, 0.6, 1.7));
     });

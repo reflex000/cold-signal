@@ -16,7 +16,7 @@ import type { World } from '../../world/types';
 import { ATMOS, U } from '../shared';
 import { skyBodies, starFrame, type SkyBodies } from './astro';
 import { Atmosphere, SkyLut, RG } from './atmosphere';
-import { HORIZON_W, SKY, horizonTexture, syncGlobals } from './common';
+import { HORIZON_W, SKY, horizonTexture } from './common';
 import { SkyEnv } from './env';
 import { SKYU, createDomeMaterial, createEnvMaterial, type SkyDetail } from './nodes';
 
@@ -457,7 +457,6 @@ export function createSkySystem(engine: Engine, world: World | null = null): Sky
     else expLog += (Math.log(expT) - expLog) * (1 - Math.exp(-dt * 1.4));
     U.exposure.value = Math.exp(expLog) * Math.pow(2, sys.exposureBias);
     ATMOS.luminance = keyLum;
-    syncGlobals();
     snapNext = false;
   }
 

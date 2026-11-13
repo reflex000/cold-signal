@@ -24,8 +24,20 @@ export interface EngineOptions {
   depth?: 'auto' | 'standard';
   /** Measure GPU time per frame with timestamp queries where the backend has them. Default off. */
   gpuTiming?: boolean;
+  /**
+   * Also measure it on the WebGL2 backend. Off unless asked: three's timer queries cannot nest, and
+   * with shadow cascades rendered inside the frame WebGL2 logs "query already active" every frame.
+   */
+  gpuTimingWebGL?: boolean;
   /** Start with dynamic resolution on. It can be switched at any time. */
   dynamicResolution?: boolean;
+  /**
+   * The 'auto' setting: when dynamic resolution sits at the tier's floor and frames still miss
+   * the target for a few seconds, step down one quality tier (never below autoFloor).
+   */
+  autoQuality?: boolean;
+  /** Lowest tier auto quality may fall to. Default 'low' ('mobile' stays 'mobile'). */
+  autoFloor?: QualityName;
 }
 
 export interface DeviceLostInfo {
@@ -49,8 +61,10 @@ export interface CsEngine extends Engine {
   userScale: number;
   /** Nudge the render scale to hold the frame-time target (60 fps, or 30 on the 'mobile' preset). */
   dynamicResolution: boolean;
-  /** The factor dynamic resolution currently applies, 0.6..1. */
+  /** The factor dynamic resolution currently applies, from the tier's floor (DYN_FLOOR) to 1. */
   readonly dynScale: number;
+  /** Step the quality tier down when dynamic resolution alone cannot hold the target (the 'auto' setting). */
+  autoQuality: boolean;
   /**
    * Compile the materials of one object that is about to be added to the scene (a fire, a flare,
    * a model loaded mid-game) so its first frame does not hitch. Safe while frames are running.
@@ -59,6 +73,11 @@ export interface CsEngine extends Engine {
 }
 
 const LOST_KEY = 'cs.gfx.lost';
+/**
+ * Lowest dynamic-resolution factor per tier (times quality.renderScale): the picture is never
+ * softer than this. Below it, auto quality drops a tier instead of blurring further.
+ */
+const DYN_FLOOR: Record<QualityName, number> = { mobile: 0.75, low: 0.75, medium: 0.65, high: 0.6, ultra: 0.6 };
 const NEAR = 0.08;
 const FAR = 6000;
 
@@ -106,6 +125,10 @@ class EngineImpl implements CsEngine {
   onDeviceLost: ((info: DeviceLostInfo) => void) | null = null;
   dynamicResolution: boolean;
   dynScale = 1;
+  autoQuality: boolean;
+  private autoFloor: QualityName;
+  private dynMs = 16.7; // frame time averaged over about half a second (any frame rate)
+  private slowAtFloor = 0; // seconds spent at the floor while still over budget
 
   private scale = 1; // userScale
   private systems: GfxSystem[] = [];
@@ -124,7 +147,7 @@ class EngineImpl implements CsEngine {
   private renderFailures = 0;
   private disposed = false;
   // dynamic resolution state
-  private dynClock = 0;
+  private dynClock = -2; // seconds since the last change (negative: a grace period after start-up)
   private dynHold = 0; // seconds of headroom seen in a row
   private dynBackoff = 4; // seconds of headroom required before trying a higher scale
   private dynRaisedAt = -1; // dynClock when the scale was last raised (to judge the raise)
@@ -139,6 +162,8 @@ class EngineImpl implements CsEngine {
     this.backend = (renderer.backend as any).isWebGPUBackend === true ? 'webgpu' : 'webgl2';
     this.depthMode = (renderer as any).reversedDepthBuffer === true ? 'reversed' : 'standard';
     this.dynamicResolution = o.dynamicResolution === true;
+    this.autoQuality = o.autoQuality === true;
+    this.autoFloor = o.autoFloor ?? 'low';
     this.gpuTiming = o.gpuTiming === true && (renderer.backend as any).trackTimestamp === true;
 
     this.scene = new THREE.Scene();
@@ -189,6 +214,10 @@ class EngineImpl implements CsEngine {
     this.quality = getQuality(name);
     this.dynScale = 1;
     this.dynHold = 0;
+    this.slowAtFloor = 0;
+    // the new tier compiles its shaders: give it two seconds before judging its frame times
+    this.dynClock = -2;
+    this.dynMs = 1000 / 60;
     this.applyShadowQuality();
     this.post.setQuality(this.quality);
     for (const s of this.systems) s.setQuality?.(this.quality);
@@ -247,6 +276,7 @@ class EngineImpl implements CsEngine {
       const st = this.stats;
       st.frameMs += (ms - st.frameMs) * 0.08;
       st.fps = 1000 / st.frameMs;
+      this.dynMs += (ms - this.dynMs) * (1 - Math.exp(-ms / 500));
       if (this.dynamicResolution) this.adaptResolution(ms / 1000);
     }
     this.lastFrameAt = now;
@@ -319,17 +349,20 @@ class EngineImpl implements CsEngine {
    */
   private adaptResolution(dt: number): void {
     const target = this.quality.name === 'mobile' ? 1000 / 30 : 1000 / 60;
-    const ms = this.stats.frameMs;
+    // A frame-rate independent average (about half a second): at 10 fps the old per-frame average
+    // took seconds per step; the picture now settles in one or two seconds.
+    const ms = this.dynMs;
     const gpu = this.stats.gpuMs;
+    const floor = DYN_FLOOR[this.quality.name] ?? 0.6;
     this.dynClock += dt;
     let next = this.dynScale;
-    if (ms > target * 1.12) {
+    if (ms > target * 1.1) {
       this.dynHold = 0;
       // Judge a recent raise: if it broke the budget, wait longer before the next one.
       if (this.dynRaisedAt >= 0 && this.dynClock - this.dynRaisedAt < 3) this.dynBackoff = Math.min(60, this.dynBackoff * 2);
       this.dynRaisedAt = -1;
       // Pixel cost is roughly linear in area, so the scale goes with the square root.
-      next = this.dynScale * Math.min(0.95, Math.max(0.8, Math.sqrt(target / ms)));
+      next = this.dynScale * Math.min(0.95, Math.max(0.75, Math.sqrt(target / ms)));
     } else {
       const headroom = gpu > 0 ? gpu < target * 0.72 : ms < target * 1.04;
       this.dynHold = headroom ? this.dynHold + dt : 0;
@@ -340,13 +373,32 @@ class EngineImpl implements CsEngine {
       }
     }
     // Quantised and rate-limited: every change reallocates the render targets.
-    next = Math.min(1, Math.max(0.6, Math.round(next * 20) / 20));
-    if (next !== this.dynScale && this.dynClock >= 0.75) {
+    next = Math.min(1, Math.max(floor, Math.round(next * 20) / 20));
+    if (next !== this.dynScale && this.dynClock >= 0.5) {
       this.dynScale = next;
       this.dynClock = 0;
       if (this.dynRaisedAt >= 0) this.dynRaisedAt = 0;
-      this.stats.frameMs = Math.min(this.stats.frameMs, target * 1.1); // let the average settle from a fair start
+      this.dynMs = Math.min(this.dynMs, target * 1.08); // judge the new size from a fair start
       this.sizeDirty = true;
+    }
+    // At the tier's floor and still slow for a few seconds: auto quality takes a tier off instead
+    // of blurring the picture further ('mobile' devices start on the lowest tier already).
+    const atFloor = this.dynScale <= floor + 1e-3;
+    this.slowAtFloor = atFloor && ms > target * 1.15 && this.dynClock >= 0 ? this.slowAtFloor + dt : 0;
+    if (this.autoQuality && this.slowAtFloor >= 3) {
+      this.slowAtFloor = 0;
+      const lower = lowerQuality(this.quality.name);
+      const order = ['mobile', 'low', 'medium', 'high', 'ultra'];
+      if (lower !== this.quality.name && order.indexOf(lower) >= order.indexOf(this.autoFloor)) {
+        const from = this.quality.name;
+        this.setQuality(lower);
+        console.info(`[engine] auto quality: ${from} -> ${lower} (frames over budget at the lowest resolution)`);
+        try {
+          this.canvas.dispatchEvent(new CustomEvent('cs:quality', { detail: { from, to: lower } }));
+        } catch {
+          /* no events: nothing to tell */
+        }
+      }
     }
   }
 
@@ -467,10 +519,12 @@ export async function createEngine(canvas: HTMLCanvasElement, opts: { quality: Q
     reversedDepthBuffer: reversed,
     outputBufferType: hdr ? THREE.HalfFloatType : THREE.UnsignedByteType,
     powerPreference: windows ? undefined : 'high-performance',
-    trackTimestamp: opts.gpuTiming === true,
+    trackTimestamp: opts.gpuTiming === true && (!forceWebGL || opts.gpuTimingWebGL === true),
   };
   const renderer = new THREE.WebGPURenderer(params as any);
   await renderer.init();
+  // three fell back to WebGL2 on its own: same rule as asking for it
+  if ((renderer.backend as any).isWebGPUBackend !== true && opts.gpuTimingWebGL !== true) (renderer.backend as any).trackTimestamp = false;
 
   // WebGPU was expected but three fell back to WebGL2 (device creation failed): re-check what
   // that context can do, since the choices above assumed WebGPU.

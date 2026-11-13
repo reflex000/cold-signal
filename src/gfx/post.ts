@@ -42,7 +42,7 @@ import { U } from './shared';
 // TSL is used untyped here: the node typings lag the library and add nothing to shader code.
 const {
   pass, mrt, output, velocity, rtt, uv, texture, uniform, reference, passTexture, context,
-  vec2, vec3, vec4, float, Fn, mix, smoothstep, max, min, clamp, dot, sqrt, luminance,
+  vec2, vec3, vec4, float, Fn, mix, smoothstep, max, min, clamp, dot, sqrt, exp, luminance,
   agxToneMapping, acesFilmicToneMapping, sRGBTransferOETF, interleavedGradientNoise, screenCoordinate,
   getViewPosition, getNormalFromDepth, perspectiveDepthToViewZ, logarithmicDepthToViewZ,
   viewZToPerspectiveDepth, rand, NodeUpdateType, isBackgroundDepth,
@@ -791,7 +791,14 @@ export class Post implements PostApi {
       // AO belongs to ambient light only. Without a depth pre-pass it is applied to the lit
       // result, so it is faded out where direct light dominates (sunlit snow stays clean).
       const lit = smoothstep(0.3, 1.0, luminance(c.mul(U.exposure)));
-      c = c.mul(mix(float(1), occ, u.aoStrength.mul(lit.oneMinus())));
+      // It only grounds nearby things: gone by ~75 m (further out the half-resolution taps and the
+      // depth-derived normals turn grazing ground and ridgelines into dark dots and bands), and it
+      // must not darken the air in front of a surface: faded by the fog's transmittance (squared,
+      // so a storm or a whiteout takes it away well before the surface itself disappears).
+      const vd: N = this.viewDepthOf(depthTex.sample(uvN).r);
+      const near: N = smoothstep(35, 75, vd).oneMinus();
+      const clear: N = exp(U.fogDensity.mul(vd).mul(-2).max(-30));
+      c = c.mul(mix(float(1), occ, u.aoStrength.mul(lit.oneMinus()).mul(near).mul(clear)));
     }
     this.active.ao = useAo;
 

@@ -5,10 +5,10 @@
 // Everything here is TSL and runs on the WebGPU and the WebGL2 backends alike.
 import * as THREE from 'three/webgpu';
 import {
-  Fn, cameraProjectionMatrix, cameraWorldMatrix, cos, dot, float, fract, mix, normalView, positionViewDirection, pow, roughness,
-  screenCoordinate, sin, smoothstep, texture, vec2, vec3, vec4,
+  Fn, cameraProjectionMatrix, cameraWorldMatrix, cos, dot, float, fract, mix, normalView, normalWorld, pmremTexture, positionViewDirection,
+  pow, roughness, screenCoordinate, sin, smoothstep, texture, vec2, vec3, vec4,
 } from 'three/tsl';
-import { U } from '../shared';
+import { HorizonPhongLighting, HorizonPhysicalLighting, U } from '../shared';
 
 export type N = any;
 
@@ -151,6 +151,10 @@ export class ForestMaterial extends THREE.MeshStandardNodeMaterial {
     const node = super.setupEnvironment(builder);
     return node ?? new ForestSkyReflection();
   }
+  /** Standard lighting plus TERRAIN's baked ridge shadow on the key light (see ../shared.ts). */
+  setupLightingModel(): any {
+    return new HorizonPhysicalLighting();
+  }
 }
 
 /**
@@ -165,6 +169,50 @@ export class ForestLambert extends THREE.MeshLambertNodeMaterial {
   constructor() {
     super();
     this.fog = true;
+  }
+  /**
+   * In r187 a Lambert material ignores scene.environment (only the standard material picks it up),
+   * so without this the crowns would get no sky light at all: black in shade, tinted navy by the fog.
+   */
+  setupEnvironment(builder: any): any {
+    const node = super.setupEnvironment(builder);
+    if (node) return node;
+    return builder.environmentNode ? new ForestEnvIrradiance(builder.environmentNode) : null;
+  }
+  /** Lambert (Phong without specular) plus TERRAIN's baked ridge shadow on the key light. */
+  setupLightingModel(): any {
+    return new HorizonPhongLighting(false);
+  }
+}
+
+/**
+ * The diffuse part of the image-based light for Lambert materials: the environment's irradiance
+ * along the normal (its blurriest level, as three's EnvironmentNode does for standard materials),
+ * added to the irradiance the Phong model's indirect term reads.
+ */
+class ForestEnvIrradiance extends THREE.LightingNode {
+  static get type(): string {
+    return 'ColdSignalForestEnvIrradiance';
+  }
+  private pmrem: N = null;
+  constructor(private envNode: N) {
+    super();
+    this.updateBeforeType = THREE.NodeUpdateType.RENDER;
+  }
+  setup(builder: any): any {
+    this.pmrem ??= pmremTexture(this.envNode.value);
+    const irr: N = this.pmrem.context({ getUV: () => normalWorld, getTextureLevel: () => float(1) }).mul(Math.PI);
+    builder.context.irradiance.addAssign(irr);
+    return null;
+  }
+  updateBefore(frame: any): boolean | undefined {
+    // the environment can be swapped without a rebuild (as in three's EnvironmentNode)
+    const t = this.envNode.value;
+    if (t && this.pmrem && this.pmrem.value !== t) {
+      this.pmrem.value = t;
+      this.pmrem.updateBefore(frame);
+    }
+    return undefined;
   }
 }
 

@@ -1,6 +1,7 @@
 // Terrain constants and the level-of-detail configuration per quality tier.
 // Owner: TERRAIN.
 import type { Quality } from '../api';
+import { HORIZON_ATLAS } from '../shared';
 
 /** Half size of the whole terrain domain: 3 x 3 root nodes of ROOT metres. */
 export const DOMAIN_HALF = 6144;
@@ -16,9 +17,9 @@ export const FAR_N = 513;
 export const FAR_CELL = 24;
 export const FAR_ORIGIN = -DOMAIN_HALF;
 
-/** Horizon (terrain shadow) maps. */
-export const HORIZON_INNER = 512; // texels over the heightmap square (4 m)
-export const HORIZON_OUTER = 256; // texels over the whole domain (48 m)
+/** Horizon (terrain shadow) maps: one atlas shared with every material, layout in ../shared.ts. */
+export const HORIZON_INNER = HORIZON_ATLAS.inner; // texels over the heightmap square (4 m)
+export const HORIZON_OUTER = HORIZON_ATLAS.outer; // texels over the whole domain (48 m)
 
 export interface LodConfig {
   /** Quads per node side (power of two). Quarter nodes use n / 2. */
@@ -41,7 +42,7 @@ export function lodConfig(detail: number): LodConfig {
   // [quads per node, finest cell, range / node size]. Cells per LOD band = n * k: the mesh density.
   const table: [number, number, number][] = [
     [16, 0.5, 2.5], // mobile: 40 cells per band, 0.5 m cells within 20 m
-    [16, 0.5, 3.0], // low: 48
+    [16, 0.5, 2.6], // low: 42
     [16, 0.25, 3.4], // medium: 54, 0.25 m cells within 14 m, 2 m from 55 m
     [32, 0.25, 3.0], // high / ultra: 96
   ];

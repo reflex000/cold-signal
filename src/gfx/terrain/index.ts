@@ -92,6 +92,7 @@ class TerrainSystemImpl implements TerrainSystem {
       cubicLod: uniform(3),
       detailFade: uniform(new THREE.Vector2(24, 72)),
       viewDist: uniform(2800),
+      canopyFade: uniform(new THREE.Vector2(60, 100)),
     };
     this.h = createHeightFns(this.data, this.tu.cell0, this.tu.cubicLod);
     this.horizon = new HorizonMaps(this.data, this.h);
@@ -136,6 +137,9 @@ class TerrainSystemImpl implements TerrainSystem {
     const tier = materialTier(q);
     this.shadowDist = q.shadowCascades > 0 ? q.shadowDistance * 1.15 : 0;
     this.tu.viewDist.value = q.viewDistance;
+    // tree shadows (forest proxies) reach about this far; beyond it the canopy shade takes over
+    const treeShadow = q.shadowCascades > 0 ? Math.min(q.shadowDistance, q.treeNear) * 0.8 : 0;
+    this.tu.canopyFade.value.set(Math.max(12, treeShadow * 0.75), Math.max(30, treeShadow * 1.25));
     const cfgChanged = !this.cfg || this.cfg.n !== cfg.n || this.cfg.cell0 !== cfg.cell0 || this.cfg.k !== cfg.k;
     const tierChanged = !this.tier || this.tier.mobile !== tier.mobile || this.tier.sparkle !== tier.sparkle;
     if (cfgChanged) {

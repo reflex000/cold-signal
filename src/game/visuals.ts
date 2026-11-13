@@ -1,10 +1,10 @@
 // THE SEAM between the game and the visual world. addVisualSystems() adds, in order: sky (light),
 // weather (fog, snowfall; reads the light the sky wrote), terrain, forest, the placed structures
-// and props, and the entity markers. For sky / weather / terrain / forest it uses the real system
-// from src/gfx/<name>/index.ts when that module exists and is selected, else the stand-in from
-// src/game/standin/. Swapping a stand-in for the real thing is one entry in DEFAULT_REAL (or
-// ?real=terrain,sky in the URL to try one); a real system that fails to load or throws while
-// being created falls back to its stand-in, with one console warning.
+// and props (KIT's props system, one prop material for models and blueprint stand-ins alike), and
+// the entity markers. Sky / weather / terrain / forest are the real systems from
+// src/gfx/<name>/index.ts (DEFAULT_REAL); ?real=none or ?real=terrain,sky picks others for tests.
+// A real system that fails to load or throws while being created falls back to its stand-in in
+// src/game/standin/, with one console warning. Everything is added before engine.warmup().
 // Owner: GAME.
 import type { GfxSystem } from '../gfx/api';
 import type { CsEngine } from '../gfx/engine';
@@ -19,8 +19,8 @@ import { createStandinWeather } from './standin/weather';
 export type VisualName = 'sky' | 'weather' | 'terrain' | 'forest';
 const NAMES: readonly VisualName[] = ['sky', 'weather', 'terrain', 'forest'];
 
-/** Real systems used when the URL does not say (?real=...). Add a name once its module works in the game. */
-const DEFAULT_REAL: readonly VisualName[] = [];
+/** Real systems used when the URL does not say (?real=...). */
+const DEFAULT_REAL: readonly VisualName[] = ['sky', 'weather', 'terrain', 'forest'];
 
 const FACTORY: Record<VisualName, string> = {
   sky: 'createSkySystem',

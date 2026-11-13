@@ -270,7 +270,8 @@ export function createCover(world: World): CoverLayer {
         // the world cell this slot stands for in the window around the camera
         const i = ci - h + ((((si - (ci - h)) % active) + active) % active);
         const j = cj - h + ((((sj - (cj - h)) % active) + active) % active);
-        const slot = sj * N + si;
+        // the active window is packed at the front of the buffers: only active^2 instances are drawn
+        const slot = sj * active + si;
         if (cellI[slot] !== i || cellJ[slot] !== j) {
           fill(slot, i, j);
           changed = true;
@@ -289,6 +290,7 @@ export function createCover(world: World): CoverLayer {
     const radius = amount <= 0 ? 0 : 9 + 22 * amount;
     active = Math.min(N, Math.ceil((2 * radius) / CELL) | 1);
     if (amount <= 0) active = 0;
+    stoneGeo.instanceCount = plantGeo.instanceCount = active * active;
     CU.end.value = radius;
     RU.coverEnd.value = radius;
     cellI.fill(0x7fffffff);

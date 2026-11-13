@@ -24,33 +24,6 @@ export type N = any;
  */
 const uniform = (v: unknown): N => objUniform(v).setGroup(renderGroup);
 
-/**
- * Render-group mirrors of the shared light and fog uniforms (src/gfx/shared.ts U.*), for the same
- * reason. syncGlobals() copies U into them; both systems call it at the end of their update.
- */
-export const G = {
-  sunDir: uniform(new THREE.Vector3(0, 1, 0)),
-  sunColor: uniform(new THREE.Vector3()),
-  moonDir: uniform(new THREE.Vector3(0, 1, 0)),
-  moonColor: uniform(new THREE.Vector3()),
-  fogColor: uniform(new THREE.Vector3(0.7, 0.76, 0.82)),
-  fogDensity: uniform(0.0006),
-  fogHeight: uniform(0.004),
-  camY: uniform(0),
-};
-
-export function syncGlobals(): void {
-  G.sunDir.value.copy(U.sunDir.value);
-  const sc = U.sunColor.value, mc = U.moonColor.value, fc = U.fogColor.value;
-  G.sunColor.value.set(sc.r, sc.g, sc.b);
-  G.moonDir.value.copy(U.moonDir.value);
-  G.moonColor.value.set(mc.r, mc.g, mc.b);
-  G.fogColor.value.set(fc.r, fc.g, fc.b);
-  G.fogDensity.value = U.fogDensity.value;
-  G.fogHeight.value = U.fogHeight.value;
-  G.camY.value = U.camPos.value.y;
-}
-
 function blankHalf(w = 1, h = 1): THREE.DataTexture {
   const t = new THREE.DataTexture(new Uint16Array(w * h * 4), w, h, THREE.RGBAFormat, THREE.HalfFloatType);
   t.magFilter = THREE.LinearFilter;
@@ -133,10 +106,10 @@ export function hgPhase(c: N, g: N): N {
 /** Clear-sky radiance toward d: sun and moon tables plus the night floor (no discs, no clouds). */
 export function clearSky(d: N): N {
   // (level 0: the tables have no mips, and an explicit level is legal inside any branch)
-  const us = lutUV(d, G.sunDir);
-  const sun = SKY.sunA.sample(us).level(0).rgb.add(SKY.sunB.sample(us).level(0).rgb.mul(miePhase(dot(d, G.sunDir)))).mul(SKY.sunE);
-  const um = lutUV(d, G.moonDir);
-  const moon = SKY.moonA.sample(um).level(0).rgb.add(SKY.moonB.sample(um).level(0).rgb.mul(miePhase(dot(d, G.moonDir)))).mul(SKY.moonE);
+  const us = lutUV(d, U.sunDir);
+  const sun = SKY.sunA.sample(us).level(0).rgb.add(SKY.sunB.sample(us).level(0).rgb.mul(miePhase(dot(d, U.sunDir)))).mul(SKY.sunE);
+  const um = lutUV(d, U.moonDir);
+  const moon = SKY.moonA.sample(um).level(0).rgb.add(SKY.moonB.sample(um).level(0).rgb.mul(miePhase(dot(d, U.moonDir)))).mul(SKY.moonE);
   // Airglow brightens toward the horizon (the van Rhijn effect: a longer path through the layer).
   const glowGrad = float(1).add(float(1.6).mul(float(1).sub(clamp(d.y, 0, 1)).pow(3)));
   return sun.add(moon).add(SKY.nightFloor.mul(glowGrad));
@@ -152,10 +125,10 @@ export function clearSky(d: N): N {
  * volume carries the rest, see AIR.volShare).
  */
 export function fogDepth(dist: N, dy: N, share: N = AIR.sceneShare): N {
-  const x = clamp(G.fogHeight.mul(dist).mul(dy), -14, 80);
+  const x = clamp(U.fogHeight.mul(dist).mul(dy), -14, 80);
   // (1 - e^-x) / x, with its limit 1 - x/2 near zero
   const f = select(abs(x).lessThan(1e-3), float(1).sub(x.mul(0.5)), float(1).sub(exp(x.negate())).div(x));
-  return G.fogDensity.mul(share).mul(dist).mul(f);
+  return U.fogDensity.mul(share).mul(dist).mul(f);
 }
 
 /** Optical depth from the camera to the edge of the world along a sky direction (dy = d.y). */
@@ -168,9 +141,9 @@ export function fogColor(d: N): N {
   const az = atan(d.z, d.x).mul(1 / (2 * Math.PI)).add(0.5);
   const haze = SKY.horizon.sample(vec2(az, 0.5)).level(0).rgb;
   const g: N = AIR.glowG;
-  const storm = vec3(G.fogColor)
-    .add(vec3(G.sunColor).mul(hgPhase(dot(d, G.sunDir), g)).mul(AIR.glow))
-    .add(vec3(G.moonColor).mul(hgPhase(dot(d, G.moonDir), g)).mul(AIR.glow));
+  const storm = vec3(U.fogColor)
+    .add(vec3(U.sunColor).mul(hgPhase(dot(d, U.sunDir), g)).mul(AIR.glow))
+    .add(vec3(U.moonColor).mul(hgPhase(dot(d, U.moonDir), g)).mul(AIR.glow));
   return mix(haze, storm, AIR.stormMix);
 }
 

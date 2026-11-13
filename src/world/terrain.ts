@@ -74,6 +74,23 @@ function terrace(t: number, k: number): number {
   return (f + smooth01(0.22, 0.78, s - f)) / k;
 }
 
+/**
+ * Strata that do not read as a staircase: the k beds rise and fall along the face (u, metres
+ * along it) and their steps are only partly sharp, so ledges break, merge and fade instead of
+ * running level for hundreds of metres. `amount` 0 gives the plain terrace (kept where a
+ * structure is built against the face). Still 0 at t = 0 and 1 at t = 1.
+ */
+function strata(t: number, k: number, u: number, nz: Noises, off: number, amount: number): number {
+  // the foot of a wall (the walkable lower part, where the route and the log carry pass) stays
+  // exactly the plain terrace; the irregularity only shapes the faces above it
+  amount *= smooth01(0.12, 0.3, t);
+  if (amount <= 0) return terrace(t, k);
+  const tilt = 0.55 * nz.misc.at(u / 230 + off, 3.7) + 0.25 * nz.misc.at(u / 70 + off, 5.3);
+  const tt = Math.min(1, Math.max(0, t + (tilt / k) * Math.sin(Math.PI * t) * amount));
+  const sharp = 1 - amount * (0.5 + 0.22 * nz.misc.at(u / 110 + off, 9.1));
+  return t + (terrace(tt, k) - t) * sharp;
+}
+
 /** Nearest point on the gully polyline: distance and floor height there. */
 function gullyQuery(x: number, z: number): { d: number; fh: number; along: number } {
   const g = L.GULLY;
@@ -201,7 +218,7 @@ function mountainside(s: number, along: number, hw: number, x: number, z: number
   if (s <= 0) return add;
   const r = smooth01(0, 170, s);
   const f = r * r;
-  add += hw * (0.5 * f + 0.5 * terrace(f, 6));
+  add += hw * (0.5 * f + 0.5 * strata(f, 6, along, nz, off, 1));
   add += 0.15 * hw * r * (nz.rock.ridged(x / 70 + off, z / 70, 2) - 0.42); // crags
   if (s > 170) add += 0.32 * (s - 170) + 150 * smooth01(170, 420, s) * (nz.peak.ridged(x / 240, z / 240 + off, 3) - 0.35);
   return add;
@@ -553,7 +570,7 @@ export function buildTerrain(seed: number, progress: (p: number, label: string) 
           // the face (with buttresses in plan and strata), and the step it makes in the slope
           // fading out toward the ridge
           const t = smooth01(-1, 11, s + colButt[i] + 2.2 * nz.misc.at(x / 16, z / 16));
-          let add = H * terrace(t, 4) * (1 - 0.55 * smooth01(40, 300, s));
+          let add = H * strata(t, 4, x, nz, 0.37, smooth01(14, 60, Math.abs(x - L.CAVE_X))) * (1 - 0.55 * smooth01(40, 300, s));
           // a couloir: a V-shaped gully, its floor climbing at about 43 degrees, widening upward
           const cd = colCoulDx[i];
           if (cd < 60 && cd > -60) {

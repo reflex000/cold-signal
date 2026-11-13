@@ -2,7 +2,16 @@
 // the atmosphere. See docs/DESIGN.md section 5. Systems write, materials read.
 // Owner: ENGINE keeps this file; anyone may add a uniform here (append, never rename).
 import * as THREE from 'three/webgpu';
-import { texture, uniform } from 'three/tsl';
+import * as TSL from 'three/tsl';
+
+const { If, texture, uniform: objUniform, renderGroup, abs, asin, cameraWorldMatrix, clamp, dot, float, length, max, mix, positionWorld, smoothstep, step, vec2 } = TSL as any;
+
+/**
+ * Every shared uniform lives in three's RENDER group: uploaded once per render call and seen by
+ * every draw. In the default object group a uniform is only refreshed for materials that have node
+ * properties of their own, so plain materials read stale values through scene.fogNode.
+ */
+const uniform = (v: unknown): any => objUniform(v).setGroup(renderGroup);
 
 // A 1x1 black texture so texture uniforms are valid before their owner has made the real one.
 const blank = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
@@ -42,6 +51,12 @@ const _U = {
   trailOn: uniform(0), // 0 when the map is not available
   // screen (written by the engine on resize)
   resolution: uniform(new THREE.Vector2(1, 1)), // drawing-buffer size in pixels
+  // Baked terrain horizon (written by gfx/terrain, read through horizonLit / keyLightHorizon):
+  // the elevation angle of the terrain horizon toward the key light, so a valley in a ridge's
+  // shadow is in shadow on every surface at any distance. Layout: see HORIZON_ATLAS.
+  horizonTex: texture(blank),
+  horizonMap: uniform(new THREE.Vector4(1, 0, 0, 6144)), // x inner half extent (m), y weight of slot B, z 1 once valid, w domain half extent (m)
+  horizonDir: uniform(new THREE.Vector2(0, -1)), // unit world XZ toward the light the maps were baked for
 };
 
 /**
@@ -64,3 +79,78 @@ export const ATMOS = {
   /** Scene-referred brightness the eye should adapt to, for auto exposure. */
   luminance: 1,
 };
+
+// ---------------------------------------------------------------------------------------------
+// Baked terrain horizon (maps rendered by src/gfx/terrain/horizon.ts)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * One RGBA8 atlas holds both azimuth slots. Slot s spans x = [s * slotW, (s + 1) * slotW): its
+ * inner map (inner^2 texels over the heightmap square) at the left, its outer map (outer^2 texels
+ * over the whole domain) at the right in the rows [0, outer). Angle = (r + g / 255) * range + low
+ * (radians). Packing keeps the terrain material inside the 16 sampled textures per stage that
+ * WebGL2 and baseline WebGPU allow.
+ */
+export const HORIZON_ATLAS = { inner: 512, outer: 256, slotW: 768, w: 1536, h: 512, low: -0.25, range: 1.45 } as const;
+
+/** Horizon elevation angle (radians) at world xz, blended between the two azimuth slots. */
+export function horizonAngle(xz: any): any {
+  const A = HORIZON_ATLAS;
+  const m = U.horizonMap;
+  const ext = m.x, dom = m.w;
+  const ci = 0.5 / A.inner, co = 0.5 / A.outer; // half-texel insets: bilinear taps stay inside the map
+  const uvI = xz.add(ext).div(ext.mul(2)).clamp(ci, 1 - ci);
+  const uvO = xz.add(dom).div(dom.mul(2)).clamp(co, 1 - co);
+  const inner = smoothstep(0, 48, ext.sub(max(abs(xz.x), abs(xz.y))));
+  const dec = (s: any): any => s.x.add(s.y.div(255)).mul(A.range).add(A.low);
+  const tap = (u: any): any => dec(U.horizonTex.sample(u).level(0));
+  const iA = tap(vec2(uvI.x.mul(A.inner).div(A.w), uvI.y.mul(A.inner / A.h)));
+  const iB = tap(vec2(uvI.x.mul(A.inner).add(A.slotW).div(A.w), uvI.y.mul(A.inner / A.h)));
+  const a = mix(iA, iB, m.y).toVar();
+  // the outer maps only matter outside the heightmap square: skip their taps everywhere else
+  // (explicit-level taps are legal in a per-pixel branch on both backends)
+  If(inner.lessThan(0.999), () => {
+    const oA = tap(vec2(uvO.x.mul(A.outer).add(A.inner).div(A.w), uvO.y.mul(A.outer / A.h)));
+    const oB = tap(vec2(uvO.x.mul(A.outer).add(A.slotW + A.inner).div(A.w), uvO.y.mul(A.outer / A.h)));
+    a.assign(mix(mix(oA, oB, m.y), a, inner));
+  });
+  return a;
+}
+
+/** Lit fraction 0..1 of a light at elevation `elev` (radians) seen from world xz (1 until baked). */
+export function horizonLit(xz: any, elev: any): any {
+  // the sun's disc is 0.53 deg; the extra width hides the 4 m texels
+  return mix(float(1), smoothstep(-0.009, 0.009, elev.sub(horizonAngle(xz))), U.horizonMap.z);
+}
+
+/**
+ * For a LightingModel.direct() input: the factor that puts the baked terrain shadow on the light
+ * the horizon maps were baked for (the key light; any other light gets 1). `lightDirection` is in
+ * view space, as three hands it to direct(). Multiply it into input.lightColor.
+ */
+export function keyLightHorizon(input: { lightDirection: any; lightNode?: any }): any {
+  const light = input.lightNode?.light;
+  if (!light || light.isDirectionalLight !== true) return null;
+  const lw = input.lightDirection.transformDirection(cameraWorldMatrix);
+  const len = length(lw.xz);
+  const flat = lw.xz.div(max(len, 1e-4));
+  const aligned = smoothstep(0.985, 0.996, dot(flat, U.horizonDir)).mul(step(0.02, len)).mul(U.horizonMap.z);
+  const elev = asin(clamp(lw.y, -1, 1));
+  return mix(float(1), horizonLit(positionWorld.xz, elev), aligned);
+}
+
+/** PhysicalLightingModel (MeshStandardNodeMaterial) with the baked terrain shadow on the key light. */
+export class HorizonPhysicalLighting extends THREE.PhysicalLightingModel {
+  direct(input: any, builder: any): void {
+    const k = keyLightHorizon(input);
+    super.direct(k ? { ...input, lightColor: input.lightColor.mul(k) } : input, builder);
+  }
+}
+
+/** PhongLightingModel (MeshLambertNodeMaterial: specular off) with the baked terrain shadow on the key light. */
+export class HorizonPhongLighting extends THREE.PhongLightingModel {
+  direct(input: any, builder: any): void {
+    const k = keyLightHorizon(input);
+    super.direct(k ? { ...input, lightColor: input.lightColor.mul(k) } : input, builder);
+  }
+}

@@ -40,7 +40,17 @@ export const FU = {
   lodTint: uniform(0), // 1: tint by LOD (bench ?lod=1)
   wind: uniform(1),
   farEnd: uniform(6000), // m: impostors end
+  /**
+   * 1 where there is no anti-aliasing (phones): LOD crossfades switch whole trees, each at its own
+   * point in the band, instead of a per-pixel dither that reads as a stipple without AA.
+   */
+  perTree: uniform(0),
 };
+
+/** Threshold the LOD crossfades compare against (the same for a tree's mesh and its impostor). */
+export function lodNoise(rnd: N): N {
+  return mix(ditherNoise(), hash11(float(rnd).mul(97.13).add(0.31)), FU.perTree);
+}
 
 export const KIND_INDEX: Record<GeoKind, number> = { spruce: 0, fir: 1, snag: 2 };
 
@@ -337,7 +347,7 @@ function treeAlpha(V: Vary): N {
   const slab: N = select(frontFacing, step(0.5, snowCoverage(V.misc.z, V.misc.y.sub(nz.y.mul(0.32)).add(0.1))), float(0));
   const isCard: N = part.equal(PART.FOLIAGE).or(part.equal(PART.DEAD));
   const a: N = select(isCard, aSharp, select(part.equal(PART.SNOW), slab, float(1)));
-  const n: N = ditherNoise();
+  const n: N = lodNoise(V.misc.w);
   return a.mul(step(V.fade.x, n)).mul(step(n, V.fade.y.sub(0.00001)));
 }
 

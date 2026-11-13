@@ -209,3 +209,36 @@ and drawing it through InstancedMesh on WebGPU and WebGL2.
   GLSL and WGSL specs; new code uses `smoothstep(0, w, x).oneMinus()`.
 - `scene.fogNode = fog(colorNode, factorNode)` replaces scene.fog for node materials that set
   `fog = true`; the prop material relies on gfx/weather setting it.
+
+## 13. Integration facts (owner: LOOK, found putting the real systems into the game)
+- An InstancedMesh whose material has `vertexColors: true` and that receives shadows rendered
+  WHITE in r187 (stand-in trees brighter than snow at night). Set the colour explicitly:
+  `material.colorNode = vertexColor()` (instanceColor still multiplies in).
+- 16 sampled textures per shader stage is the budget: WebGL2 `MAX_TEXTURE_IMAGE_UNITS` is 16 on
+  ANGLE / D3D11 and on most phones, and baseline WebGPU `maxSampledTexturesPerShaderStage` is 16
+  (this Arc adapter offers 48 if requested). Past it, WebGPU fails pipeline creation and WebGL2
+  fails to link. In the game a plain lit material already samples 6: one depth texture per CSM
+  cascade (3 on medium, 4 on ultra), the fog's horizon LUT (sky/common.ts), the environment cube
+  and three's IBL DFG LUT; a shadowed point light adds one. Count a material's textures with
+  `renderer.debug.getShaderAsync(scene, camera, mesh)` and its `texture_*` declarations.
+- Uniform groups: a uniform in the default object group is only re-uploaded for materials that
+  have node properties of their own, so values reached through `scene.fogNode` go stale on plain
+  materials. Everything in src/gfx/shared.ts is `.setGroup(renderGroup)` (one upload per render).
+- A WebGPU render pass that clears ignores the scissor: to re-render part of a render target,
+  set `renderer.autoClear = false` (after `RendererUtils.resetRendererState`, which turns it
+  on) and `rt.scissor` / `rt.scissorTest`. horizon.ts keeps its scissor full height, so the
+  y convention of the scissor never matters on either backend.
+- `MeshLambertNodeMaterial` (and Phong) ignore `scene.environment`: only the standard / physical
+  materials pick it up (`MeshStandardNodeMaterial.setupEnvironment` uses `builder.environmentNode`;
+  `NodeMaterial.setupEnvironment` only knows `envMap` / `envNode`). A Lambert material in a scene lit
+  by an environment map gets no ambient at all. forest/common.ts `ForestEnvIrradiance` adds the
+  irradiance: `pmremTexture(env).context({ getUV: () => normalWorld, getTextureLevel: () => float(1) })
+  .mul(PI)` into `builder.context.irradiance`.
+- In `?still=1` tool runs the systems update only on rendered frames (`CS.step(n)` renders the last
+  of n): anything eased over time (the sky's environment refresh and auto exposure) lags far behind
+  a `CS.env()` jump unless it is snapped; `Game.env()` snaps the sky for 8 rendered frames.
+- A light's colour node is `light.colorNode ?? uniform(color)` (AnalyticLightNode); a lighting
+  model's `direct(input)` gets `input.lightNode` (the light node) and a VIEW-space
+  `lightDirection`. src/gfx/shared.ts `keyLightHorizon(input)` uses both to put TERRAIN's baked
+  ridge shadow on the key light in any lighting model (HorizonPhysicalLighting /
+  HorizonPhongLighting).

@@ -125,10 +125,13 @@ export class SnowLayer {
     const rel = vel.sub(SNOWU.camVel);
     const size = mix(float(o.size[0]), float(o.size[1]), seed.y.mul(seed.y));
 
-    const vpos = varying(vec3(0), 'vSnowWorld');
     const vuv = varying(vec2(0), 'vSnowUv');
     const vfade = varying(float(0), 'vSnowFade');
     const vstretch = varying(float(1), 'vSnowStretch');
+    // Light and fog are the same over a flake a few pixels wide: computed per vertex, so the
+    // fragment shader (the cost of thousands of overlapping streaks) is only the soft shape.
+    const vcol = varying(vec3(0), 'vSnowCol');
+    const vfog = varying(float(1), 'vSnowFog');
     m.vertexNode = Fn(() => {
       const c1 = cameraViewMatrix.mul(vec4(pos, 1)).xyz;
       const c2 = cameraViewMatrix.mul(vec4(pos.sub(rel.mul(o.shutter)), 1)).xyz;
@@ -143,8 +146,20 @@ export class SnowLayer {
       const side = vec2(along.y.negate(), along.x);
       const half = sl.mul(0.5).add(r);
       const p = mid.add(vec3(side.mul(corner.x.mul(r)).add(along.mul(corner.y.mul(half))), 0));
-      vpos.assign(pos);
       vuv.assign(corner);
+      const toCam = vec3(U.camPos).sub(pos);
+      const dist = length(toCam);
+      const d = toCam.div(max(dist, 1e-4)).negate(); // camera -> flake
+      // Ice scatters forward: flakes against the sun light up.
+      const sunPh = hgPhase(dot(d, U.sunDir), float(0.55)).mul(4 * Math.PI).mul(0.45).add(0.35);
+      const moonPh = hgPhase(dot(d, U.moonDir), float(0.55)).mul(4 * Math.PI).mul(0.45).add(0.35);
+      const amb = vec3(U.skyAmbient).add(vec3(U.groundAmbient)).mul(0.5 / Math.PI);
+      // Ice crystals are brighter than the air they fall through (specular glints), so they read
+      // against dark trees and rock and, faintly, against the sky.
+      const lit = amb.add(vec3(U.sunColor).mul(sunPh).mul(1 / Math.PI)).add(vec3(U.moonColor).mul(moonPh).mul(1 / Math.PI)).mul(1.3);
+      const fa = fogAmount(dist, d);
+      vcol.assign(mix(lit, fogColor(d), fa));
+      vfog.assign(fa.oneMinus().mul(0.85).add(0.15));
       vstretch.assign(half.div(r));
       // Sub-pixel flakes keep a pixel of size and lose opacity instead; the box edges fade.
       const area = size.div(r).pow(2).mul(r.div(half).add(0.15).min(1));
@@ -164,20 +179,8 @@ export class SnowLayer {
     const soft = clamp(float(1).sub(vuv.x.mul(vuv.x).add(db.mul(db))), 0, 1);
     const head = mix(float(1), float(0.55), vuv.y.add(1).mul(0.5));
     const shape = soft.mul(soft).mul(head);
-    const toCam = vec3(U.camPos).sub(vpos);
-    const dist = length(toCam);
-    const d = toCam.div(max(dist, 1e-4)).negate(); // camera -> flake
-    // Ice scatters forward: flakes against the sun light up.
-    const sunPh = hgPhase(dot(d, U.sunDir), float(0.55)).mul(4 * Math.PI).mul(0.45).add(0.35);
-    const moonPh = hgPhase(dot(d, U.moonDir), float(0.55)).mul(4 * Math.PI).mul(0.45).add(0.35);
-    const amb = vec3(U.skyAmbient).add(vec3(U.groundAmbient)).mul(0.5 / Math.PI);
-    // Ice crystals are brighter than the air they fall through (specular glints), so they read
-    // against dark trees and rock and, faintly, against the sky.
-    const lit = amb.add(vec3(U.sunColor).mul(sunPh).mul(1 / Math.PI)).add(vec3(U.moonColor).mul(moonPh).mul(1 / Math.PI)).mul(1.3);
-    const fa = fogAmount(dist, d);
-    const col = mix(lit, fogColor(d), fa);
-    const alpha = shape.mul(vfade).mul(o.opacity).mul(SNOWU.amount).mul(fa.oneMinus().mul(0.85).add(0.15));
-    m.fragmentNode = vec4(col, clamp(alpha, 0, 1));
+    const alpha = shape.mul(vfade).mul(o.opacity).mul(SNOWU.amount).mul(vfog);
+    m.fragmentNode = vec4(vcol, clamp(alpha, 0, 1));
     return m;
   }
 

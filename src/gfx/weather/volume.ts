@@ -14,7 +14,7 @@ import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
 import type { HdrStageInput } from '../post';
 import { U } from '../shared';
-import { AIR, G, fogColor, fogDepth, type N } from '../sky/common';
+import { AIR, fogColor, fogDepth, type N } from '../sky/common';
 import { getNoise2D, getNoise3D } from '../sky/textures';
 
 const {
@@ -158,7 +158,7 @@ export class StormVolumeNode extends THREE.Node {
       // March only as far as there is light left to lose (about 6 optical depths of the mean
       // density); past that the analytic tail is exact enough. In a whiteout that is 15 m, so the
       // steps stay short where everything happens.
-      const tEnd = min(min(dist, VOL_RANGE), float(6).div(max(G.fogDensity.mul(share), 1e-5)));
+      const tEnd = min(min(dist, VOL_RANGE), float(6).div(max(U.fogDensity.mul(share), 1e-5)));
       // Blue-noise-like jitter, rotated every frame by the golden ratio.
       const j = interleavedGradientNoise(screenCoordinate.xy).add(VOLU.frame.mul(0.618034)).fract();
       const T = float(1).toVar();
@@ -175,7 +175,7 @@ export class StormVolumeNode extends THREE.Node {
         tPrev.assign(t);
         const p = eye.add(d.mul(t));
         // the shared height falloff of the fog
-        const rho = G.fogDensity.mul(exp(G.fogHeight.mul(p.y.sub(G.camY)).negate().clamp(-14, 80))).mul(share);
+        const rho = U.fogDensity.mul(exp(U.fogHeight.mul(p.y.sub(U.camPos.y)).negate().clamp(-14, 80))).mul(share);
         const shape = stormShape(tex3, p);
         const sig = rho.mul(shape);
         const st = exp(sig.mul(dt).negate());
@@ -257,7 +257,7 @@ export function screenStreaks(i: HdrStageInput, camWorld: N): N {
   const veil = smoothstep(0.42, 0.85, a).mul(0.7).add(smoothstep(0.5, 0.88, b).mul(0.3));
   const depth = i.viewDepth;
   const near = smoothstep(2.0, 10.0, depth);
-  const far = exp(depth.mul(G.fogDensity).mul(-0.7));
+  const far = exp(depth.mul(U.fogDensity).mul(-0.7));
   const amount = veil.mul(VOLU.streaks).mul(near).mul(far.mul(0.75).add(0.25));
   const fogC = fogColor(normalize(i.worldPos.sub(camWorld.element(3).xyz))).mul(1.15);
   return mix(i.color, fogC, clamp(amount, 0, 0.4));

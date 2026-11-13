@@ -281,7 +281,9 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
     impostors = new THREE.Mesh(g, createImpostorMaterial(atlas));
     impostors.name = 'forest-impostors';
     impostors.frustumCulled = false;
-    impostors.receiveShadow = true;
+    // Impostors stand beyond the 3D trees, where the only cast shadows left are the terrain's own
+    // (baked into the horizon term every forest material applies): no shadow-map taps per pixel.
+    impostors.receiveShadow = false;
     impostors.castShadow = false;
     impostors.renderOrder = 4;
     group.add(impostorDepth, impostors);
@@ -318,7 +320,7 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
   const rockFar = new THREE.Mesh(farGeo, createRockMaterial('far'));
   rockFar.name = 'forest-rocks-far';
   rockFar.frustumCulled = false;
-  rockFar.receiveShadow = true;
+  rockFar.receiveShadow = false; // beyond the cascades that matter; the horizon term still shades it
   rockFar.castShadow = false;
   rockFar.renderOrder = 3;
   group.add(rockFar);
@@ -445,8 +447,9 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
   function applyQuality(q: Quality): void {
     const near = Math.max(20, q.treeNear);
     FU.nearEnd.value = near;
-    // short bands where there is no anti-aliasing to soften the dither (phones, low)
-    const soft = q.aa !== 'none' && q.name !== 'low';
+    // Short bands on 'low' (FXAA barely softens the dither). Without any AA (phones) whole trees
+    // switch at their own point in the band (FU.perTree), so a wide band just spreads the switches.
+    const soft = q.name !== 'low';
     FU.nearBand.value = Math.min(20, Math.max(soft ? 6 : 3.5, near * (soft ? 0.15 : 0.1)));
     FU.fullEnd.value = Math.min(55, Math.max(12, near * 0.3));
     FU.fullBand.value = Math.min(8, Math.max(soft ? 3 : 1.6, near * (soft ? 0.06 : 0.045)));
@@ -454,6 +457,7 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
     FU.thin0.value = near * 1.15 + 6;
     FU.thin1.value = near * 1.55 + 14;
     FU.density.value = Math.max(0.05, Math.min(1, q.treeDensity));
+    FU.perTree.value = q.aa === 'none' ? 1 : 0;
     FU.farEnd.value = Math.max(600, q.viewDistance);
     RU.nearEnd.value = Math.min(70, Math.max(18, near * 0.45));
     RU.nearBand.value = Math.max(4, near * 0.07);

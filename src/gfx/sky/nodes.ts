@@ -286,11 +286,15 @@ export function skyRadiance(d: N, px: N, o: SkyDetail, jitter: N, fogShare?: N):
   }
   if (o.discs) L.addAssign(sunDisc(d, px).add(moonDisc(d, px)));
   if (o.auroraSteps > 0) L.addAssign(aurora(d, o.auroraSteps, jitter, px));
-  const c = clouds(d, o.cloudSteps, jitter, L, px);
-  const lit = c.rgb;
   // The storm swallows the sky: the same fog the world gets, out to the edge of the world. Only
   // the snow in the air counts here: the clear-air haze is already part of the sky tables.
-  const fa = exp(fogDepthSky(d.y, fogShare).mul(AIR.stormMix).negate()).oneMinus();
+  const fa = exp(fogDepthSky(d.y, fogShare).mul(AIR.stormMix).negate()).oneMinus().toVar();
+  // Where the storm hides the sky completely the cloud march is wasted work (a storm sky is most
+  // of the screen): skip it.
+  const lit = vec3(L).toVar();
+  If(fa.lessThan(0.985), () => {
+    lit.assign(clouds(d, o.cloudSteps, jitter, L, px).rgb);
+  });
   return mix(lit, fogColor(d), fa);
 }
 
