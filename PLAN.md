@@ -18,12 +18,12 @@ the console is clean, commit.
 - [x] World: seeded heightmap, places, trees, rocks, colliders, shelter, spawn tables
 - [x] Model kit: builder, registry, the shared prop material with snow cover
 
-## M1 — The mountain
-- [ ] Terrain mesh with level of detail, snow / rock / ice material
-- [ ] Sky: sun, moon, stars, clouds, day and night, aurora
-- [ ] Weather: storm fog, volumetric blizzard, wind-driven snow, whiteout
-- [ ] Forest: pines with snow load and wind sway, impostors, rocks, ground cover
-- [ ] Walk the mountain in first person (keyboard / mouse and touch)
+## M1 — The mountain (done)
+- [x] Terrain mesh with level of detail, snow / rock / ice material
+- [x] Sky: sun, moon, stars, clouds, day and night, aurora
+- [x] Weather: storm fog, volumetric blizzard, wind-driven snow, whiteout
+- [x] Forest: pines with snow load and wind sway, impostors, rocks, ground cover
+- [x] Walk the mountain in first person (keyboard / mouse and touch)
 
 ## M2 — Staying alive
 - [ ] Body temperature, wetness, shelter, stamina, health

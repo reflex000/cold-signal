@@ -90,17 +90,61 @@ Scene: impostors ~26 (they sampled the 3 CSM cascades on every far pixel), snow 
 two phase functions per pixel of every streak), ground cover ~14 (1600 instances drawn, ~530 used),
 terrain ~12, rocks ~11, sky ~10. Post: GTAO ~13, bloom ~12 (5 half-res levels), storm volume ~6.
 
-Changes: impostors and far rocks no longer receive shadow maps (horizon term still shades them);
-snow flake light + fog per vertex; cover draws only its packed active window; clouds skipped where
-the storm hides the sky; medium = render scale 0.75, 2 cascades 1024 / 90 m, terrain [16, 0.5, 3.0],
-tree density 0.7, cover 0.4, 4000 flakes, 8 fog / 8 cloud / 12 aurora steps, no GTAO, quarter-res
-4-level glow; low = scale 0.65, 1 cascade / 50 m, terrain [16, 0.5, 2.6], trees 50 m / 0.55,
-cover 0.25, 2500 flakes.
+POWER-MODE CAVEAT (found by the lead): Windows runs in the "Best power efficiency" power mode on AC
+(power overlay 961cc777-...); nobody may change it from here. That is why a trivial pass costs ~3 ms and
+ENGINE's bench took 53-74 ms today against 5.5-6.7 ms in the morning: every absolute number below is
+roughly 10x pessimistic. Same-session reference for scaling: ENGINE bench medium 42.6-74 ms GPU.
 
-| preset (res)            | wreck | forest | lake | ridge | storm | GPU ms   |
-| ----------------------- | ----- | ------ | ---- | ----- | ----- | -------- |
-| medium before (1632x918)| 7.7   | 7.5    | 7.6  | 8.4   | 7.5   | 99-148   |
-| medium now (1440x810)   | 10.7  | 9.9    | 11.5 | 11.8  | 10.6  | 65-73    |
-| low now (1248x702)      | 15.9  | 14.8   | 15.1 | 15.7  | 14.2  | 50-60    |
+Kept (real relative wins, code): impostors and far rocks no longer receive shadow maps (the horizon
+term still shades them); flake light + fog per vertex; cover draws only its packed active window;
+clouds skipped where the storm hides the sky; outer horizon taps skipped inside the heightmap.
+Medium keeps ENGINE's look settings (scale 0.85, 3 cascades 1536 / 110 m, half-res GTAO, 5-level
+half-res glow, terrain [16, 0.25, 3.4], trees 80 m / 0.85, cover 0.6), with 6000 slightly larger flakes.
+Low is lighter than before: scale 0.65, 1 cascade / 50 m, terrain [16, 0.5, 2.6], trees 50 m / 0.55,
+cover 0.25, 2500 flakes (the floor 'auto' may fall to on a desktop).
+Frame-rate protection (engine.ts): dynamic resolution judges a ~0.5 s frame-time average (any frame
+rate), steps down x0.75-0.95 every 0.5 s to the tier's floor (DYN_FLOOR: mobile/low 0.75, medium 0.65,
+high/ultra 0.6 of renderScale), probes back up; 'auto' (Settings default, real play only) drops one tier
+after 3 s at the floor still over budget, never below 'low' (2 s grace after start and after a change).
+Measured live: medium 1.0 -> 0.75 at 2.7 s -> 0.65 at 3.5 s -> low at 6.7 s -> low at its floor at
+12.4 s, holding ~20 fps here (would be ~10x that with the GPU at full power).
+
+| preset (render size)          | wreck | forest | lake | ridge | storm | GPU ms  |
+| ----------------------------- | ----- | ------ | ---- | ----- | ----- | ------- |
+| medium at start (1632x918)    | 7.7   | 7.5    | 7.6  | 8.4   | 7.5   | 99-148  |
+| medium final (1632x918)       | 7.9   | 7.1    | 7.5  | 8.3   | 7.5   | 99-125  |
+| medium, lighter variant tried (1440x810) | 11.2 | 10.6 | 11.3 | 11.8 | 10.7 | 65-89 |
+| low final (1248x702)          | 15.7  | 15.1   | 15.2 | 16.3  | 15.1  | 52-58   |
 | mobile (--mobile 1, WebGL2, 949x438) | 49.9 | 36.4 | 44.2 | 52.4 | 42.3 | (no timer) |
-(fps; perf.mjs views; mobile frames on WebGL2 queue up: p50 2-3 ms with p95 stalls of 20-370 ms)
+(fps; perf.mjs views, dev=1 so no dynamic resolution. Medium final has the same settings as at the
+start plus the code wins and measures level with it within the noise (+-10 ms) on this power-capped GPU;
+the wins show in the split profile and in the lighter variant. Mobile frames queue on WebGL2: p50 2-3 ms
+with stalls of 20-370 ms.)
+
+## Final report
+
+**Done.** The game runs the real sky (before weather), weather, terrain and forest by default; a failing one falls back to its stand-in with a warning; weather.whiteout feeds the HUD; forest precedes warmup; blueprint stand-ins use the prop material.
+
+**Blocker found:** the real terrain compiled on neither backend (17 sampled textures, limit 16). Horizon maps are now one atlas (14).
+
+**Fixes:** (a) GTAO fades by 35-75 m and with fog. (b) U in renderGroup, ATMOS mirrors gone. (c) THREE_NOTES section 13. (d) Ridge shadow exposed (U.horizonTex/Map/Dir, horizonLit, keyLightHorizon), applied in forest and prop lighting. (e) Canopy shade on far forest floor, darker far impostors, real weather drives U.snowCover. (f) No WebGL2 timer queries unless ?gpu=gl. (g) No-AA tiers switch whole trees. (h) Irregular strata (world/terrain.ts; wall feet and cave face kept), crisper cliff snow edges, joints, facets. Also fixed: Lambert foliage had no sky light (r187 ignores scene.environment); tool shots had stale skies (CS.env now snaps the sky).
+
+**Perf** (fps, 1920x1080). Windows is in "Best power efficiency": figures are ~10x pessimistic (ENGINE bench 43-74 ms today, 6 ms this morning).
+
+| preset | wreck | forest | lake | ridge | storm |
+|---|---|---|---|---|---|
+| medium, start | 7.7 | 7.5 | 7.6 | 8.4 | 7.5 |
+| medium, final | 7.9 | 7.1 | 7.5 | 8.3 | 7.5 |
+| medium, lighter | 11.2 | 10.6 | 11.3 | 11.8 | 10.7 |
+| low | 15.7 | 15.1 | 15.2 | 16.3 | 15.1 |
+| mobile (emulated) | 50 | 36 | 44 | 52 | 42 |
+
+Kept cuts: impostors and far rocks skip shadow maps; flake lighting per vertex; cover draws only its window; clouds skipped in storms; fewer horizon taps. Medium keeps its look; dynamic resolution reaches a per-tier floor within ~3 s, then 'auto' drops a tier (never below low). 60 fps at medium cannot be verified in this power mode.
+
+**Touched outside src/game:** gfx/shared, engine, post, quality, terrain/*, forest/* (5 files), sky/common, index, nodes, weather/index, volume, snow; models/material; world/terrain; dev/bench; THREE_NOTES; new tools/scenarios/look.mjs, gpusplit.mjs.
+
+**Contract additions:** shared.ts horizon uniforms and helpers; EngineOptions gpuTimingWebGL, autoQuality, autoFloor; canvas event 'cs:quality'.
+
+**Open:** soft streaks on the cliff above the cave; storm and whiteout read as fog in stills; low-sun rock looks olive; snow-laden trees from above.
+
+**Checks:** check, test (153), build clean; all 18 scenarios pass with clean consoles.
