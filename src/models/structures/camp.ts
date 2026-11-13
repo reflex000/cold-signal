@@ -28,7 +28,8 @@ register(
     const v = seed % 3;
     const bp = BLUEPRINTS.tent_torn;
     const S = r.int(0, 1 << 20);
-    const L = 3.2, HW = 1.16, EAVE = 0.85, RIDGE = 1.5;
+    // walls up to 1.2 m (the cloth colliders are 1.3 tall: the roof must not hang inside them)
+    const L = 3.2, HW = 1.16, EAVE = 1.2, RIDGE = 1.5;
     const collapsed = v === 2;
     // ridge height along the tent (z from -1.6 at the back to +1.6 at the front)
     const ridgeY = (z: number) => (collapsed ? RIDGE - 0.95 * sat((z + 0.4) / 2.0) ** 1.4 : RIDGE - 0.03 * Math.cos((z / L) * Math.PI) * 0);
@@ -40,9 +41,10 @@ register(
     // roof panels: cloth made hanging (x across, y down), warped onto the slope from the ridge to the eave
     for (const side of [-1, 1]) {
       const torn = (v === 0 && side > 0) || (v === 2 && side < 0);
-      const p = cloth(L, 1.36, torn ? 0.45 : 0.08, torn ? ['bottom', 'right'] : ['bottom']);
+      const slope = Math.hypot(HW, RIDGE - EAVE) + 0.04;
+      const p = cloth(L, slope, torn ? 0.45 : 0.08, torn ? ['bottom', 'right'] : ['bottom']);
       p.warp((q) => {
-        const z = q.x, u = -q.y / 1.36; // 0 ridge .. 1 eave
+        const z = q.x, u = -q.y / slope; // 0 ridge .. 1 eave
         const ry = ridgeY(z), ey = eaveY(z);
         const sag = 0.06 * Math.sin(Math.PI * u) * (0.6 + 0.4 * Math.cos((z / L) * Math.PI * 2)) + (collapsed ? 0.15 * Math.sin(Math.PI * u) * sat((z + 0.4) / 2) : 0);
         q.x = side * (HW * u);

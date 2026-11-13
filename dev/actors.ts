@@ -300,9 +300,11 @@ async function main(): Promise<void> {
     place(animName, slot, 0, 0, bench.num('yaw', 0) * DEG);
     const e = all[0];
     bench.orbit.target.set(0, e.kind === 'wolf' ? 0.55 : 0.95, 0);
+    const ty = bench.param('ty') !== null ? bench.num('ty', 0.95) : -1;
     bench.onFrame(() => {
       const m = all[0] as PlayerEnt | WolfEnt;
-      bench.orbit.target.set(m.x, (m.kind === 'player' ? Math.max(0, m.y) : 0) + (m.kind === 'wolf' ? 0.55 : 0.95), m.z);
+      const h = ty >= 0 ? ty : m.kind === 'wolf' ? 0.55 : 0.95;
+      bench.orbit.target.set(m.x, (m.kind === 'player' ? Math.max(0, m.y) : 0) + h, m.z);
     });
   } else if (show === 'player') {
     ['idle', 'walk', 'aim', 'flashlight'].forEach((n, i) => place(n, i, (i - 1.5) * 1.4, 0));

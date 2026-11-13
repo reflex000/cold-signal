@@ -102,7 +102,9 @@ const props = createPropsSystem({ scene, camera }, [], { shadows: true });
 engine.add(props);
 const fx = createFxSystem(engine, world) as FxSystem;
 // &nofx=1: the same scene without fx (a baseline for &perf=1)
-if (P('nofx') !== '1') engine.add(fx);
+const nofx = P('nofx') === '1';
+if (nofx) fx.dispose();
+else engine.add(fx);
 (window as any).FX = fx;
 
 // &perf=1: median GPU time over a few seconds of live frames, in the console and window.PERF
@@ -218,14 +220,14 @@ b.onFrame((dt, time) => {
     first = false;
     // simulate the particles for a while so the smoke column is there in the first frame
     const step = 1 / 30;
-    for (let t = time - warm; t < time; t += step) {
+    for (let t = time - warm; t < time && !nofx; t += step) {
       syncView(t, step);
       fx.update({ dt: step, time: t, view });
     }
   }
   syncView(time, dt);
   frameNo++;
-  if (burst && frameNo === framesWanted - 2) {
+  if (burst && !nofx && frameNo === framesWanted - 2) {
     const tx = b.orbit.target.x, tz = b.orbit.target.z;
     if (burst === 'muzzle') view.bus.emit('sim', { t: 'shot', by: 2, x: tx - 0.6, y: 1.45, z: tz + 0.4, dx: 1, dy: 0.02, dz: -0.2, hx: tx + 30, hy: 0, hz: tz - 6, hit: 'ground' });
     else fx.burst(burst, tx, 0, tz, 0.3, 0.5, 0.8, 1.2);

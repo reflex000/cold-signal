@@ -167,7 +167,7 @@ const PACK = hex(0x30342d);
 const PACK_DARK = hex(0x1f2120);
 const MAT_FOAM = hex(0x3e5060);
 const KNIT = hex(0x34322f);
-const SCARF = hex(0x433730);
+const SCARF = hex(0x4a4038);
 const BALA = hex(0x26272b);
 const RUFF = hex(0x6c5c4b);
 const RUFF_TIP = hex(0x2e2620);
@@ -219,7 +219,8 @@ const TORSO_E = 2.45;
 function baffle(y: number, y0: number, pitch: number): number {
   const f = (y - y0) / pitch;
   const fr = f - Math.floor(f);
-  return Math.pow(Math.sin(Math.PI * fr), 0.55);
+  // full and round between the stitch lines, pinched sharply at them
+  return Math.pow(Math.sin(Math.PI * fr), 0.35);
 }
 
 /** Point on the torso surface at height y, lateral x, front (-Z) or back, pushed out by `off`. */
@@ -229,6 +230,16 @@ function torsoSurface(x: number, y: number, front: boolean, off: number): V3 {
   const ax = Math.min(0.999, Math.abs(x) / (t.hw + off));
   const v = (d + off) * Math.pow(1 - Math.pow(ax, TORSO_E), 1 / TORSO_E);
   return [x, y, t.cz + (front ? -v : v)];
+}
+
+/** Point on the torso outline at height y and angle a (0 = right, pi/2 = front), pushed out by `off`. */
+function torsoRing(y: number, a: number, off: number): V3 {
+  const t = torsoAt(y);
+  const c = Math.cos(a), s = Math.sin(a);
+  const e = 2 / TORSO_E;
+  const u = (t.hw + off) * Math.sign(c) * Math.pow(Math.abs(c), e);
+  const v = ((s > 0 ? t.dF : t.dB) + off) * Math.sign(s) * Math.pow(Math.abs(s), e);
+  return [u, y, t.cz - v];
 }
 
 /** A smooth path through waypoints (Catmull-Rom), `per` points per span. */
@@ -317,9 +328,9 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
       const y = y0 + ((y1 - y0) * k) / n;
       const t = torsoAt(y);
       // baffles from the hem band to the shoulders, a gathered drawcord at the waist
-      const puff = detail && y > 0.77 && y < 1.43 ? baffle(y, 0.775, 0.108) : 0.6;
+      const puff = detail && y > 0.77 && y < 1.43 ? baffle(y, 0.775, 0.108) : lod === 1 && y > 0.77 && y < 1.43 ? 0.6 + 0.4 * baffle(y, 0.775, 0.108) : 0.6;
       const cord = smooth(0.06, 0.0, Math.abs(y - 1.03));
-      const scale = 1 + 0.024 * (puff - 0.6) - 0.018 * cord;
+      const scale = 1 + 0.045 * (puff - 0.6) - 0.02 * cord;
       const hemRoll = y < 0.75 ? -0.01 : 0;
       rings.push({
         c: [0, y, t.cz],
@@ -345,10 +356,17 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
     const torso = loft(b, rings, N, { capStart: false });
     tag(torso, CH.TORSO);
     klass(torso, 1);
-    // dirt and wear toward the hem; darker at the cuffs of the baffles
+    // weathering: grime toward the hem, the shoulders and hood side bleached by sun and snow,
+    // blotches of soiling, the stitch lines darker
     torso.each((v) => {
-      const k = 1 - 0.12 * smooth(0.95, 0.74, v.y);
-      v.r *= k; v.g *= k; v.b *= k;
+      const grime = 0.16 * smooth(0.95, 0.74, v.y) + 0.06 * (noise2(v.x * 9 + v.z * 4, v.y * 7, 51, 0) * 0.5 + 0.5);
+      const fade = 0.12 * smooth(0.2, 0.9, v.ny) * smooth(1.25, 1.45, v.y);
+      const stitch = detail && v.y > 0.77 && v.y < 1.43 ? 0.1 * (1 - baffle(v.y, 0.775, 0.108)) : 0;
+      // (parka cloth keeps only its brightness when recoloured per slot: fade = brighter)
+      const k = (1 - grime - stitch) * (1 + fade * 2.8);
+      v.r *= k;
+      v.g *= k;
+      v.b *= k;
       v.wear = 0.3 + 0.25 * smooth(0.95, 0.74, v.y);
     });
   }
@@ -588,9 +606,10 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
     tag(sk, CH.NECK);
     klass(sk, 1);
 
-    // fur ruff: a thin base ring round the rim, and tufts of guard hair standing out from it,
-    // longest at the brow and the sides, short under the chin; dark at the root, pale banded tips
-    const RN = lod === 0 ? 40 : lod === 1 ? 24 : 14;
+    // fur ruff: a soft, clumpy ring of long fur round the rim, standing forward and out, fullest at
+    // the brow and the sides, short under the chin; a fringe of blunt clumps breaks its outline.
+    // Root dark, pale banded tips (coyote guard hair).
+    const RN = lod === 0 ? 72 : lod === 1 ? 32 : 14;
     const ruffRings: Ring[] = [];
     const rimZ = -0.128;
     const RX = 0.126, RY = 0.14;
@@ -600,35 +619,42 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
       const tangent = norm([-Math.sin(th) * RX, Math.cos(th) * RY, 0]);
       const out = norm([Math.cos(th) * RY, Math.sin(th) * RX, 0]);
       const f = frame(tangent, out);
-      const kk = k;
+      const full = 0.75 + 0.25 * Math.sin(th) + 0.12 * Math.abs(Math.cos(th));
       ruffRings.push({
         c, x: f.x, y: f.y,
         pt: (a) => {
-          const r = (lod === 2 ? 0.034 : 0.022) * (1 + 0.25 * Math.max(0, hash(kk, Math.round(a * 1.5), 77)));
-          return [r * Math.cos(a) * 1.2, r * Math.sin(a)];
+          // ring axes: x out from the opening, y forward(ish). The fur lies out and forward, thin toward the face.
+          const lobe = Math.max(0, Math.cos(a - 0.75));
+          const clump = lod === 2 ? 0 : 0.55 * (noise2(th * 7.5, a * 1.6, 61, Math.round(7.5 * Math.PI * 2)) * 0.5 + 0.5) + 0.35 * Math.max(0, hash(Math.round(th * 26), Math.round(a * 2.2), 63));
+          const r = (0.016 + 0.034 * lobe * full) * (1 + clump * lobe);
+          return [r * Math.cos(a), r * Math.sin(a)];
         },
       });
     }
     b.ink({ color: RUFF, mat: MAT.FUR, wear: 0.2, snow: 0.45, vary: 0 });
-    const ruff = loft(b, ruffRings, lod === 0 ? 8 : 5, { closed: true });
+    const ruff = loft(b, ruffRings, lod === 0 ? 12 : 6, { closed: true });
     tag(ruff, CH.HEAD);
     ruff.each((v) => {
-      const n = 0.8 + 0.4 * (hash(Math.round(v.x * 300), Math.round(v.y * 300), 5) * 0.5 + 0.5);
-      v.r = RUFF[0] * 0.75 * n; v.g = RUFF[1] * 0.75 * n; v.b = RUFF[2] * 0.75 * n;
+      // pale tips on the outer, forward edge; darker at the roots against the hood
+      const r = Math.hypot(v.x / RX, (v.y - 1.655) / RY);
+      const outer = smooth(1.05, 1.35, r) + smooth(-0.14, -0.175, v.z) * 0.6;
+      const n = 0.8 + 0.4 * (hash(Math.round(v.x * 260), Math.round(v.y * 260), 5) * 0.5 + 0.5);
+      const c = mixRGB(mixRGB(RUFF_TIP, RUFF, smooth(0.95, 1.08, r)), RUFF_BASE, Math.min(1, outer) * 0.7);
+      v.r = c[0] * n; v.g = c[1] * n; v.b = c[2] * n;
     });
-    if (lod < 2) {
-      const TN = lod === 0 ? 72 : 30;
+    if (lod === 0) {
+      const TN = 56;
       for (let k = 0; k < TN; k++) {
-        const th = ((k + 0.5 * hash(k, 3, 91)) / TN) * Math.PI * 2;
+        const th = ((k + 0.7 * hash(k, 3, 91)) / TN) * Math.PI * 2;
         const top = Math.sin(th); // +1 brow, -1 chin
-        const len = (0.05 + 0.028 * (top * 0.5 + 0.5) + 0.02 * Math.abs(Math.cos(th))) * (0.75 + 0.5 * (hash(k, 7, 93) * 0.5 + 0.5));
+        // two layers: an outer one standing out, an inner one lying forward over the face opening
+        const len = (0.026 + 0.016 * (top * 0.5 + 0.5)) * (0.7 + 0.6 * (hash(k, 7, 93) * 0.5 + 0.5));
         const out: V3 = [Math.cos(th), Math.sin(th) * 1.08, 0];
-        // stand out and forward, a little random
-        const fwd = 0.55 + 0.25 * hash(k, 11, 95);
-        const d = norm([out[0] + 0.25 * hash(k, 13, 97), out[1] + 0.25 * hash(k, 17, 99), -fwd]);
-        const base: V3 = [Math.cos(th) * RX * 1.02, 1.655 + Math.sin(th) * RY * 1.02, rimZ + 0.004];
-        const r0 = (lod === 0 ? 0.0105 : 0.016) * (0.8 + 0.4 * (hash(k, 19, 101) * 0.5 + 0.5));
-        const tuft = b.cone(r0, len, { sides: lod === 0 ? 4 : 3 });
+        const fwd = 0.7 + 0.35 * hash(k, 11, 95);
+        const d = norm([out[0] + 0.3 * hash(k, 13, 97), out[1] + 0.3 * hash(k, 17, 99) - 0.12, -fwd]);
+        const base: V3 = [Math.cos(th) * RX * 1.2, 1.655 + Math.sin(th) * RY * 1.2, rimZ - 0.012];
+        const r0 = 0.014 * (0.75 + 0.5 * (hash(k, 19, 101) * 0.5 + 0.5));
+        const tuft = b.cone(r0, len, { sides: 5 });
         tuft.warp((p) => {
           // a slight droop and twist along the hair
           const t = p.y / len + 0.5;
@@ -655,24 +681,19 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
     const face = b.sphere([0.086, 0.108, 0.09], { sides: detail ? 14 : 8, rings: detail ? 9 : 6 });
     face.move(0, 1.65, -0.012);
     tag(face, CH.HEAD);
-    b.ink({ color: SCARF, mat: MAT.CLOTH, wear: 0.5, snow: 0.35, vary: 0 });
-    const wrap = b.sphere([0.094, 0.062, 0.096], { sides: detail ? 16 : 8, rings: detail ? 8 : 5 });
-    wrap.move(0, 1.602, -0.022);
-    if (detail) {
-      // folds of the wrapped wool
-      wrap.warp((p) => {
-        const a = Math.atan2(p.x, -(p.z + 0.022));
-        p.y += 0.006 * Math.sin(a * 5 + p.y * 60) * smooth(0.0, 0.05, Math.abs(p.x));
+    // the scarf wound twice round the lower face, up to the goggles, rimed where the breath freezes
+    b.ink({ color: SCARF, mat: MAT.CLOTH, wear: 0.6, snow: 0.3, vary: 0 });
+    for (const [y, R, r, tilt] of [[1.596, 0.082, 0.03, 0.1], [1.624, 0.08, 0.026, -0.06]] as number[][]) {
+      const w = b.torus(R, r, { sides: detail ? 7 : 5, segs: detail ? 18 : 10 });
+      w.scale(1, 0.8, 1.08).rotX(tilt).move(0, y, -0.016);
+      if (detail) w.crumple(0.005, 22);
+      tag(w, CH.HEAD);
+      w.each((v) => {
+        const m = smooth(0.06, 0.0, Math.hypot(v.x, v.y - 1.6)) * smooth(-0.085, -0.115, v.z);
+        v.r += (0.56 - v.r) * m * 0.65; v.g += (0.58 - v.g) * m * 0.65; v.b += (0.61 - v.b) * m * 0.65;
+        v.snow = Math.max(v.snow, m * 0.9);
       });
-      wrap.crumple(0.004, 26);
     }
-    tag(wrap, CH.HEAD);
-    wrap.each((v) => {
-      // rime where the breath freezes, in front of the mouth
-      const m = smooth(0.055, 0.0, Math.hypot(v.x, v.y - 1.598)) * smooth(-0.07, -0.11, v.z);
-      v.r += (0.55 - v.r) * m * 0.6; v.g += (0.57 - v.g) * m * 0.6; v.b += (0.6 - v.b) * m * 0.6;
-      v.snow = Math.max(v.snow, m * 0.8);
-    });
     // goggles: frame, lens, strap round the hood
     const arc = (r: number, a0: number, a1: number, y: number, cz: number, n: number): V3[] => {
       const pts: V3[] = [];
@@ -706,15 +727,6 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
     scarf.scale(1, 1, 1.05).rotX(-0.18).move(0, 1.545, -0.02);
     if (detail) scarf.crumple(0.008, 18);
     tag(scarf, CH.NECK);
-    if (lod < 2) {
-      // a tail of the scarf down the chest
-      const tail = b.pillow(0.07, 0.2, 0.018, { round: 0.008, seg: 2, ring: 1 });
-      tail.rotZ(0.12).rotX(-0.1);
-      const tp = torsoSurface(0.06, 1.43, true, 0.02);
-      tail.move(tp[0], tp[1], tp[2]);
-      if (detail) tail.crumple(0.005, 20);
-      tag(tail, CH.CHEST);
-    }
   }
 
   // ---------------- pack, mat, straps ----------------
@@ -756,7 +768,8 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
       tag(ms, CH.PACK);
     }
 
-    // shoulder straps: over the shoulder, down the chest, round to the bottom of the pack
+    // shoulder straps: padded over the shoulder and down the chest to the lower ribs; from there
+    // a webbing strap runs round the side, clear of the parka, to the bottom corner of the pack
     b.ink({ color: PACK_DARK, mat: MAT.CLOTH, wear: 0.5, snow: 0.7, vary: 0 });
     for (const side of [-1, 1]) {
       const pts: V3[] = [
@@ -764,15 +777,28 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
         [side * 0.112, 1.495, 0.07],
         [side * 0.118, 1.505, 0.0],
         torsoSurface(side * 0.118, 1.45, true, 0.012),
-        torsoSurface(side * 0.122, 1.34, true, 0.012),
-        torsoSurface(side * 0.132, 1.2, true, 0.012),
-        torsoSurface(side * 0.152, 1.08, true, 0.01),
-        [side * 0.2, 1.02, -0.02],
-        [side * 0.165, 0.99, 0.15],
+        torsoSurface(side * 0.122, 1.34, true, 0.013),
+        torsoSurface(side * 0.132, 1.22, true, 0.013),
+        torsoSurface(side * 0.145, 1.13, true, 0.012),
       ];
       const path = spline(pts, lod === 0 ? 4 : lod === 1 ? 2 : 1);
       const strap = b.strap(path, 0.058, 0.014, { up: [0, 1, 0] });
       tag(strap, CH.CHEST);
+      if (lod < 2) {
+        const web: V3[] = [];
+        const n = lod === 0 ? 10 : 5;
+        // from the front of the ribs round the side to the back (angles about the torso)
+        const a0 = Math.PI / 2 - 0.62, a1 = -Math.PI / 2 + 0.75;
+        for (let i = 0; i <= n; i++) {
+          const t = i / n;
+          const a = a0 + (a1 - a0) * t;
+          const p = torsoRing(1.125 - 0.06 * t, side > 0 ? a : Math.PI - a, 0.016);
+          web.push(p);
+        }
+        web.push([side * 0.15, 1.04, 0.165]);
+        const w = b.strap(web, 0.026, 0.005, { up: [side, 0, 0] });
+        tag(w, CH.CHEST);
+      }
     }
     if (lod < 2) {
       // sternum strap and hip belt

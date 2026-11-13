@@ -48,9 +48,12 @@ export default async function ({ ev, step, shot, log, check, args }) {
         }
       }
       const pos = geo.attributes.position.array, idx = geo.index.array;
+      // snow drifts are walk-through geometry (MAT.SNOW = 0 in aDetail.w): not a wall
+      const mat = geo.attributes.aDetail ? geo.attributes.aDetail.array : null;
       let best = Infinity;
       const A = [0, 0, 0], B = [0, 0, 0], C = [0, 0, 0];
       for (let i = 0; i < idx.length; i += 3) {
+        if (mat && mat[idx[i] * 4 + 3] < 0.5) continue;
         const ia = idx[i] * 3, ib = idx[i + 1] * 3, ic = idx[i + 2] * 3;
         A[0] = pos[ia]; A[1] = pos[ia + 1]; A[2] = pos[ia + 2];
         B[0] = pos[ib]; B[1] = pos[ib + 1]; B[2] = pos[ib + 2];
@@ -75,6 +78,17 @@ export default async function ({ ev, step, shot, log, check, args }) {
           for (const g of [def.geometry, def.glass]) {
             const t = hitGeo(g, o, d, maxD / s) * s;
             if (t < best) best = t;
+          }
+          // named parts at rest (cupboard and locker doors shut, slots empty); not the door
+          // leaves (the driver swings them open as you come) nor lights
+          for (const name in def.parts) {
+            if (name === 'door' || name.startsWith('glow') || name.startsWith('slot_') || name === 'lamps' || name === 'beacon' || name === 'panel_lights') continue;
+            const pt = def.parts[name];
+            const po = [o[0] - pt.pivot.x, o[1] - pt.pivot.y, o[2] - pt.pivot.z];
+            for (const g of [pt.geometry, pt.glass]) {
+              const t = hitGeo(g, po, d, maxD / s) * s;
+              if (t < best) best = t;
+            }
           }
         }
         return best;
@@ -119,7 +133,11 @@ export default async function ({ ev, step, shot, log, check, args }) {
             const g = w.groundAt(sx, sz, c.y0 + 2.5).y;
             if (g + 1.6 < c.y0 || g + 0.4 > c.y1) continue; // the face does not span the body
             if (Math.abs(w.groundAt(fx - n[0] * 0.05, fz - n[1] * 0.05, g + 0.6).y - g) > 0.6) continue;
-            out.push({ site: id, sx, sz, fx, fz, nx: n[0], nz: n[1], yaw: (Math.atan2(n[0], n[1]) * 180) / Math.PI, y0: c.y0, y1: c.y1 });
+            // site-local position and facing, and the box, for the report
+            const pc = Math.cos(p.yaw), ps = Math.sin(p.yaw);
+            const lx = (fx - p.x) * pc - (fz - p.z) * ps, lz = (fx - p.x) * ps + (fz - p.z) * pc;
+            const lnx = n[0] * pc - n[1] * ps, lnz = n[0] * ps + n[1] * pc;
+            out.push({ site: id, sx, sz, fx, fz, nx: n[0], nz: n[1], yaw: (Math.atan2(n[0], n[1]) * 180) / Math.PI, y0: c.y0, y1: c.y1, lx, lz, lnx, lnz, box: `${(2 * c.hx).toFixed(2)}x${(2 * c.hz).toFixed(2)}x${(c.y1 - c.y0).toFixed(2)}`, tall: c.y1 - c.y0 >= 2.0 });
           }
         }
       }
@@ -139,9 +157,12 @@ export default async function ({ ev, step, shot, log, check, args }) {
       const CS = window.CS, me = CS.view.me;
       const dist = (me.x - t.fx) * t.nx + (me.z - t.fz) * t.nz;
       const gaps = [];
-      for (const hgt of [0.35, 1.0, 1.6]) {
+      // knee, waist, eye, and for low furniture its top edge
+      const hs = [0.35, 1.0, 1.6];
+      if (t.y1 - me.y < 1.65) hs.push(t.y1 - me.y - 0.05);
+      for (const hgt of hs) {
         const y = me.y + hgt;
-        if (y < t.y0 + 0.05 || y > t.y1 - 0.05) { gaps.push(null); continue; }
+        if (y < t.y0 + 0.05 || y > t.y1 - 0.04) { gaps.push(null); continue; }
         const d = window.__pl.ray(me.x, y, me.z, -t.nx, 0, -t.nz, 2.5);
         gaps.push(d === Infinity ? 9 : d - dist);
       }
@@ -152,11 +173,13 @@ export default async function ({ ev, step, shot, log, check, args }) {
     const lateral = Math.hypot(res.x - (t.fx + t.nx * res.dist), res.z - (t.fz + t.nz * res.dist));
     if (res.dist > 0.7 || lateral > 0.5) continue; // stopped by something else on the way (or slid off): not this face
     const sinks = g.some((v) => v < -0.14);
-    const invisible = g.length > 0 && g.every((v) => v > 0.16);
+    // open furniture (tables, bunks, seats, shelves) reads as a solid box only to the walk: an
+    // invisible wall counts for wall-height boxes, or when even the top edge shows nothing
+    const invisible = g.length > 0 && g.every((v) => v > 0.16) && (t.tall || g[g.length - 1] > 0.3);
     if (sinks || invisible) bad.push({ ...t, ...res, why: sinks ? 'sinks into the drawn surface' : 'invisible wall' });
   }
   log(`walked into ${n} faces; ${bad.length} mismatched`);
-  for (const b of bad) log(`  ${b.site} at (${b.fx.toFixed(2)}, ${b.fz.toFixed(2)}) facing (${(-b.nx).toFixed(2)}, ${(-b.nz).toFixed(2)}): stopped ${b.dist.toFixed(2)} m from the face; gaps knee/waist/eye ${b.gaps.map((v) => (v === null ? '-' : v.toFixed(2))).join(' / ')}: ${b.why}`);
+  for (const b of bad) log(`  ${b.site} local (${b.lx.toFixed(2)}, ${b.lz.toFixed(2)}) walking (${(-b.lnx).toFixed(2)}, ${(-b.lnz).toFixed(2)}) box ${b.box}: stopped ${b.dist.toFixed(2)} m; gaps knee/waist/eye/top ${b.gaps.map((v) => (v === null ? '-' : v.toFixed(2))).join(' / ')}: ${b.why}`);
   check(bad.length === 0, `every wall drawn where it collides (${bad.length} mismatches)`);
 
   // ---- doors: walk in through each, nothing drawn in the way ----

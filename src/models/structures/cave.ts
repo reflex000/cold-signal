@@ -78,7 +78,8 @@ register(
     const r = b.rng;
     const bp = BLUEPRINTS.cave_rocks;
     const S = r.int(0, 1 << 20);
-    const ZM = 0.3, ZB = -9.2; // mouth, back wall
+    // mouth arch at z 1.07: the ring boxes of the mouth's side edges reach that far forward
+    const ZM = 1.07, ZB = -9.2; // mouth, back wall
     const rockCol = mixRGB(PAL.rock, PAL.rockBrown, 0.25);
     // section of the inner shell at z: s 0..1 from the left wall foot over the vault to the right foot
     const wallTop = (z: number) => lerp(1.55, 2.35, sat((ZM - z) / 3.5));
@@ -105,7 +106,7 @@ register(
       const n = fbm3(S, x * 0.7, y * 0.9, z * 0.7, 3);
       const n2 = noise3(S + 3, x * 2.3, y * 2.3, z * 2.3);
       const low = y < 2.1;
-      const d = low ? 0.04 + 0.16 * sat(0.5 + n) + 0.04 * (n2 * 0.5 + 0.5) : 0.12 * n + 0.05 * n2;
+      const d = low ? 0.01 + 0.09 * sat(0.5 + n) + 0.02 * (n2 * 0.5 + 0.5) : 0.12 * n + 0.05 * n2;
       const out = d + off + strata(y, z) * (low ? 0.5 : 1) + (low ? 0.025 : 0);
       // push away from the chamber axis (x) on the walls, up on the vault
       const vx = t < 0.45 ? side : side * Math.cos(Math.PI / 2 * sat((t - 0.45) / 0.55));
@@ -128,46 +129,56 @@ register(
       const p = inner(ZB, s);
       const k = Math.sin((u * Math.PI) / 2);
       const cy = 1.4;
-      return [p[0] * (1 - k * 0.92), cy + (p[1] - cy) * (1 - k * 0.85) + 0.0, ZB - 0.9 * k - 0.25 * (1 - Math.abs(s - 0.5) * 2) * k];
+      return [p[0] * (1 - k * 0.92), cy + (p[1] - cy) * (1 - k * 0.85) + 0.0, ZB - 0.18 * k];
     }).ghost();
     // ---- the outer mass: offset well outside, wider toward the mouth to make the cliff faces ----
     // open to the sky: snow lies on its ledges and its top (the material's job)
     b.ink({ color: rockCol, mat: MAT.ROCK, wear: 0.3, rough: 0.92, snow: 1, vary: 0.04 });
+    // Below 2.4 m the mass stands on the colliders' outer faces (people walk round it): the ring
+    // boxes 1.7 m outside the chamber's edges, the flank boxes out to |x| 6.4 beside the mouth.
+    const outerHalf = (z: number) => (z > -1.3 ? 6.42 : halfW(z) + 1.92);
+    const JAMB = 3.25, ZJ = 1.08, ZF = 0.42;
     const outer = (z: number, s: number): V3 => {
-      const t = s < 0.5 ? s * 2 : (1 - s) * 2;
+      const t = s < 0.5 ? s * 2 : (1 - s) * 2; // 0 at the foot .. 1 on top
       const side = s < 0.5 ? -1 : 1;
-      const front = sat((z + 1.6) / 2.0); // 1 near the mouth
-      const w = halfW(z) + 1.9 + 3.2 * front + 0.6 * fbm3(S + 11, z * 0.25, s * 3, 0, 2);
-      const top = crown(z) + 1.2 + 0.5 * fbm3(S + 12, z * 0.3, s * 2, 1, 2) - 0.6 * front * (1 - t);
-      const a = (t * Math.PI) / 2;
-      const x = side * w * Math.cos(a) ** 0.6;
-      const y = -0.15 + (top + 0.15) * Math.sin(a) ** 0.85;
-      const n = fbm3(S + 13, x * 0.35, y * 0.35, z * 0.35, 3) * 0.55 + noise3(S + 14, x * 1.1, y * 1.1, z * 1.1) * 0.15;
-      // strata: the face steps back in beds about 0.7 m thick, each with a ledge that holds snow
+      const top = crown(Math.min(z, ZM)) + 1.25 + 0.45 * fbm3(S + 12, z * 0.3, s * 2, 1, 2);
+      const wl = outerHalf(z);
+      let x: number, y: number;
+      if (t < 0.4) { y = -0.15 + (2.55 * t) / 0.4; x = side * wl; }
+      else { const a = (((t - 0.4) / 0.6) * Math.PI) / 2; x = side * wl * Math.cos(a) ** 0.7; y = 2.4 + (top - 2.4) * Math.sin(a); }
+      const n = fbm3(S + 13, x * 0.35, y * 0.35, z * 0.35, 3) * 0.5 + noise3(S + 14, x * 1.1, y * 1.1, z * 1.1) * 0.12;
+      // strata: beds about 0.7 m thick, each stepping back to a ledge that holds snow
       const bed = y / 0.7, f = bed - Math.floor(bed);
-      const ledge = 0.22 * (f < 0.25 ? f / 0.25 : 1) * Math.cos(a);
-      return [x + side * (n - ledge) * Math.cos(a), y + n * Math.sin(a) * 0.8, z];
+      const ledge = 0.2 * (f < 0.25 ? f / 0.25 : 1);
+      if (y < 2.4) return [x + side * (0.02 + 0.09 * sat(0.5 + n) + 0.04 * (1 - ledge / 0.2)), y, z];
+      const k = Math.cos((((t - 0.4) / 0.6) * Math.PI) / 2);
+      return [x + side * (n - ledge) * k, y + n * 0.6, z];
     };
-    const zo: number[] = [];
-    for (let z = 0.4; z > -11.2; z -= 0.6) zo.push(z);
+    const zo = [ZF, -0.2, -0.8, -1.28, -1.34];
+    for (let z = -1.9; z > -10.95; z -= 0.6) zo.push(z);
     const so = [0, 0.06, 0.13, 0.21, 0.3, 0.38, 0.45, 0.5, 0.55, 0.62, 0.7, 0.79, 0.87, 0.94, 1];
     for (let k = 0; k < zo.length - 1; k += 6) {
       const seg = zo.slice(k, Math.min(zo.length, k + 7));
       rockGrid(b, seg, so, (z, s) => outer(z, s), { flip: true, facet: 0.8 }).ghost();
     }
-    // the cliff face round the mouth: from the inner arch out to the outer silhouette
-    rockGrid(b, [0, 0.3, 0.65, 1], ss, (u, s) => {
-      const a = inner(ZM, s);
-      const so2 = Math.max(0, Math.min(1, s));
-      const c = outer(0.4, so2);
-      const z = lerp(ZM, 0.4 + 0.55 * (1 - Math.abs(s - 0.5) * 2) * sat(1 - u), u) + 0.15 * fbm3(S + 15, s * 4, u * 3, 0, 2) * u;
-      return [lerp(a[0], c[0], u), lerp(a[1], c[1], u), z];
+    // the cliff face round the mouth: from the arch out to the jamb's front corner (z 1.08, where
+    // the mouth's side boxes end), back along the jamb's side to the flank face (z 0.42), out to
+    // the mass's front ring
+    rockGrid(b, [0, 0.2, 0.38, 0.5, 0.52, 0.75, 1], ss, (u, s) => {
+      const a = inner(ZM, s), c = outer(ZF, s);
+      const side = s < 0.5 ? -1 : 1;
+      const cx = side * Math.max(Math.abs(a[0]) + 0.3, Math.min(JAMB, Math.abs(c[0])));
+      const cy = lerp(a[1], c[1], Math.abs(c[0]) > JAMB ? 0.0 : 0.5);
+      const wob = 0.05 * fbm3(S + 15, s * 5, u * 3, 0, 2);
+      if (u <= 0.5) { const k = u / 0.5; return [lerp(a[0], cx, k), lerp(a[1], cy, k), ZJ + Math.max(0, wob) * k]; }
+      if (u <= 0.52) { const k = (u - 0.5) / 0.02; return [cx + side * Math.max(0, wob), cy, lerp(ZJ, ZF, k)]; }
+      const k = (u - 0.52) / 0.48;
+      return [lerp(cx, c[0], k), lerp(cy, c[1], k), ZF + Math.max(0, wob) * (1 - k)];
     }, { flip: true }).ghost();
-    // the back of the mass: close it behind the chamber
+    // the back of the mass: a face on the back boxes' outer face (z -10.9), closing in on top
     rockGrid(b, [0, 0.5, 1], so, (u, s) => {
-      const p = outer(-11.2 + 0.0, s);
-      const k = u;
-      return [p[0] * (1 - k * 0.9), p[1] * (1 - k * 0.55), -11.2 - 1.2 * Math.sin((k * Math.PI) / 2)];
+      const p = outer(-10.9, s);
+      return [p[0] * (1 - u * 0.95), p[1] * (1 - u * 0.25), -10.9 - 0.04 * u];
     }, { flip: true }).ghost();
 
     // ---- floor: gravel and rock, level at the blueprint's 0.03 ----
@@ -180,7 +191,8 @@ register(
     for (let i = 0; i < 26; i++) {
       const z = r.range(-8.8, -0.4);
       const side = r.chance(0.5) ? -1 : 1;
-      const x = side * (halfW(z) - r.range(0.05, 0.3));
+      // nestled into the foot of the wall, not out on the floor
+      const x = side * (halfW(z) + r.range(-0.03, 0.08));
       b.ink({ color: mixRGB(rockCol, PAL.rockBrown, r.next() * 0.5), mat: MAT.ROCK, wear: 0.35, snow: 0 });
       b.rock(r.range(0.05, 0.16), { detail: 1, rough: 0.6, facet: 0.7, flat: 0.4 }).rotY(r.range(0, 6.3)).move(x, 0.03, z);
     }

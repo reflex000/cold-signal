@@ -3,12 +3,16 @@
 Module: FX (fire, flares, light pool, breath, screen overlays, small effects).
 Files owned: src/gfx/fx/**, dev/fx.html, dev/fx.ts, one registration line in src/game/visuals.ts.
 
-## State
-- [x] All source files written (session 1): index, lights, ctx, noise, particles, flame, fire, flare,
-      breath, impacts, emitters, overlays. Type-checks.
-- [ ] Bench dev/fx.html + dev/fx.ts
-- [ ] Registration line in src/game/visuals.ts
-- [ ] Shots (WebGPU, WebGL2, mobile, real game) and look iteration
+## State (session 1)
+- [x] All files written and type-checking: index (system, catch-up, eye adaptation), lights (pool),
+      ctx, noise, particles (puff / glow / debris pools), flame (tongues, coal beds), fire, flare,
+      breath, impacts (muzzle, puffs, chips, sparks, splash, shards), emitters (props emitters,
+      lamps, beacons), overlays (frost, lens drops + lens snow, hurt / low health).
+- [x] Registered in src/game/visuals.ts (one dynamic-import line after the markers).
+- [x] Bench dev/fx.html works on WebGPU, WebGL2 and --mobile 1, console clean.
+- [x] Real game: barrel at the wreck, a laid + lit campfire, smoke, embers, eye adaptation work.
+- [ ] Remaining: look pass on ignition / breath / muzzle / bursts / flare in flight; flare shot in the
+      real game (needs HUNT's flare gun); WebGL2 + mobile in the real game; final perf numbers.
 
 ## Public API (stable)
 ```ts
@@ -25,6 +29,7 @@ beam.release();
 fx.lights.active                                       // best requests this frame (eye shine)
 fx.burst('muzzle'|'snow'|'step'|'chips'|'sparks'|'splash'|'shards'|'steam'|'smoke', x,y,z, dx?,dy?,dz?, k?)
 fx.forceOverlays(frost|null, wet|null, snow|null)      // benches / tools
+fx.info, fx.debug()                                    // counts; wind, eye adaptation, fires
 ```
 
 ## Decisions / facts
@@ -34,8 +39,24 @@ fx.forceOverlays(frost|null, wet|null, snow|null)      // benches / tools
   Assignment runs in scene.onBeforeRender (camera === engine.camera), after every system updated.
 - Particle lights: PARTICLE_LIGHTS uniform arrays (8 best requests) used per vertex by puffs/debris.
 - Draw calls: coals, puffs, debris, glow, flames (5 meshes) + overlays in the post chain.
-- Stand-in markers (src/game/standin/markers.ts, GAME) still draw stand-in flames, campfire stones
-  and 3 point lights for fires/flares: the integrator must drop that branch when 'fx' is present.
+- Light scale: campfire 4 cd at full heat (range 12 m), barrel 3.7, stove 1.8, flare 30 (60 in
+  flight). Flame ramp floor 2.4 so even tips are several times brighter than the firelit snow;
+  flames use a premultiplied blend with 0.6 soot absorption so they read against bright snow.
+- Eye adaptation: the sky's auto exposure only knows moonlit snow; fx lowers sky.exposureBias by up
+  to 1.25 stops from the firelight around the camera (additive: only its own share is written).
+- Catch-up: when frames are skipped (CS.step(n) in ?still=1 renders 1 of n), fx simulates the last
+  up to 3 s of the gap in 1/30 s steps, so smoke columns exist in tool shots and after hitches.
+- Stand-in markers (src/game/standin/markers.ts, GAME) still draw stand-in flames, campfire stones /
+  sticks and 3 point lights for fires and flares: the integrator must drop that branch once fx is in.
+  My scratch scenarios hide 'standin-flames', 'standin-stones', 'standin-firelight-*' to judge fx.
+- Perf (medium, 1632x918, Arc iGPU in power-saving mode, ~8-10x slow): fire + flare adds ~2-11 ms
+  to a 41-59 ms frame (noisy), i.e. roughly 0.2-1.2 ms at normal clocks.
 
 ## Test commands
 - npx tsc --noEmit -p . 2>&1 | grep -E "src/gfx/fx|dev/fx"
+- node tools/shot.mjs "dev/fx.html?fire=1&light=night&t=12&az=30&el=8&dist=2.6&ty=0.6" --out fx_night
+  (type=barrel|stove, fire=0..3, flare=1|2, breath=1, fp=1, frost=, wet=, lsnow= (+ wdir toward the
+  camera, e.g. 210), hurt=, low=, fx=muzzle|snow|chips|sparks|splash|shards, ignite=1 (no &t),
+  --backend webgl, --mobile 1; &perf=1 [&nofx=1] puts the median GPU ms in window.PERF)
+- Real game: scratch scenarios (not in the repo) drive CS: build/ignite/feed a campfire with CS.act,
+  CS.env({clock, storm, lock}), CS.go; see the report for what to look at.
