@@ -232,6 +232,19 @@ function respawn(ctx: SimCtx, p: PlayerEnt): void {
     y = s.y;
     z = s.z;
   }
+  // The last stand: once the group has reached the tower, nobody wakes half a mountain away from it
+  // (a walk back through the hold-out's storm is a death spiral, not a second chance).
+  const stage = ctx.state.objective.stage;
+  let shed = false;
+  if (stage === 'power' || stage === 'holdout' || stage === 'rescue') {
+    const t = towerSpot(ctx);
+    if (t && (!has || Math.hypot(x - t.x, z - t.z) > TOWER_RESPAWN_FAR)) {
+      x = t.x;
+      y = t.y;
+      z = t.z;
+      shed = true;
+    }
+  }
   const s = freeSpot(ctx, p, x, y, z);
   p.x = s.x;
   p.y = s.y;
@@ -260,13 +273,27 @@ function respawn(ctx: SimCtx, p: PlayerEnt): void {
       const kept = vars[KIT_KEY + item + '.' + p.id] ?? 0;
       if (kept > (p.inv[item] ?? 0)) p.inv[item] = kept;
     }
-    const f = ctx.get<FireEnt>(vars[CP.fire] ?? 0);
+    const f = shed ? undefined : ctx.get<FireEnt>(vars[CP.fire] ?? 0);
     if (f && f.kind === 'fire' && !f.lit) {
       f.embers = Math.max(f.embers, 1);
       feedFire(ctx, f, RESPAWN_WOOD, p, 'stick');
     }
   }
-  toast(ctx, p, 'info', has ? 'You wake by the fire.' : 'You wake by the wreck.');
+  toast(ctx, p, 'info', shed ? 'You wake in the tower shed.' : has ? 'You wake by the fire.' : 'You wake by the wreck.');
+}
+
+/** Metres from the tower beyond which a checkpoint gives way to the shed in the endgame. */
+const TOWER_RESPAWN_FAR = 80;
+
+/** A spot on the shed floor in front of the transmitter panel, or null if the world has none. */
+function towerSpot(ctx: SimCtx): { x: number; y: number; z: number } | null {
+  for (const d of ctx.all('device')) {
+    if (d.type !== 'panel') continue;
+    // device yaws are three.js rotations: the panel faces along (sin yaw, cos yaw)
+    const x = d.x + Math.sin(d.yaw) * 1.1, z = d.z + Math.cos(d.yaw) * 1.1;
+    return { x, y: ctx.world.groundAt(x, z, d.y + 0.5).y, z };
+  }
+  return null;
 }
 
 /** Alone: no other living person (companion bots do not count). */

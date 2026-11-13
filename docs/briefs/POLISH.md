@@ -35,3 +35,5 @@ Known items from the last engineers to include in the fix list:
 - SNOW: read its "## Final report" in docs/status/SNOW.md for anything it left open.
 - STRUCTURES: the fuselage break still reads as a round tube end-on from 20 m.
 - FIGURES: the wolf coat reads tan / coyote-like in warm light; timber wolves are grey with a darker saddle.
+- SNOW (its report): the WebGPU storm is less dense than the WebGL2 one: make the two backends read the same;
+  wolf toes in the snow only show at high / ultra (fine), trails are not saved with the game (fine).
