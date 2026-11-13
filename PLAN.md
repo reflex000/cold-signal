@@ -25,35 +25,35 @@ the console is clean, commit.
 - [x] Forest: pines with snow load and wind sway, impostors, rocks, ground cover
 - [x] Walk the mountain in first person (keyboard / mouse and touch)
 
-## M2 — Staying alive
-- [ ] Body temperature, wetness, shelter, stamina, health
-- [ ] Fire: build, light, feed, wind and snow; flame, embers, smoke, flicker light
-- [ ] Wood: sticks, deadfall, the axe; inventory and items; crates
-- [ ] HUD, menus, settings, touch controls
-- [ ] Audio: wind, footsteps, fire, breath; the score
+## M2 — Staying alive (done)
+- [x] Body temperature, wetness, shelter, stamina, health
+- [x] Fire: build, light, feed, wind and snow; flame, embers, smoke, flicker light
+- [x] Wood: sticks, deadfall, the axe; inventory and items; crates
+- [x] HUD, menus, settings, touch controls
+- [x] Audio: wind, footsteps, fire, breath; the score
 
-## M3 — What hunts you
-- [ ] Wolves: packs, stalking, circling, fear of fire and flares, attacks on the isolated
-- [ ] Tools: axe, flashlight, flare gun, rifle, hand-crank radio; first-person hands
-- [ ] Figures: the parka player in third person, the wolf, both fully animated
-- [ ] Downed and revive; death and checkpoints
+## M3 — What hunts you (done)
+- [x] Wolves: packs, stalking, circling, fear of fire and flares, attacks on the isolated
+- [x] Tools: axe, flashlight, flare gun, rifle, hand-crank radio; first-person hands
+- [x] Figures: the parka player in third person, the wolf, both fully animated
+- [x] Downed and revive; death and checkpoints
 
-## M4 — The places and the way out
-- [ ] Wreck, tail section, ranger cabin, frozen lake and hut, cave, survey camp, tower
-- [ ] Lake ice that creaks, cracks and breaks
-- [ ] Radio parts, the tower panel, the generator, the hold-out, the helicopter, the ending
-- [ ] Story beats, hints, notes; save and continue
+## M4 — The places and the way out (done)
+- [x] Wreck, tail section, ranger cabin, frozen lake and hut, cave, survey camp, tower
+- [x] Lake ice that creaks, cracks and breaks
+- [x] Radio parts, the tower panel, the generator, the hold-out, the helicopter, the ending
+- [x] Story beats, hints, notes; save and continue
 
-## M5 — Together
-- [ ] Companion bots through the same action path; shared warmth, revive, two-person log carry
-- [ ] Wolves and loot scale with player count; isolation pressure
-- [ ] `?wire=json&lag=120` play test; snapshot size check; full scripted play-through to rescue
+## M5 — Together (done)
+- [x] Companion bots through the same action path; shared warmth, revive, two-person log carry
+- [x] Wolves and loot scale with player count; isolation pressure
+- [x] `?wire=json&lag=120` play test; snapshot size check; full scripted play-through to rescue
 
 ## M6 — Make it look real, make it run
-- [ ] Deformable snow: footprints, trails, drag marks that fill in
-- [ ] Post: tone mapping, bloom, ambient occlusion, anti-aliasing, frost and wet lens, grain
-- [ ] Breath vapour, snow on the lens, flare light, eye shine, heat haze
-- [ ] Quality presets (`mobile` to `ultra`), auto-detect, dynamic resolution; 60 fps on `medium`
+- [x] Deformable snow: footprints, trails, drag marks that fill in
+- [x] Post: tone mapping, bloom, ambient occlusion, anti-aliasing, frost and wet lens, grain
+- [x] Breath vapour, snow on the lens, flare light, eye shine, heat haze
+- [x] Quality presets (`mobile` to `ultra`), auto-detect, dynamic resolution; 60 fps on `medium`
 - [ ] Phone pass: touch layout, safe areas, WebGL2 path, memory
 - [ ] Harsh visual review of every place in every weather; fix list worked to empty
 
