@@ -10,10 +10,18 @@
 // are planned on a fine local grid (A*, 0.5 m cells) over the world's walkable test, with the ice,
 // cliffs and lit fires masked out, and doorways snapped to their exact centre. Every step is checked
 // again just ahead of the feet (safeStep), so a moving hazard (a fresh hole, a new fire) still stops it.
+//
+// Reach: a spot to work a thing from (a pickup, a device, a fire to light, feed or sit by) is one
+// the host agrees can reach it (inReach mirrors items.ts canReach) and, by a fire, one its heat
+// reaches (canWork): near is not enough, a wall in between puts it out of reach. The planner's goal
+// and the walker's "arrived" both ask it (Planner.workSpot).
 // Owner: TOGETHER.
 import { smoothstep, wrapAngle } from '../core/math';
 import type { SimCtx } from '../sim/api';
+import { EYE_STAND } from '../sim/move';
 import { iceCellState } from '../sim/systems/ice';
+import { AIM, REACH } from '../sim/systems/items';
+import { DEVICE_AIM } from '../sim/systems/objective';
 import type { Entity, EntityKind, Env, IceCell, NetId, Objective, PlayerEnt } from '../sim/types';
 import type { WorldEx } from '../world/index';
 import type { View } from './view';
@@ -94,6 +102,41 @@ export function iceRisk(r: Reader, x: number, z: number): number {
 }
 
 const yawTo = (dx: number, dz: number): number => Math.atan2(-dx, -dz);
+
+// =============================================================================================== reach
+
+/**
+ * Could a body with its feet at (x, y, z) work `e` with its hands: the host's reach test (items.ts
+ * canReach, objective.ts deviceReach for devices) without the allowance it makes for a lagging view,
+ * so the host agrees. The eye must be within REACH of the thing's aim point (plus its radius) with
+ * nothing solid in between; the sight line stops short of the thing, which stands inside its own
+ * collider (the stove, the panel cabinet). Right behind the cabin wall the stove is near and out of
+ * reach.
+ */
+export function inReach(world: WorldEx, x: number, y: number, z: number, e: Entity): boolean {
+  const sh = e.kind === 'device' ? DEVICE_AIM[e.type] ?? DEVICE_AIM.panel : AIM[e.kind] ?? AIM.pickup;
+  const ey = y + EYE_STAND;
+  const dx = e.x - x, dy = e.y + sh.y - ey, dz = e.z - z;
+  const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (d > REACH + sh.r) return false;
+  const k = d > 1e-3 ? Math.max(0, d - sh.r - 0.15) / d : 0;
+  return k <= 0 || world.lineClear(x, ey, z, x + dx * k, ey + dy * k, z + dz * k);
+}
+
+/**
+ * Can a body with its feet at (x, y, z) work `e` from there: in its reach (inReach) and, by a fire,
+ * in its warmth too (thermal.ts warmthFrom's wall test, the sight line from just outside the fire
+ * to the chest: a wall or a rock in between leaves a tenth of the heat).
+ */
+export function canWork(world: WorldEx, x: number, y: number, z: number, e: Entity): boolean {
+  if (!inReach(world, x, y, z, e)) return false;
+  if (e.kind !== 'fire') return true;
+  const dx = x - e.x, dz = z - e.z;
+  const d = Math.hypot(dx, dz);
+  if (d <= 0.6) return true;
+  const k = 0.55 / d;
+  return world.lineClear(e.x + dx * k, e.y + 0.5, e.z + dz * k, x, y + 1, z);
+}
 
 // =============================================================================================== planning
 
@@ -308,6 +351,19 @@ export class Planner {
       if (best) return best;
     }
     return null;
+  }
+
+  /**
+   * A goal test for plan() and steer(): a spot between `lo` and `hi` metres from `e` across the
+   * ground from which a body can work it (canWork, with its feet on the ground or floor there), so
+   * on its side of any wall: inside the cabin by the stove, never just behind the wall from it.
+   */
+  workSpot(e: Entity, lo: number, hi: number): (x: number, z: number) => boolean {
+    const w = this.world;
+    return (x, z) => {
+      const d = Math.hypot(x - e.x, z - e.z);
+      return d > lo && d < hi && canWork(w, x, w.groundAt(x, z, e.y + 0.5).y, z, e);
+    };
   }
 
   /**
@@ -631,14 +687,16 @@ const FAR = 34; // metres: beyond this a goal is approached along the trail firs
 
 /**
  * One tick of walking toward (gx, gz): returns the yaw to face and how hard to push forward.
- * `near` is how close counts as there. The walker keeps its plan between ticks.
+ * `near` is how close counts as there; with a `goal` test the spot must also pass it (near a
+ * stove behind the cabin wall is not there: the plan goes round through the door). The walker
+ * keeps its plan between ticks.
  */
 export function steer(pl: Planner, r: Reader, w: Walker, p: PlayerEnt, gx: number, gz: number, near: number, dt: number, out: Steer, opts: { run?: boolean; goal?: (x: number, z: number) => boolean } = {}): Steer {
   out.jump = false;
   out.sprint = false;
   out.blocked = false;
   const d = Math.hypot(gx - p.x, gz - p.z);
-  if (d <= near) {
+  if (d <= near && (!opts.goal || opts.goal(p.x, p.z))) {
     out.arrived = true;
     out.mz = 0;
     out.yaw = p.yaw;

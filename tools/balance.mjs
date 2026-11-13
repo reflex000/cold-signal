@@ -7,7 +7,9 @@
 // Per run it logs the time of every leg (each radio part found, the tower, the parts fitted, the call,
 // the rescue), downs and deaths with their cause, the closest calls with the cold (lowest core, seconds
 // below 34 / 33 / 32 C), the wolves met (distinct wolves that came within 30 m on the hunt, bites, kills),
-// and the matches, rounds and flares picked up, used and left over. --json writes every run's numbers.
+// the matches, rounds and flares picked up, used and left over, and each body's longest stand: the most
+// time spent alive within 2 m of one spot without a fire's warmth, outside the scripted hold-out and rescue
+// waits (a mind stuck at a wall shows up here). --json writes every run's numbers.
 // The autopilot reads the authoritative state here (in the game it reads the client's View); its
 // decisions are otherwise the same, so the numbers match the playthrough scenario's within run noise.
 import fs from 'node:fs';
@@ -67,8 +69,9 @@ function run(seed) {
     core: {}, wolves: { met: 0, packs: 0, bites: 0, wolfDamage: 0, kills: 0, howls: 0, attacksOn: {} },
     fires: { built: 0, lit: 0, fail: {}, out: {} },
     picked: {}, used: { matchStrikes: 0, shots: 0, flares: 0 }, left: {},
-    whiteouts: [], stages: [], firstCold: null, doing: {},
+    whiteouts: [], stages: [], firstCold: null, doing: {}, stand: {},
   };
+  const stands = new Map(); // player id -> the stretch it is standing out now: { x, z, t0 }
   const lastHurt = new Map();
   const metWolves = new Set(), metPacks = new Set();
   const coreOf = (p) => (R.core[p.name] ??= { min: 99, below34: 0, below33: 0, below32: 0, dips: 0, inDip: false, minHealth: 100 });
@@ -134,6 +137,14 @@ function run(seed) {
         if (c.inDip && p.core > 35) c.inDip = false;
       }
       if (towerAt < 0 && p.id === me.id && Math.hypot(p.x - tower.x, p.z - tower.z) < 40) { towerAt = t; leg('tower reached'); }
+      // the longest stand: alive, within 2 m of one spot, no fire's warmth, not the scripted waits
+      if ((st.tick & 15) === 0) {
+        let s = stands.get(p.id);
+        const waiting = st.objective.stage === 'holdout' || st.objective.stage === 'rescue';
+        if (p.life !== 'alive' || p.fireHeat > 0.1 || waiting || !s || Math.hypot(p.x - s.x, p.z - s.z) > 2) stands.set(p.id, (s = { x: p.x, z: p.z, t0: t }));
+        const name = names.get(p.id) ?? p.name, best = R.stand[name];
+        if (t - s.t0 > (best ? best.s : 0)) R.stand[name] = { s: Math.round(t - s.t0), t: Math.round(t), x: Math.round(p.x), z: Math.round(p.z), doing: p.id === me.id ? lead.doing : brain.doing()[String(p.id)] ?? '?' };
+      }
     }
     if ((sim.state.tick & 7) === 0) {
       for (const w of sim.ctx.all('wolf')) {
@@ -194,8 +205,12 @@ function report(R) {
   L.push(`  matches picked ${R.picked.matches ?? 0}, strikes ${R.used.matchStrikes}, left ${R.left.matches} (unclaimed ${R.unclaimed.matches}) | rounds picked ${R.picked.ammo ?? 0}, shots ${R.used.shots}, left ${R.left.ammo} (unclaimed ${R.unclaimed.ammo}) | flares picked ${R.picked.flare ?? 0}, fired ${R.used.flares}, left ${R.left.flare} (unclaimed ${R.unclaimed.flare})`);
   L.push('  autopilot time: ' + Object.entries(R.doing).sort((a, b) => b[1] - a[1]).map(([k, v]) => k + ' ' + fmt(v)).join(', '));
   L.push('  whiteouts: ' + R.whiteouts.map((w) => `${fmt(w.t0)} ${w.dur} s, at fire ${w.atFire} s, min ${w.minCore} C`).join(' | '));
+  L.push('  longest stand without a fire: ' + Object.entries(R.stand).map(([n, s]) => `${n} ${fmt(s.s)} until ${fmt(s.t)} at ${s.x},${s.z} (${s.doing})`).join(' | '));
   return L.join('\n');
 }
+
+/** A run's longest stand of any body, seconds. */
+const longestStand = (R) => Math.max(0, ...Object.values(R.stand).map((s) => s.s));
 
 const all = [];
 try {
@@ -212,5 +227,6 @@ if (args.json) fs.writeFileSync(path.resolve(args.json), JSON.stringify(all, nul
 if (!quiet && all.length > 1) {
   const won = all.filter((r) => r.stage === 'won');
   const ts = won.map((r) => r.t).sort((a, b) => a - b);
-  console.log(`SUMMARY ${won.length}/${all.length} won; game time ${ts.map(fmt).join(', ')}; downs ${all.map((r) => r.downs.length).join(',')}; deaths ${all.map((r) => r.deaths.length).join(',')}`);
+  const median = ts.length === 0 ? 0 : ts.length % 2 ? ts[(ts.length - 1) / 2] : (ts[ts.length / 2 - 1] + ts[ts.length / 2]) / 2;
+  console.log(`SUMMARY ${won.length}/${all.length} won; game time ${ts.map(fmt).join(', ')}${ts.length ? ` (median ${fmt(median)})` : ''}; downs ${all.map((r) => r.downs.length).join(',')}; deaths ${all.map((r) => r.deaths.length).join(',')}; longest stand ${all.map((r) => fmt(longestStand(r))).join(',')}`);
 }

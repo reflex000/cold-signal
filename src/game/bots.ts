@@ -35,7 +35,7 @@ import { padOf, PARTS, PART_ITEM } from '../sim/systems/objective';
 import { REVIVE_RANGE } from '../sim/systems/vitals';
 import { BTN, type Action, type DeviceEnt, type Entity, type FireEnt, type InputCmd, type ItemId, type LogEnt, type NetId, type PickupEnt, type PlayerEnt, type ToolId, type WolfEnt } from '../sim/types';
 import type { WorldEx } from '../world/index';
-import { iceRisk, Planner, SimReader, steer, Walker, type Reader, type Steer } from './botnav';
+import { canWork, iceRisk, Planner, SimReader, steer, Walker, type Reader, type Steer } from './botnav';
 
 const NAMES = ['Mara', 'Tomas', 'Ines'];
 /** Extra detail in Mind.doing (tools). */
@@ -504,9 +504,9 @@ export class Mind {
 
   /** Walk to within reach of a device and aim at it; true once there (focus set). */
   private useDevice(r: Reader, pl: Planner, p: PlayerEnt, d: DeviceEnt, dt: number): boolean {
-    const near = (x: number, z: number) => Math.hypot(x - d.x, z - d.z) < 1.3 && pl.lineOk(r, x, z, x, z);
-    if (dist(d, p) > 1.35) {
-      this.go(r, pl, p, d.x, d.z, 1.3, dt, false, near);
+    // in the host's reach, not only near: a wall in between puts a device a metre away out of reach
+    if (dist(d, p) > 1.35 || !canWork(r.world, p.x, p.y, p.z, d)) {
+      this.go(r, pl, p, d.x, d.z, 1.3, dt, false, pl.workSpot(d, 0, 1.3));
       return false;
     }
     this.look(p, d.x, d.y + 0.1, d.z);
@@ -559,12 +559,10 @@ export class Mind {
    * busy with it (standing there counts).
    */
   private tend(r: Reader, pl: Planner, p: PlayerEnt, f: FireEnt, dt: number): boolean {
-    const d = dist(f, p);
-    if (d > FIRE_NEAR + 0.4) {
-      this.go(r, pl, p, f.x, f.z, FIRE_NEAR, dt, true, (x, z) => {
-        const e = Math.hypot(x - f.x, z - f.z);
-        return e > 1.0 && e < FIRE_NEAR;
-      });
+    // By the fire is near it, in its reach and in its warmth: on its side of any wall. Just behind
+    // the cabin wall the stove is 2 m away, and the host refuses the match and the wall keeps the heat.
+    if (dist(f, p) > FIRE_NEAR + 0.4 || !canWork(r.world, p.x, p.y, p.z, f)) {
+      this.go(r, pl, p, f.x, f.z, FIRE_NEAR, dt, true, pl.workSpot(f, 1.0, FIRE_NEAR));
       return true;
     }
     this.look(p, f.x, f.y + 0.2, f.z);
@@ -696,19 +694,10 @@ export class Mind {
   /** Walk to a pickup and press USE on it. True while busy. */
   private take(r: Reader, pl: Planner, p: PlayerEnt, pk: PickupEnt, dt: number): boolean {
     const key = 'pk' + pk.id;
-    // the host's reach (items.ts canReach): the eye within about 3.4 m of the thing, nothing solid
-    // in between; kept to 2.4 m across and 2.9 m from the eye for the ~100 ms the view is behind
-    const reachable = (x: number, z: number) => {
-      const dd = Math.hypot(x - pk.x, z - pk.z);
-      if (dd > 2.4) return false;
-      const ey = p.y + EYE_STAND, ty = pk.y + 0.1;
-      const e = Math.hypot(dd, ty - ey);
-      if (e > 2.9) return false;
-      const k = Math.max(0, e - 0.45) / Math.max(e, 1e-3);
-      return r.world.lineClear(x, ey, z, x + (pk.x - x) * k, ey + (ty - ey) * k, z + (pk.z - z) * k);
-    };
-    if (!reachable(p.x, p.z)) {
-      this.go(r, pl, p, pk.x, pk.z, 0.9, dt, false, reachable);
+    // the host's reach (canWork), kept to 2.4 m across for the ~100 ms the view is behind: exactly
+    // the host's sight line, so a log on the woodshed's stack is not taken through its back wall
+    if (dist(pk, p) > 2.4 || !canWork(r.world, p.x, p.y, p.z, pk)) {
+      this.go(r, pl, p, pk.x, pk.z, 0.9, dt, false, pl.workSpot(pk, 0, 2.4));
       // cannot get there: forget it for a while (a pickup that keeps failing, for good)
       if (this.giveUp(key)) {
         const n = (this.fails.get(key) ?? 0) + 1;
