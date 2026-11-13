@@ -169,6 +169,9 @@ export class PlayerAnimator {
   private fallSide = 1;
   private clavL = 0;
   private clavR = 0;
+  /** At rest the weight sits on one leg (+1 right, -1 left), switching now and then. */
+  private standSide = 1;
+  private wIdle = 0;
   private readonly seed: number;
   private readonly feet: Foot[] = [0, 1].map(() => ({
     planted: true, pos: new THREE.Vector3(), yaw: 0, from: new THREE.Vector3(), fromYaw: 0, to: new THREE.Vector3(), toYaw: 0, t: 1, dur: 0.3, lift: 0.08, pitch: 0,
@@ -183,6 +186,15 @@ export class PlayerAnimator {
   constructor(seed = 0) {
     this.seed = seed;
     this.breath = (seed * 2.399) % TAU;
+  }
+
+  /** Dev: a snapshot of the gait state (bench / tool diagnostics). */
+  debugState(): Record<string, unknown> {
+    const r = (v: number): number => Math.round(v * 100) / 100;
+    return {
+      phase: r(this.phase), spd: r(this.spd), vel: [r(this.velX), r(this.velZ)], bodyYaw: r(this.bodyYaw), run: r(this.wRun), move: r(this.wMove),
+      pelvisY: r(this.pose.p[PB.pelvis].y), feet: this.feet.map((f) => ({ x: r(f.pos.x), y: r(f.pos.y), z: r(f.pos.z), planted: f.planted, t: r(f.t) })),
+    };
   }
 
   /** Snap state to the entity (first frame, teleports). */
@@ -221,7 +233,10 @@ export class PlayerAnimator {
   /** Where a foot rests under the body. */
   private restPoint(e: { x: number; z: number; y: number }, s: number, out: THREE.Vector3): THREE.Vector3 {
     const c = Math.cos(this.bodyYaw), sn = Math.sin(this.bodyYaw);
-    const lx = s * (0.115 + 0.035 * this.wCrouch + 0.03 * this.wAim * this.wTool.rifle), lz = s * 0.025 - 0.02 * this.wCrouch + s * 0.08 * this.wAim * this.wTool.rifle;
+    // the free leg (not carrying the weight) rests a little forward and out
+    const free = this.wIdle * smooth(-0.2, 0.6, -s * this.standSide);
+    const lx = s * (0.115 + 0.035 * this.wCrouch + 0.03 * this.wAim * this.wTool.rifle + 0.02 * free);
+    const lz = s * 0.025 - 0.02 * this.wCrouch + s * 0.08 * this.wAim * this.wTool.rifle - 0.08 * free;
     // local (x right, z back) -> world: right = (cos, 0, -sin), back = (sin, 0, cos)
     return out.set(e.x + lx * c + lz * sn, e.y, e.z - lx * sn + lz * c);
   }
@@ -234,11 +249,17 @@ export class PlayerAnimator {
     // ---------------- state weights ----------------
     const down = e.life === 'downed', dead = e.life === 'dead';
     const upright = !down && !dead;
-    // velocity: the entity's own when it has one, else from the motion (interpolated remote players)
-    const mvx = dt > 0 ? (e.x - this.lastX) / dt : 0, mvz = dt > 0 ? (e.z - this.lastZ) / dt : 0;
-    const hasVel = Math.abs(e.vx) + Math.abs(e.vz) > 1e-4;
-    this.velX = damp(this.velX, hasVel ? e.vx : mvx, 12, dt);
-    this.velZ = damp(this.velZ, hasVel ? e.vz : mvz, 12, dt);
+    // ground actually covered this frame: the gait advances by distance, so the feet keep up with the
+    // body while it speeds up or slows down
+    this.moved = Math.min(0.5, Math.hypot(e.x - this.lastX, e.z - this.lastZ));
+    // velocity from the motion actually drawn (an interpolated remote player's snapshot velocity can
+    // disagree with its position: blocked by a tree, a late snapshot), the entity's own as a hint
+    if (dt > 1e-4) {
+      const mvx = (e.x - this.lastX) / dt, mvz = (e.z - this.lastZ) / dt;
+      const hint = Math.abs(e.vx) + Math.abs(e.vz) > 1e-4 && Math.hypot(mvx, mvz) < 0.05 ? 0.25 : 0;
+      this.velX = damp(this.velX, mvx + (e.vx - mvx) * hint, 12, dt);
+      this.velZ = damp(this.velZ, mvz + (e.vz - mvz) * hint, 12, dt);
+    }
     this.lastX = e.x;
     this.lastZ = e.z;
     const speed = Math.hypot(this.velX, this.velZ);
@@ -256,7 +277,14 @@ export class PlayerAnimator {
     for (const k of TOOL_IDS) this.wTool[k] = damp(this.wTool[k], k === e.held ? 1 : 0, 9, dt);
     const moving = upright && onGround && !e.swim && this.spd > 0.22 && this.wRevive < 0.5;
     this.wMove = damp(this.wMove, moving ? 1 : 0, 7, dt);
-    this.wRun = damp(this.wRun, smooth(2.9, 4.0, this.spd), 5, dt);
+    // standing at rest: the weight on one leg, changing sides every several seconds
+    const idleNow = upright && !moving && e.onGround && !e.swim && !e.crouch && act === 'none' && this.wRevive < 0.1 && e.carry === 0;
+    this.wIdle = damp(this.wIdle, idleNow ? 1 : 0, 1.6, dt);
+    const sideWant = Math.sin(ctx.time * 0.11 + this.seed * 1.7) + 0.4 * Math.sin(ctx.time * 0.27 + this.seed) > 0 ? 1 : -1;
+    this.standSide = damp(this.standSide, sideWant, 1.1, dt);
+    // the sim's 2.6 m/s 'walk' is past the walk-run transition: walking it would need a stance longer than
+    // the legs reach, so above ~2.1 m/s the gait leans into a light jog (shorter stance, a moment of flight)
+    this.wRun = damp(this.wRun, smooth(2.1, 3.4, this.spd), 5, dt);
     if (!onGround) this.air += dt;
     if (onGround && !this.wasGround && this.air > 0.12) {
       this.landHit = Math.max(this.landHit, clamp(this.air * 1.4, 0.25, 1));
@@ -303,9 +331,11 @@ export class PlayerAnimator {
     this.bodyYaw = dampAngle(this.bodyYaw, target, speed > 0.3 ? 7 : 5, dt);
 
     // ---------------- gait ----------------
-    const stepLen = clamp(0.32 + 0.18 * this.spd, 0.4, 1.35) * (1 - 0.25 * this.wCrouch) * (1 - 0.22 * this.wDeep);
-    if (moving) this.phase = (this.phase + (this.spd / (2 * stepLen)) * dt) % 1;
-    const duty = lerp(0.6, 0.36, this.wRun);
+    // stride and stance sized to the leg: a stance foot travels duty * 2 * stepLen past the hips, which must
+    // stay within about +-0.4 m or the hips dive at every double support
+    const stepLen = clamp(0.32 + 0.17 * this.spd, 0.4, 1.35) * (1 - 0.25 * this.wCrouch) * (1 - 0.22 * this.wDeep);
+    if (moving) this.phase = (this.phase + Math.max(this.moved, this.spd * dt * 0.5) / (2 * stepLen)) % 1;
+    const duty = lerp(lerp(0.6, 0.55, smooth(1.2, 2.4, this.spd)), 0.36, this.wRun);
     this.updateFeet(e, ctx, dt, moving, stepLen, duty);
 
     // ---------------- lean, breath ----------------
@@ -340,6 +370,7 @@ export class PlayerAnimator {
   // ------------------------------------------------------------------------------------------
 
   private wasMoving = false;
+  private moved = 0;
 
   private updateFeet(e: PlayerEnt, ctx: AnimCtx, dt: number, moving: boolean, stepLen: number, duty: number): void {
     const vx = this.velX, vz = this.velZ;
@@ -371,16 +402,23 @@ export class PlayerAnimator {
             f.yaw = f.toYaw;
           }
           // never leave a planted foot beyond the leg's reach (a stop, a turn, a lag in the snapshots):
-          // past 0.6 m from the body it slides after it
+          // well behind the hips it steps at once (the other foot is down); past 0.46 m it slides after it
           const dx = f.pos.x - e.x, dz = f.pos.z - e.z;
           const d = Math.hypot(dx, dz);
-          if (d > 0.6) {
-            f.pos.x = e.x + (dx / d) * 0.6;
-            f.pos.z = e.z + (dz / d) * 0.6;
+          const behind = -(dx * vx + dz * vz) / (Math.hypot(vx, vz) || 1);
+          const other = this.feet[1 - i];
+          if (behind > 0.4 && other.planted) {
+            this.phase = (duty - (i === 0 ? 0 : 0.5) + 1.0001) % 1;
+            continue;
+          }
+          if (d > 0.46) {
+            f.pos.x = e.x + (dx / d) * 0.46;
+            f.pos.z = e.z + (dz / d) * 0.46;
           }
           f.pitch = damp(f.pitch, 0, 14, dt);
-          // late stance: the heel lifts
+          // late stance: the heel lifts (sooner and higher when the foot is far behind the hips)
           if (ph > duty - 0.12) f.pitch = Math.max(f.pitch, smooth(duty - 0.12, duty, ph) * 0.45 * (0.6 + this.wRun));
+          f.pitch = Math.max(f.pitch, smooth(0.28, 0.44, behind) * 0.6);
         } else {
           const t = (ph - duty) / (1 - duty);
           if (f.planted) {
@@ -389,8 +427,9 @@ export class PlayerAnimator {
             f.fromYaw = f.yaw;
           }
           // landing point: where the body will be at touchdown, plus half the stance travel ahead
+          // (never further than the leg reaches)
           const tRem = (1 - ph) * T;
-          const lead = (duty * T * this.spd) / 2;
+          const lead = Math.min(0.38, (duty * T * this.spd) / 2);
           const vl = Math.hypot(vx, vz) || 1;
           const lx = side * (0.11 + 0.03 * this.wCrouch);
           f.to.set(e.x + vx * tRem + (vx / vl) * lead + lx * c, 0, e.z + vz * tRem + (vz / vl) * lead - lx * s);
@@ -432,9 +471,17 @@ export class PlayerAnimator {
         f.lift = 0.05;
         continue;
       }
-      f.pitch = damp(f.pitch, 0, 12, dt);
+      // the free leg's heel lifts a little off the snow
+      const free = this.wIdle * smooth(-0.2, 0.6, -side * this.standSide);
+      f.pitch = damp(f.pitch, 0.12 * free, 6, dt);
       f.pos.y = damp(f.pos.y, this.groundY(ctx, f.pos.x, f.pos.z, e.y), 20, dt);
       const err = Math.hypot(f.pos.x - rest.x, f.pos.z - rest.z);
+      if (this.wIdle > 0.05 && err < 0.2) {
+        // settling: shuffle the last few centimetres as the weight moves
+        const k = Math.min(1, dt * 1.4 * this.wIdle);
+        f.pos.x += (rest.x - f.pos.x) * k;
+        f.pos.z += (rest.z - f.pos.z) * k;
+      }
       const yawErr = Math.abs(wrap(f.yaw - this.bodyYaw - side * 0.1));
       const other = this.feet[1 - i];
       if ((err > 0.2 || yawErr > 0.55) && other.planted && other.t >= 1) {
@@ -491,19 +538,22 @@ export class PlayerAnimator {
         const reach = LEG * 0.985;
         const maxHip = f.pos.y + ANKLE_H + Math.sqrt(Math.max(0, reach * reach - d * d));
         const maxH = maxHip + 0.03 - rootY;
-        if (h > maxH) h = Math.max(h - 0.16, maxH);
+        // a little dip only: past it the trailing foot pushes off on its toes instead
+        if (h > maxH) h = Math.max(h - 0.07, maxH);
       }
     }
     h += this.wAir * 0.03;
     h = lerp(h, 1.04, swim);
     h = lerp(h, 0.5, kneel);
-    const sway = move * (1 - run) * -Math.sin(ph * TAU) * 0.022;
+    // walking: the hips sway over the stance foot; at rest they sit over the supporting leg
+    const sway = move * (1 - run) * -Math.sin(ph * TAU) * 0.022 + this.wIdle * 0.034 * this.standSide;
     const pz = 0.05 * crouch + 0.05 * kneel + 0.06 * this.wBend - this.lean * 0.05;
     _v.set(sway, h, pz + B[PB.pelvis * 3 + 2]).applyQuaternion(_root);
     pose.p[PB.pelvis].set(e.x, rootY, e.z).add(_v);
     const pelvisTwist = move * -Math.cos(ph * TAU) * lerp(0.12, 0.2, run) + rifleAim * 0.38;
     const pelvisPitch = -(this.lean * 0.5 + 0.28 * crouch + 0.1 * this.wDeep + 0.15 * kneel + 0.2 * this.wBend) + swim * 0.12;
-    const pelvisRoll = move * (1 - run) * Math.sin(ph * TAU) * 0.05;
+    // the free side's hip drops (contrapposto); the spine counters it below
+    const pelvisRoll = move * (1 - run) * Math.sin(ph * TAU) * 0.05 + this.wIdle * 0.055 * this.standSide;
     qYXZ(_q, pelvisTwist, pelvisPitch, pelvisRoll);
     pose.q[PB.pelvis].multiplyQuaternions(_root, _q);
 
@@ -513,7 +563,7 @@ export class PlayerAnimator {
     this.headYaw = damp(this.headYaw, lookYaw, 16, dt);
     this.headPitch = damp(this.headPitch, lookPitch, 16, dt);
     const ly = this.headYaw, lp = this.headPitch;
-    const breath = Math.sin(this.breath) * (0.012 + 0.02 * tired) * (ctx.far ? 0.5 : 1);
+    const breath = Math.sin(this.breath) * (0.012 + 0.02 * tired + 0.01 * this.wIdle) * (ctx.far ? 0.5 : 1);
     const shiver = shiverK * (Math.sin(t * 61 + this.seed) * 0.5 + Math.sin(t * 47.3 + this.seed * 2) * 0.5) * 0.02;
     const hunch = cold * 0.14 + tired * 0.08;
     const bend = this.lean * 0.4 + 0.2 * crouch + 0.12 * this.wDeep + hunch * 0.5 + 0.18 * kneel + 0.5 * this.wBend - swim * 0.1;
@@ -585,7 +635,8 @@ export class PlayerAnimator {
       // the right arm swings forward with the left leg (phase 0)
       const sw = move * Math.cos(ph * TAU) * side * lerp(0.28, 0.75, run) * (1 - 0.6 * this.wCrouch) + this.wDeep * 0.1;
       // the parka's bulk holds the arms out; cold pulls them in
-      const splay = 0.2 + 0.08 * this.wDeep + 0.1 * run - cold * 0.08;
+      // the parka holds the arms off the body; at rest a little more, with a slow drift
+      const splay = 0.2 + 0.08 * this.wDeep + 0.1 * run - cold * 0.08 + this.wIdle * (0.05 + 0.015 * Math.sin(t * 0.7 + side + this.seed));
       const elbow = lerp(0.38, 1.45, run) + move * 0.12 * Math.max(0, Math.cos(ph * TAU) * side) + cold * 0.5 + this.wCrouch * 0.3;
       // upper arm in body space (x right, y up, z back): down, out, swung forward by sw
       const ux = side * Math.sin(splay), uy = -Math.cos(splay) * Math.cos(sw), uz = -Math.cos(splay) * Math.sin(sw);

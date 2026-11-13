@@ -99,6 +99,8 @@ export interface ActorsSystem extends GfxSystem {
   localBeam: boolean;
   /** Dev: draw every figure flat black (silhouette checks). */
   setSilhouette(on: boolean): void;
+  /** Dev: the gait state of a drawn player figure (diagnostics), or null. */
+  debugFig(id: NetId): Record<string, unknown> | null;
 }
 
 /** Overwrite a pose with the bind pose, standing at (x, y, z) facing yaw. */
@@ -566,6 +568,10 @@ export function createActorsSystem(engine: CsEngine, world: World | null): Actor
     forceLod: null,
     bindPose: false,
     localBeam: true,
+    debugFig(id: NetId): Record<string, unknown> | null {
+      const p = players.get(id);
+      return p ? { lod: p.lod, row: p.row, ...p.anim.debugState() } : null;
+    },
     setSilhouette(on: boolean): void {
       silMat ??= createSilhouetteMaterial(bones);
       group.traverse((o) => {

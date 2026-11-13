@@ -433,7 +433,8 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
     b.ink({ color: TROUSER, mat: MAT.CLOTH, wear: 0.45, snow: 0.45, vary: 0.03 });
     const radius = (s: number, a: number): readonly [number, number] => {
       // s from the waist (top) down: thigh, knee, calf, ankle
-      const R = s < 0.1 ? 0.11 : s < 0.5 ? 0.11 - 0.03 * smooth(0.1, 0.5, s) : s < 0.62 ? 0.08 : 0.08 - 0.012 * smooth(0.62, 0.9, s);
+      // slim where the parka covers it (no poking through its sides), full below the hem
+      const R = s < 0.22 ? 0.094 : s < 0.32 ? 0.094 + 0.012 * smooth(0.22, 0.32, s) : s < 0.5 ? 0.106 - 0.026 * smooth(0.32, 0.5, s) : s < 0.62 ? 0.08 : 0.08 - 0.012 * smooth(0.62, 0.9, s);
       const knee = smooth(0.07, 0.0, Math.abs(s - 0.52));
       // knee pad bulge on the front, inner thigh flatter (the legs meet at the crotch)
       const c = Math.cos(a), sn = Math.sin(a);

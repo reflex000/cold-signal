@@ -251,7 +251,7 @@ export function buildWolfMesh(lod: number): WolfMesh {
   const grey = hex(0x857e72);
   // frost on the coat stays light: a full snow cap would hide the saddle. The fur's strands (KIT fur
   // shading runs them along the part's grain axis) lie along the body: grain 'z' on body and head.
-  b.ink({ color: grey, mat: MAT.FUR, wear: 0.15, snow: 0.26, vary: 0, grain: 'z', detailScale: FUR_FINE });
+  b.ink({ color: grey, mat: MAT.FUR, wear: 0.15, snow: 0.13, vary: 0, grain: 'z', detailScale: FUR_FINE });
 
   // ---------------- body ----------------
   {
@@ -633,10 +633,12 @@ export function coatGeometry(base: WolfMesh, coatIndex: number): THREE.BufferGeo
         break;
       }
       default: {
-        // body and neck: the saddle over the back and shoulders, grey flanks, a pale belly and throat
-        const top = smooth(0.1, 0.75, ny);
-        const saddleZone = k === K.NECK ? 0.75 : smooth(0.55, 0.3, z) * smooth(-0.42, -0.1, z) * 0.4 + 0.6;
-        col = mixRGB(c.flank, c.saddle, top * saddleZone);
+        // body and neck: the dark saddle over the back, a darker cape across the shoulders, grey flanks,
+        // a pale belly and throat
+        const top = smooth(0.0, 0.62, ny);
+        const cape = k === K.NECK ? 1 : smooth(0.05, -0.2, z) * smooth(-0.42, -0.3, z);
+        const saddleZone = k === K.NECK ? 0.85 : 0.72 + 0.28 * cape;
+        col = mixRGB(c.flank, c.saddle, Math.min(1, top * saddleZone * 1.1));
         const belly = smooth(-0.15, -0.65, ny) + (k === K.NECK ? smooth(0.0, -0.6, ny) * 0.6 : 0);
         col = mixRGB(col, c.belly, Math.min(1, belly));
         // the cape: dark guard hairs fringing the shoulders

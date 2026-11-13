@@ -196,14 +196,17 @@ export class WolfAnimator {
     if (Math.hypot(e.x - this.lastX, e.z - this.lastZ) > 6) this.reset(e, ctx);
     const mood = e.mood;
     const dead = mood === 'dead';
-    // velocity: the entity's own, else from motion
-    const mvx = dt > 0 ? (e.x - this.lastX) / dt : 0, mvz = dt > 0 ? (e.z - this.lastZ) / dt : 0;
-    const hasVel = Math.abs(e.vx) + Math.abs(e.vz) > 1e-4;
-    this.velX = damp(this.velX, hasVel ? e.vx : mvx, 10, dt);
-    this.velZ = damp(this.velZ, hasVel ? e.vz : mvz, 10, dt);
+    // velocity from the motion actually drawn (snapshot velocity only as a hint while the drawn
+    // position has not caught up): a blocked or lagging wolf must not run on the spot
+    if (dt > 1e-4) {
+      const mvx = (e.x - this.lastX) / dt, mvz = (e.z - this.lastZ) / dt;
+      const hint = Math.abs(e.vx) + Math.abs(e.vz) > 1e-4 && Math.hypot(mvx, mvz) < 0.05 ? 0.25 : 0;
+      this.velX = damp(this.velX, mvx + (e.vx - mvx) * hint, 10, dt);
+      this.velZ = damp(this.velZ, mvz + (e.vz - mvz) * hint, 10, dt);
+    }
     this.lastX = e.x;
     this.lastZ = e.z;
-    const v = dead ? 0 : Math.max(Math.hypot(this.velX, this.velZ), Number.isFinite(e.speed) ? e.speed * 0.98 : 0);
+    const v = dead ? 0 : Math.hypot(this.velX, this.velZ);
     this.spd = damp(this.spd, v, 8, dt);
 
     // ---- mood weights ----

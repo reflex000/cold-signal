@@ -251,7 +251,9 @@ export function createFxSystem(engine: CsEngine, world: World): FxSystem {
         bus = view.bus;
         unsub = bus.on('sim', onSim);
       }
-      const dt = Math.min(0.1, Math.max(0, f.dt));
+      // the pause menu and photo mode hold a frozen moment: the render clock stops, so does fx
+      const frozen = !!view && (view.mode === 'pause' || view.mode === 'photo');
+      const dt = frozen ? 0 : Math.min(0.1, Math.max(0, f.dt));
       // Frames that were never drawn (a hitch, or a tool stepping many frames per picture): let
       // the fires keep burning through the gap, in small steps, up to a few seconds.
       const gap = lastTime < 0 ? 0 : Math.min(3, f.time - lastTime - dt);

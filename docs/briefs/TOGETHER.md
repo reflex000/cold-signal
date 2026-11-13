@@ -49,3 +49,7 @@ FIGURES, STRUCTURES, FX, UI, AUDIO, LOOK), DESIGN.md section 1 (co-op).
    console. Report the in-game time it took.
 
 STATE ON DISK: nothing of yours exists. Create docs/status/TOGETHER.md first and keep it current.
+
+Late additions from the FX engineer: GAME's stand-in markers still create three idle point lights that cost every
+pixel: remove them (FX and FIGURES now wrap the markers' update for fires, flares, players and wolves; keep those
+wrappers working). The FIGURES engineer may still be finishing src/actors when you start: do not edit src/actors.

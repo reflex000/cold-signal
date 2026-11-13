@@ -188,12 +188,15 @@ async function main(): Promise<void> {
   // the system reads the fake view through this wrapper (the bench's frames carry no view)
   let current: Entity[] = [];
   let script: ((t: number) => void) | null = null;
+  let cpuMs = 0;
   engine.add({
     name: 'actors-bench',
     update: (f: Frame) => {
       if (script) script(f.time);
       view.set(current);
+      const t0 = performance.now();
       sys.update({ dt: f.dt, time: f.time, view });
+      cpuMs += (performance.now() - t0 - cpuMs) * 0.1;
     },
   });
 
@@ -321,6 +324,17 @@ async function main(): Promise<void> {
     ['idle', 'walk', 'aim', 'flashlight'].forEach((n, i) => place(n, i, (i - 1.5) * 1.4, 0));
   } else if (show === 'wolf') {
     ['w-idle', 'w-stalk', 'w-howl', 'w-rest'].forEach((n, i) => place(n, i, (i - 1.5) * 1.6, 0));
+  } else if (show === 'crowd') {
+    // the budget case: 4 players and 16 wolves on screen, spread from near to far
+    ['walk', 'flashlight', 'aim', 'run'].forEach((n, i) => place(n, i, (i - 1.5) * 2.2, 2 + i * 1.5, Math.PI));
+    const moods = ['w-trot', 'w-walk', 'w-stalk', 'w-idle', 'w-howl', 'w-rest', 'w-gallop', 'w-circle'];
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      const r = 6 + (i % 4) * 9;
+      place(moods[i % moods.length], i + 4, Math.sin(a) * r, -Math.cos(a) * r - 6, a);
+    }
+    for (let i = all.length - 1; i > 3; i--) if (all[i].kind === 'player') all.splice(i, 1);
+    bench.orbit.target.set(0, 0.8, -6);
   } else if (show === 'pack') {
     // a player with a flashlight, wolves around: circling, stalking, howling, one lying
     place('flashlight', slot, 0, 0);
@@ -370,7 +384,7 @@ async function main(): Promise<void> {
   const stopAt = bench.param('t') !== null && bench.param('live') !== '1' ? bench.num('frames', 8) + 2 : -1;
   bench.onFrame(() => {
     frames++;
-    if (frames % 30 === 2 || frames === stopAt - 1) info.textContent = `${engine.backend} ${engine.quality.name} ${bench.light}  ${engine.stats.calls} calls ${(engine.stats.tris / 1000).toFixed(1)}k tris  figures ${sys.stats.players}p ${sys.stats.wolves}w  rows ${sys.stats.rows} draws ${sys.stats.draws}`;
+    if (frames % 30 === 2 || frames === stopAt - 1) info.textContent = `${engine.backend} ${engine.quality.name} ${bench.light}  ${engine.stats.calls} calls ${(engine.stats.tris / 1000).toFixed(1)}k tris  figures ${sys.stats.players}p ${sys.stats.wolves}w  rows ${sys.stats.rows} draws ${sys.stats.draws}  actors cpu ${cpuMs.toFixed(2)} ms`;
     if (frames === stopAt) (engine as unknown as { frame: () => void }).frame = () => {};
   });
 }

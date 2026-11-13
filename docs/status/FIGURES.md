@@ -41,10 +41,24 @@ one registration line in src/game/visuals.ts.
 - Real game: scratchpad/figures.mjs (bots Mara/Ivo with flashlight/rifle, wolves via CS.sim.ctx.spawn, third person via
   CS.game.thirdDev = true) PASSES with a clean console; markers muted (players/wolves) confirmed.
 
+## Lead feedback round (done)
+- Wolf rework: head/neck carried lower (bind moved), long narrow but deep muzzle, upright pointed ears, deep narrow
+  chest with level back, long lean legs, big paws, hanging bushy tail; smooth fur volume (no spiky tufts = no creases),
+  finer fur strands (FUR_FINE detailScale 2.6), smooth grizzle, saddle/cape contrast, light back frost.
+- ROOT CAUSE of the "paper fan" (howl/rest/dead): joint planes were perpendicular to the child bone; a limb bent at
+  bind (dog hind leg ~100 deg at the stifle) got its thigh's back bound to the shank. bind.ts planeWeights now uses the
+  BISECTOR of the two bones (child direction only when they point opposite ways). Legs bind from the joint down
+  (no blend into the body), their lofts start on the joint with a dome. Shared by player and wolf.
+- Howl: pursed mouth (jaw parts only), ears visible, tail laid behind; tail tip droops instead of curling up.
+- Player idle: weight on one leg (pelvis shift + roll, free foot forward with heel up, settles), switches every
+  ~6-11 s; arms off the body with a slow drift; deeper breathing at rest. Trousers slim under the parka.
+- Bench: ?sil=1 (black on white), ?side=1 (sheet side view), ?joints=1 (joint dots).
+- Real game: eye shine confirmed in the local flashlight beam (green-gold dot), FX pool beam on the snow.
+
 ## Remaining (priority order)
-1. Re-check night eye shine in game; WebGL2 + --mobile 1 shots (bench + game).
-2. Perf check (draw calls / rows), LOD distances; maybe a shadow-only local body in first person (not required).
-3. Contact sheet re-shoot after the polish; final report.
+1. WebGL2 + --mobile 1 shots (bench + game).
+2. Perf check (draw calls / rows), LOD distances.
+3. Final report.
 
 ## Decisions / API facts
 - GPU skinning from ONE shared RGBA32F bone texture (textureLoad as three's BatchNode), plain THREE.Mesh with `count`

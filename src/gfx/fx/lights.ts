@@ -184,10 +184,12 @@ export class LightPool {
       const shadow = i === 0 && this.quality.fireShadows;
       const l = new THREE.PointLight(0xffffff, 0, 10, 2);
       l.name = 'fx-point-' + i;
-      const hot = uniform(new THREE.Color(0, 0, 0));
-      const cool = uniform(new THREE.Color(0, 0, 0));
-      const at = uniform(new THREE.Vector3());
-      const reach = uniform(10);
+      // render group, like three's own light uniforms: refreshed for every draw, plain
+      // materials included (THREE_NOTES 13)
+      const hot = uniform(new THREE.Color(0, 0, 0)).setGroup(renderGroup);
+      const cool = uniform(new THREE.Color(0, 0, 0)).setGroup(renderGroup);
+      const at = uniform(new THREE.Vector3()).setGroup(renderGroup);
+      const reach = uniform(10).setGroup(renderGroup);
       // Hot near, cool far: the colour of the light depends on how far the lit surface is.
       (l as any).colorNode = mix(hot, cool, clamp(distance(positionWorld, at).div(reach), 0, 1));
       l.castShadow = shadow;

@@ -52,7 +52,7 @@ const HOT = new THREE.Color(1.0, 0.44, 0.15);
 const FAR = new THREE.Color(0.92, 0.25, 0.05);
 const EMBER_HOT = new THREE.Color(1.0, 0.32, 0.08);
 const EMBER_FAR = new THREE.Color(0.85, 0.14, 0.03);
-const MATCH = new THREE.Color(1.0, 0.72, 0.42);
+const MATCH = new THREE.Color(1.0, 0.6, 0.3);
 
 interface Fire {
   key: string;
@@ -494,8 +494,8 @@ export class FireFx {
       lh.colorFar!.copy(FAR);
     }
     if (matchK > 0) {
-      // the match is the only light until the fire takes: about a candela (twice that as it flares)
-      const mk = 0.9 * matchK * (0.9 + 0.1 * flick);
+      // the match is the only light until the fire takes: half a candela (twice that as it flares)
+      const mk = 0.5 * matchK * (0.9 + 0.1 * flick);
       if (mk > intensity) {
         intensity = mk;
         px = mx; py = my + 0.05; pz = mz;
@@ -510,7 +510,7 @@ export class FireFx {
     }
     lh.position.set(px, py, pz);
     lh.intensity = intensity;
-    lh.range = matchK > 0 && vh < 0.05 ? 4 : L.range * (0.45 + 0.55 * Math.max(vh, emberFrac * 0.3));
+    lh.range = matchK > 0 && vh < 0.05 ? 3 : L.range * (0.45 + 0.55 * Math.max(vh, emberFrac * 0.3));
     lh.on = intensity > 0.03;
 
     // ---- particles ----

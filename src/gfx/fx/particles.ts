@@ -476,7 +476,9 @@ export class GlowPool extends ParticleSim {
       const toP = pos.sub(U.camPos);
       const dist = max(length(toP), 1e-3);
       const trans = float(1).sub(fogAmount(dist, toP.div(dist)));
-      vCol.assign(aC.rgb.mul(keep).mul(trans));
+      // a spark right at the eye is a blur, not a blazing bar across the picture
+      const nearK = smoothstep(0.15, 0.7, depth);
+      vCol.assign(aC.rgb.mul(keep).mul(trans).mul(nearK));
       return cameraProjectionMatrix.mul(vec4(p, 1));
     })();
     const b = vUv.y.mul(vStretch);
@@ -513,7 +515,10 @@ export class GlowPool extends ParticleSim {
       if (k <= 0.001) continue;
       const o = w * 4;
       P[o] = this.px[i]; P[o + 1] = this.py[i]; P[o + 2] = this.pz[i]; P[o + 3] = this.size(i);
-      V[o] = this.vx[i]; V[o + 1] = this.vy[i]; V[o + 2] = this.vz[i]; V[o + 3] = this.ex[i];
+      // a streak never smears longer than 12 cm (an ember in a gale is still a spark, not a bar)
+      const sp = Math.hypot(this.vx[i], this.vy[i], this.vz[i]) * this.ex[i];
+      const cap = sp > 0.12 ? 0.12 / sp : 1;
+      V[o] = this.vx[i] * cap; V[o + 1] = this.vy[i] * cap; V[o + 2] = this.vz[i] * cap; V[o + 3] = this.ex[i];
       C[o] = r * k; C[o + 1] = g * k; C[o + 2] = bl * k; C[o + 3] = 0;
       w++;
     }
