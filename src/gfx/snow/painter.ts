@@ -208,7 +208,7 @@ export class Painter {
   }
 
   /** Common vertex stage: the instance quad in its window; returns (local, window uv) varyings. */
-  private vertex(m: THREE.NodeMaterial, win: Win): { local: N; win: N; B: N; C: N; D: N } {
+  private vertex(m: THREE.NodeMaterial, win: Win): { local: N; win: N; world: N; fwd: N; B: N; C: N; D: N } {
     const A: N = attribute('iA', 'vec4');
     const B: N = attribute('iB', 'vec4');
     const C: N = attribute('iC', 'vec4');
@@ -221,6 +221,8 @@ export class Painter {
     return {
       local: varying(local, 'vSnowLocal'),
       win: varying(world.sub(win.uOrigin).div(win.uSize).add(0.5), 'vSnowWin'),
+      world: varying(world, 'vSnowWorld'),
+      fwd: varying(fwd, 'vSnowFwd'),
       B: varying(B, 'vSnowB'),
       C: varying(C, 'vSnowC'),
       D: varying(D, 'vSnowD'),
@@ -290,13 +292,18 @@ export class Painter {
         })
         .ElseIf(kind.equal(K_GROOVE), () => {
           const sft: N = bit(flags, F_SOFT);
-          d.assign(vec2(p.x, p.y.sub(clamp(p.y, hl.negate(), hl))).length().sub(hw));
+          // world distance along the groove: the segments of one drag share one noise across joints
+          const wt: N = dot(v.world, v.fwd);
+          const wob: N = vnoise(v.world.mul(2.3)).sub(0.5);
+          d.assign(vec2(p.x.add(wob.mul(hw).mul(0.25)), p.y.sub(clamp(p.y, hl.negate(), hl))).length().sub(hw.mul(wob.mul(0.18).add(1))));
           const across: N = max(float(1).sub(p.x.div(hw).pow(2)), 0);
-          // a log's bed is round; a dragged foot leaves a V of crumbled snow
-          prof.assign(mix(sqrt(across).mul(0.38).add(0.62), across, sft));
-          softK.addAssign(mix(float(0.6), float(3.5), sft));
-          rimP.assign(hw.mul(0.15).add(0.015));
-          rimW.assign(hw.mul(0.45).add(0.04));
+          // a log's bed is round and streaked along its length by bark and knots; a dragged foot
+          // leaves a V of crumbled snow
+          const streak: N = vnoise(vec2(p.x.div(hw).mul(6), wt.mul(0.7))).sub(0.5).mul(0.16);
+          prof.assign(mix(sqrt(across).mul(0.45).add(0.55).add(streak), across, sft));
+          softK.addAssign(mix(float(1.8), float(3.5), sft));
+          rimP.assign(hw.mul(0.2).add(0.015));
+          rimW.assign(hw.mul(0.6).add(0.04).mul(vnoise(v.world.mul(1.7).add(p.x.sign().mul(3.1))).mul(0.6).add(0.7)));
         })
         .ElseIf(kind.equal(K_BODY), () => {
           const sbx: N = hw.div(0.26), sby: N = hl.div(1.0);

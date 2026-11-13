@@ -326,7 +326,10 @@ export function createImpostorMaterial(atlas: ImpostorAtlas): THREE.MeshLambertN
     const sh = snowShade(nW);
     // the potential is averaged by the mips: widen the threshold with the level so a far crown
     // keeps its share of dark needles instead of turning all white (or all dark) at once
-    const c: N = snowCoverage(V.w.w, pot, t.mip.mul(0.09).add(0.08));
+    // Far away (V.m.z) a crown's snow and its dark needles fall in one pixel, and the inner crown is in
+    // its own shade: a loaded stand still reads darker than open snow from a ridge or from above, not
+    // as white cones on a shaded floor. (SNOW, per the look brief.)
+    const c: N = snowCoverage(V.w.w, pot, t.mip.mul(0.09).add(0.08)).mul(V.m.z.sqrt().mul(0.42).oneMinus());
     const col: N = mix(albedo, sh.color, c).toVar();
     col.mulAssign(mix(float(1), mix(float(0.42), float(0.38), c), V.m.z));
     If(FU.lodTint.greaterThan(0.5), () => {

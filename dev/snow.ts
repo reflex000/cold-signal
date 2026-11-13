@@ -26,6 +26,17 @@ engine.add(terrain);
 const snow = createSnowSystem(engine, world);
 (window as any).SNOW = snow;
 (window as any).WORLD = world;
+// &forest=1: the real forest too (judging trees on the real terrain, e.g. from above); &cover=0..1 U.snowCover
+if (b.param('forest') === '1') {
+  const { createForestSystem } = await import('../src/gfx/forest/index');
+  engine.add(createForestSystem(engine, world));
+}
+if (b.param('cover') !== null) {
+  const cover = b.num('cover', 0.8);
+  b.onFrame(() => {
+    U.snowCover.value = cover;
+  });
+}
 
 // ---- where ----
 const at = b.param('at') ?? 'fresh';

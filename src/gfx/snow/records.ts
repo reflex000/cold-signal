@@ -47,8 +47,10 @@ export class RecordStore {
   /** Bumped whenever a record is added: windows compare it to know they are stale. */
   serial = 0;
 
+  /** Cell key; fits the Int32Array cellOf for +-16 km (the world domain is +-6 km). */
   private static key(cx: number, cz: number): number {
-    return (cx + 32768) * 65536 + (cz + 32768);
+    const x = Math.max(-2047, Math.min(2047, cx)), z = Math.max(-2047, Math.min(2047, cz));
+    return (x + 2048) * 4096 + (z + 2048);
   }
 
   /** Add a record; returns its index. Fields not given here are set by the caller right after. */

@@ -97,6 +97,22 @@ const PRESS_CIRCLE = 0.008;
 const PRESS_FEINT = 0.06;
 const PRESS_MAX = 0.4;
 const PROTECT_GIVEUP = 60;
+/**
+ * Seconds a pack keeps at a hunt that comes to nothing (stalking, circling, feints, nobody down or
+ * weak) before it drifts off: longer in the dark and the whiteout. Then it leaves the group alone for
+ * WARY_TIME unless someone goes down or weak. (RELEASE balance: a careful group is circled, tested
+ * and frightened, not besieged for the rest of the night; never during the hold-out.)
+ */
+export const HUNT_PATIENCE = 150;
+export const WARY_TIME = 180;
+/**
+ * How isolated a lone survivor looks to a pack when nobody else is in the game (PlayerEnt.isolation
+ * is then always 1). Alone is still the most exposed a body can be in a group, but a solo run would
+ * otherwise face the boldest packs all hour. (RELEASE balance: solo must stay possible.)
+ */
+export const SOLO_ISOLATION = 0.55;
+let isoScale = 1; // SOLO_ISOLATION when one player is in the game, else 1; set each tick in step()
+const iso = (p: PlayerEnt): number => p.isolation * isoScale;
 const FEED_TIME = 80;
 const THIN_ICE = 0.2;
 const DEN_DISTURB = 40;
@@ -121,12 +137,12 @@ const COVER = [0, 0.2, -0.2, 0.4];
 // unopposed), home x / z and range, waypoint x / z and when it was picked, scare source x / z, scatter seconds left, time of
 // the last howl, seconds to the next feint or charge, orbit direction and angle, seconds the target
 // has stood in safety, time this pack answers a howl (-1 none), feint start time, last scare time,
-// feints this hunt.
-const PF = ['ph', 'pt', 'tg', 'bold', 'fear', 'pr', 'hx', 'hz', 'rg', 'wx', 'wz', 'wt', 'sx', 'sz', 'st', 'hw', 'fe', 'or', 'oa', 'prot', 'ans', 'fs', 'sc', 'nf'] as const;
+// feints this hunt, seconds this hunt has run, time the pack last gave a hunt up.
+const PF = ['ph', 'pt', 'tg', 'bold', 'fear', 'pr', 'hx', 'hz', 'rg', 'wx', 'wz', 'wt', 'sx', 'sz', 'st', 'hw', 'fe', 'or', 'oa', 'prot', 'ans', 'fs', 'sc', 'nf', 'hu', 'gu'] as const;
 type PField = (typeof PF)[number];
 const PDEF: Record<PField, number> = {
   ph: PHASE.roam, pt: 0, tg: 0, bold: 0.3, fear: 0, pr: 0, hx: 0, hz: 0, rg: 150, wx: 0, wz: 0, wt: -1e9, sx: 0, sz: 0, st: 0,
-  hw: -1e9, fe: 6, or: 1, oa: 0, prot: 0, ans: -1, fs: -1, sc: -1e9, nf: 0,
+  hw: -1e9, fe: 6, or: 1, oa: 0, prot: 0, ans: -1, fs: -1, sc: -1e9, nf: 0, hu: 0, gu: -1e9,
 };
 /** Seconds the alpha heads for one waypoint before it picks another (one it cannot reach, say). */
 const WAYPOINT_TIME = 40;
@@ -609,7 +625,7 @@ function detectRange(ctx: SimCtx, p: PlayerEnt, hunger: number, night: number): 
 function weakness(p: PlayerEnt, night: number): number {
   if (p.life === 'downed') return 1;
   const dark = night * (1 - lightAt(p.x, p.z));
-  return Math.max(1 - p.health / 100, 0.8 * p.isolation, 0.6 * dark);
+  return Math.max(1 - p.health / 100, 0.8 * iso(p), 0.6 * dark);
 }
 
 /** The player this pack should hunt (never one who is safe or indoors), or null. */
@@ -625,8 +641,8 @@ function chooseTarget(ctx: SimCtx, pk: Pack, hunger: number, exclude: NetId): Pl
     if (d > (cur ? LOSE_RANGE : detectRange(ctx, p, hunger, night))) continue;
     if (safetyAt(p.x, p.z) >= SAFE || isIndoor(ctx.world, p.x, p.y + 1, p.z)) continue;
     const dark = night * (1 - lightAt(p.x, p.z)) * ((p.beam ?? 0) > 0 ? 0.7 : 1);
-    const s = p.isolation + 0.7 * (1 - p.health / 100) + (p.life === 'downed' ? 1.4 : 0) + 0.35 * dark +
-      0.3 * white * p.isolation + 0.35 * dyingFire(p.x, p.z) - d / 160 + (cur ? 0.35 : 0);
+    const s = iso(p) + 0.7 * (1 - p.health / 100) + (p.life === 'downed' ? 1.4 : 0) + 0.35 * dark +
+      0.3 * white * iso(p) + 0.35 * dyingFire(p.x, p.z) - d / 160 + (cur ? 0.35 : 0);
     if (s > bs) {
       bs = s;
       best = p;
@@ -652,7 +668,7 @@ const maxHealth = (w: WolfEnt): number => (w.alpha ? 80 : 60);
 /** The most boldness going unopposed earns against this target: little against people together and well. */
 function pressCap(t: PlayerEnt | null, pk: Pack): number {
   if (!t) return 0;
-  const vuln = t.life === 'downed' ? 1 : Math.max(t.isolation, 1 - t.health / 100);
+  const vuln = t.life === 'downed' ? 1 : Math.max(iso(t), 1 - t.health / 100);
   // daylight in clear weather keeps them wary
   return PRESS_MAX * (0.35 + 0.65 * vuln) * (0.5 + 0.5 * Math.max(pk.night, pk.white));
 }
@@ -675,10 +691,13 @@ function newWaypoint(ctx: SimCtx, pk: Pack): void {
   const a0 = pk.alpha;
   pk.wt = ctx.state.env.t;
   let fallback = false;
+  // a pack that has just given a hunt up keeps its distance from everyone
+  const wary = isWary(ctx, pk);
   for (let tries = 0; tries < 10; tries++) {
-    const a = ctx.rand() * TAU, r = pk.rg * 0.8 * Math.sqrt(ctx.rand());
+    const a = ctx.rand() * TAU, r = pk.rg * (wary ? 1 : 0.8) * Math.sqrt(ctx.rand());
     const x = pk.hx + Math.sin(a) * r, z = pk.hz + Math.cos(a) * r;
     if (!passable(ctx, x, z) || isIndoor(ctx.world, x, ctx.world.heightAt(x, z) + 1, z)) continue;
+    if (wary && tries < 9 && !clearOfPlayers(ctx, x, z, 70)) continue;
     let open = true;
     if (a0) {
       const n = Math.min(12, Math.ceil(len(x - a0.x, z - a0.z) / 8));
@@ -701,7 +720,42 @@ function startGather(ctx: SimCtx, pk: Pack): void {
   pk.hw = ctx.state.env.t;
   pk.nf = 0;
   pk.prot = 0;
+  pk.hu = 0;
   answer(ctx, pk);
+}
+
+/** Seconds this pack keeps at a fruitless hunt now: longer in the dark and the whiteout. */
+function patience(pk: Pack): number {
+  return HUNT_PATIENCE * (1 + 0.6 * Math.max(pk.night, pk.white));
+}
+
+/** Prey a pack does not give up on: down, or badly hurt. (Being alone is not enough: solo must stay playable.) */
+function easyPrey(p: PlayerEnt): boolean {
+  return p.life === 'downed' || p.health < 45;
+}
+
+/** The hunt came to nothing: the pack drifts back toward home and leaves these people be for a while. */
+function giveUp(ctx: SimCtx, pk: Pack): void {
+  const t = ctx.state.env.t;
+  pk.tg = 0;
+  pk.target = null;
+  pk.prot = 0;
+  pk.pr = 0;
+  pk.hu = 0;
+  pk.nf = 0;
+  pk.gu = t;
+  for (const w of pk.wolves) if (w.mood === 'feint') settle(ctx, w, pk);
+  enterPhase(ctx, pk, PHASE.roam);
+  newWaypoint(ctx, pk); // (wary: away from everyone, even when these people stand at the den)
+}
+
+/** Within WARY_TIME of giving a hunt up. */
+const isWary = (ctx: SimCtx, pk: Pack): boolean => ctx.state.env.t - pk.gu < WARY_TIME;
+
+/** No living player within `r` metres of (x, z). */
+function clearOfPlayers(ctx: SimCtx, x: number, z: number, r: number): boolean {
+  for (const p of ctx.players()) if (alive(p) && len(p.x - x, p.z - z) < r) return false;
+  return true;
 }
 
 function answer(ctx: SimCtx, pk: Pack): void {
@@ -823,11 +877,14 @@ function think(ctx: SimCtx, pk: Pack): void {
       }
       const tg = chooseTarget(ctx, pk, hunger, 0);
       const close = tg !== null && len(tg.x - a.x, tg.z - a.z) < 35;
-      if (tg && (hunger >= 0.3 || weakness(tg, pk.night) >= 0.5 || close)) {
+      // after giving a hunt up the pack keeps away a while, unless someone goes down or weak
+      const wary = t - pk.gu < WARY_TIME && tg !== null && !easyPrey(tg);
+      if (tg && !wary && (hunger >= 0.3 || weakness(tg, pk.night) >= 0.5 || close)) {
         pk.tg = tg.id;
         pk.target = tg;
         pk.nf = 0;
         pk.prot = 0;
+        pk.hu = 0;
         if (t - pk.hw < 30) {
           // they have just howled (woken): straight on
           pk.oa = Math.atan2(a.x - tg.x, a.z - tg.z);
@@ -898,6 +955,13 @@ function hunt(ctx: SimCtx, pk: Pack, hunger: number): void {
   if (tg.life === 'downed' && pk.ph !== PHASE.attack) {
     enterPhase(ctx, pk, PHASE.attack);
     sendCharge(ctx, pk, tg);
+    return;
+  }
+  // a long hunt that came to nothing (nobody down or weak, no one on the attack): the pack drifts off.
+  // Never at the tower's last stand.
+  const stage = ctx.state.objective.stage;
+  if (pk.hu > patience(pk) && pk.ph !== PHASE.attack && !attacking(pk) && !easyPrey(tg) && stage !== 'holdout' && stage !== 'rescue') {
+    giveUp(ctx, pk);
     return;
   }
   switch (pk.ph) {
@@ -1657,6 +1721,7 @@ function packTick(ctx: SimCtx, pk: Pack): void {
   pk.sight = Math.min(env.visibility * 0.9, 170 - 140 * pk.night + 25 * env.aurora * pk.night);
   const tg = pk.tg ? ctx.get<PlayerEnt>(pk.tg) : undefined;
   pk.target = tg && tg.kind === 'player' ? tg : null;
+  if (pk.ph >= PHASE.stalk && pk.ph <= PHASE.attack) pk.hu += dt;
   // unopposed, the pack grows bolder by the minute, the more so at a lone or hurt target
   if (pk.ph === PHASE.stalk || pk.ph === PHASE.circle) {
     if (env.t - pk.sc > 10) pk.pr = Math.max(0, Math.min(pressCap(pk.target, pk), pk.pr + (pk.ph === PHASE.circle ? PRESS_CIRCLE : PRESS_STALK) * dt));
@@ -1986,6 +2051,7 @@ export const wolves: System = {
     wake(ctx);
     const list = ctx.all('wolf');
     if (list.length === 0) return;
+    isoScale = ctx.players().length <= 1 ? SOLO_ISOLATION : 1;
     group(ctx, list);
     // with nobody alive on the mountain the wolves have nothing to do
     let anyone = false;

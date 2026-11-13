@@ -128,5 +128,6 @@ export async function addVisualSystems(
   if (pause) await pause();
   try { engine.add((await import('../actors')).createActorsSystem(engine, world)); } catch (e) { console.warn('[visuals] src/actors failed to start:', e); } // FIGURES: players and wolves, animated (the markers stop drawing them)
   try { engine.add((await import('../gfx/snow')).createSnowSystem(engine, world)); } catch (e) { console.warn('[visuals] src/gfx/snow failed to start:', e); } // SNOW: footprints, paw tracks, drags and hollows in the snow (U.trailTex)
+  try { engine.add((await import('../actors/fp')).createViewmodelSystem(engine, world)); } catch (e) { console.warn('[visuals] src/actors/fp failed to start:', e); } // VIEWMODEL: first-person arms and tools, tool pickups, rifle scope
   return { used };
 }

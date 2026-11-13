@@ -30,8 +30,8 @@ register(
     const c = toolCtx(b, opts);
     const W = RADIO_W, H = RADIO_H, D = RADIO_D;
     const fz = D / 2; // front face
-    const body = hex(0x3c4136);
-    const panel = hex(0x222426);
+    const body = hex(0x5b6351);
+    const panel = hex(0x34373b);
     const g = b.group(() => {
       // ---------------- body ----------------
       b.ink({ color: body, mat: MAT.PLASTIC, wear: 0.5, snow: 0.6, rough: 0.62, vary: 0.02 });
@@ -147,7 +147,8 @@ register(
 
     if (c.pose === 'ground') layDown(g, -Math.PI / 2, 0.4, 0);
     else {
-      gripAnchor(b, 'gripL', [-W / 2 + 0.0175, -0.008, -0.002], [0, 0, -1], [0, 1, 0]);
+      // left hand under the left end, palm up, fingers along the bottom: the radio sits on it like a book
+      gripAnchor(b, 'gripL', [-W / 2 + 0.03, -H / 2 - 0.021, 0.0], [1, 0, 0], [0, 0, -1]);
       gripAnchor(b, 'gripR', [A0(0.0255), A0y(), RADIO_CRANK_AXLE[2]], [0, 0.45, -0.89], [-1, 0, 0]);
       gripAnchor(b, 'carry', [0, H / 2 + 0.022, 0.004], [0, -1, 0], [-1, 0, 0]);
       b.anchor('needle', RADIO_NEEDLE);

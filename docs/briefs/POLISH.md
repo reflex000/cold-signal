@@ -27,3 +27,11 @@ Read first: the "## Final report" of every docs/status/*.md, DESIGN.md section 2
 4. npm run check, npm test and npm run build clean; every scenario passes.
 
 STATE ON DISK: nothing of yours exists. Create docs/status/POLISH.md first and keep it current.
+
+Known items from the last engineers to include in the fix list:
+- VIEWMODEL: a mitt cuff comes close to the eye during the hip bolt cycle and the flare reload; the HUD's small aim
+  cross shows inside the rifle scope (hide it while scoped: hud.crosshair 'none'); FIGURES' src/actors/items.ts
+  could draw tools with toolItem(tool, lod) from src/models/tools so first and third person match.
+- SNOW: read its "## Final report" in docs/status/SNOW.md for anything it left open.
+- STRUCTURES: the fuselage break still reads as a round tube end-on from 20 m.
+- FIGURES: the wolf coat reads tan / coyote-like in warm light; timber wolves are grey with a darker saddle.

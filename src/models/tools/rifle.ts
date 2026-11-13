@@ -243,6 +243,8 @@ register(
     if (c.pose === 'ground') layDown(g, 0, 1.2, Math.PI / 2);
     else {
       gripAnchor(b, 'gripR', [0, 0, 0], [0, -0.341, -0.94], [0, 0.94, -0.341]);
+      // FIGURES' item space: the barrel along the knuckles (+Y), the bore above the fist (thumb up)
+      gripAnchor(b, 'item', [0, 0, 0], [0, 0, -1], [0, 1, 0]);
       gripAnchor(b, 'gripL', [0, 0.031, -0.255], [1, 0, 0], [0, 0, -1]);
       // the right hand on the bolt knob (closed): thumb toward the receiver, knuckles forward
       gripAnchor(b, 'boltKnob', [0.062, BY - 0.031, 0.04], [0.15, 0.25, -0.95], [-0.8, 0.55, 0]);

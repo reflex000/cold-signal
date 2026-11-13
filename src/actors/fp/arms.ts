@@ -30,10 +30,10 @@ const THUMB_GRIP = new THREE.Vector3(0.62, 0.72, -0.3).normalize();
 export const BONES_PER_ARM = 7;
 const B = { upper: 0, foreA: 1, foreB: 2, hand: 3, f1: 4, f2: 5, thumb: 6 } as const;
 
-const MITT = hex(0x1d1e21);
-const PALM = hex(0x3b2c22);
-const FLEECE = hex(0x55534f);
-const STRAP = hex(0x141516);
+const MITT = hex(0x3b3e43);
+const PALM = hex(0x56402f);
+const FLEECE = hex(0x6a6862);
+const STRAP = hex(0x26282b);
 
 // chains (tagged into Part.st before build, read back from aEnv.w)
 const CH_SLEEVE = 1, CH_GAUNT = 2, CH_MITT = 3, CH_THUMB = 4, CH_HAND = 5;
@@ -63,7 +63,8 @@ function rounded(hw: number, ht: number, e = 2.6): (a: number) => readonly [numb
 
 /** Sleeve radius along the arm (s metres from the shoulder): quilted baffles, narrowing to the cuff. */
 function sleeveR(s: number): number {
-  const base = s < 0.12 ? 0.083 : s < 0.29 ? 0.083 - 0.008 * sstep(0.12, 0.29, s) : 0.075 - 0.013 * sstep(0.29, 0.53, s);
+  // (under the mitt's gauntlet, past s = 0.43, the sleeve narrows to the cuff so it never shows through)
+  const base = (s < 0.12 ? 0.083 : s < 0.29 ? 0.083 - 0.008 * sstep(0.12, 0.29, s) : 0.075 - 0.013 * sstep(0.29, 0.53, s)) * (1 - 0.3 * sstep(0.43, 0.54, s));
   const baffle = Math.pow(Math.sin(((s - 0.02) / 0.066) * Math.PI), 2);
   return base * (1 - 0.045) + base * 0.045 * baffle;
 }
@@ -73,22 +74,22 @@ function buildMitt(b: Builder, detail: boolean): void {
   // ---- palm and finger pocket: one loft from the wrist to the fingertips ----
   const rows: [number, number, number, number, number][] = [
     // yh     hw      ht      cx       cz      (round at the wrist, under the gauntlet; flat palm)
-    [-0.104, 0.045, 0.042, -0.03, 0.0],
-    [-0.085, 0.0485, 0.035, -0.0325, 0.001],
-    [-0.058, 0.052, 0.0275, -0.0375, 0.003],
-    [-0.025, 0.0535, 0.0245, -0.04, 0.004],
-    [0.0, 0.0535, 0.0232, -0.0402, 0.004],
-    [0.019, 0.0525, 0.0212, -0.0392, 0.004],
-    [0.034, 0.0515, 0.0193, -0.0375, 0.004],
-    [0.05, 0.0505, 0.0182, -0.0365, 0.004],
-    [0.066, 0.0492, 0.0176, -0.036, 0.004],
-    [0.081, 0.0472, 0.0171, -0.036, 0.004],
-    [0.095, 0.0432, 0.0162, -0.036, 0.004],
-    [0.105, 0.036, 0.0148, -0.036, 0.004],
-    [0.1115, 0.0255, 0.0122, -0.036, 0.004],
+    [-0.104, 0.042, 0.04, -0.03, 0.0],
+    [-0.085, 0.045, 0.034, -0.0325, 0.001],
+    [-0.058, 0.047, 0.0272, -0.0375, 0.003],
+    [-0.025, 0.048, 0.0243, -0.04, 0.004],
+    [0.0, 0.048, 0.0231, -0.0402, 0.004],
+    [0.019, 0.047, 0.0211, -0.0392, 0.004],
+    [0.034, 0.046, 0.0192, -0.0375, 0.004],
+    [0.05, 0.0455, 0.0181, -0.0365, 0.004],
+    [0.066, 0.0445, 0.0175, -0.036, 0.004],
+    [0.081, 0.0428, 0.017, -0.036, 0.004],
+    [0.095, 0.0392, 0.0161, -0.036, 0.004],
+    [0.105, 0.0328, 0.0147, -0.036, 0.004],
+    [0.1115, 0.0232, 0.0121, -0.036, 0.004],
   ];
   const rings: Ring[] = rows.map(([y, hw, ht, cx, cz]) => ({ c: [cx, y, cz] as V3, x: [0, 0, 1] as V3, y: [1, 0, 0] as V3, pt: rounded(hw, ht) }));
-  b.ink({ color: MITT, mat: MAT.CLOTH, wear: 0.45, snow: 0, vary: 0 });
+  b.ink({ color: MITT, mat: MAT.CLOTH, wear: 0.45, snow: 0, vary: 0, detailScale: 3.5, rough: 0.6 });
   const mitt = loft(b, rings, detail ? 22 : 14, { capStart: true, capEnd: true, bulge: 0.55 });
   // leather palm and finger fronts, a little worn at the knuckle crease
   mitt.each((v) => {
@@ -100,7 +101,7 @@ function buildMitt(b: Builder, detail: boolean): void {
   });
   tag(mitt, CH_MITT);
   // ---- thumb pocket ----
-  b.ink({ color: MITT, mat: MAT.CLOTH, wear: 0.5, snow: 0, vary: 0 });
+  b.ink({ color: MITT, mat: MAT.CLOTH, wear: 0.5, snow: 0, vary: 0, detailScale: 3.5, rough: 0.6 });
   const thumb = b.capsule(0.0185, 0.085, { sides: detail ? 12 : 8, rings: detail ? 4 : 2 });
   thumb.warp((p) => {
     // flatter on the palm side, tapering to the tip
@@ -118,7 +119,7 @@ function buildMitt(b: Builder, detail: boolean): void {
   });
   tag(thumb, CH_THUMB);
   // ---- gauntlet over the sleeve: outer wall, rolled binding at the opening, inner wall ----
-  b.ink({ color: MITT, mat: MAT.CLOTH, wear: 0.4, snow: 0, vary: 0 });
+  b.ink({ color: MITT, mat: MAT.CLOTH, wear: 0.4, snow: 0, vary: 0, detailScale: 3.5, rough: 0.62 });
   const gp: [number, number][] = [
     [0.044, -0.078], [0.049, -0.088], [0.056, -0.105], [0.0625, -0.135], [0.067, -0.17], [0.0705, -0.2], [0.072, -0.212],
     [0.0712, -0.219], [0.0685, -0.2202], [0.0668, -0.2155], [0.0655, -0.2],
@@ -159,7 +160,7 @@ function buildSleeve(b: Builder, color: RGB, detail: boolean): void {
     prof.push([sleeveR(s), s]);
   }
   prof.push([0, 0.548]);
-  b.ink({ color, mat: MAT.CLOTH, wear: 0.34, snow: 0, vary: 0 });
+  b.ink({ color, mat: MAT.CLOTH, wear: 0.18, snow: 0, vary: 0, detailScale: 1.8 });
   const sleeve = b.lathe(prof, { sides: detail ? 22 : 14, smooth: true });
   // folds: slack cloth bunches toward the elbow and the cuff
   const seed = 17;
@@ -174,7 +175,7 @@ function buildSleeve(b: Builder, color: RGB, detail: boolean): void {
   });
   sleeve.each((v) => {
     // forearms wear and soil first
-    v.wear = 0.3 + 0.3 * sstep(0.3, 0.5, v.y);
+    v.wear = 0.12 + 0.2 * sstep(0.3, 0.5, v.y);
     const dirt = 0.12 * sstep(0.35, 0.5, v.y);
     v.r *= 1 - dirt; v.g *= 1 - dirt; v.b *= 1 - dirt;
   });
@@ -228,7 +229,7 @@ export function buildArms(color: RGB, detail = true): ArmsGeometry {
   for (let i = 0; i < n; i++) {
     const chain = Math.round(env.getW(i) * 255);
     _v.fromBufferAttribute(pos, i);
-    let b0 = B.hand, b1 = B.hand, w0 = 1;
+    let b0: number = B.hand, b1: number = B.hand, w0 = 1;
     if (chain === CH_SLEEVE) {
       const s = -_v.z;
       if (s < UPPER - 0.045) { b0 = b1 = B.upper; }

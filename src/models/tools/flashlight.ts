@@ -23,7 +23,7 @@ register(
     const toModel = (y: number) => -y;
     const g = b.group(() => {
       // ---------------- body and head ----------------
-      const rubber = hex(0x1c1d1f);
+      const rubber = hex(0x2d2f32);
       b.ink({ color: rubber, mat: MAT.RUBBER, wear: 0.5, snow: 0.5, vary: 0.02 });
       const prof: P2[] = [[0.0198, -0.0625], [0.0214, -0.0618], [0.022, -0.06]];
       for (let i = 0; i < 7; i++) {

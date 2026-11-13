@@ -225,16 +225,19 @@ export const SNOW_ALBEDO: [number, number, number] = [0.86, 0.89, 0.93];
 
 /** Effective snow load 0..1 of a tree from its own load and the fresh cover of the weather. */
 export function effectiveSnow(load: N): N {
-  return float(load).mul(U.snowCover.mul(0.75).add(0.4)).clamp(0, 1);
+  return float(load).mul(U.snowCover.mul(0.62).add(0.36)).clamp(0, 1);
 }
 
 /**
  * Coverage 0..1 of snow on a surface whose snow potential is `p` (0 never .. 1 always first) under
  * an effective load `s`. Every forest material and the impostor use this, so a baked impostor shows
  * the same snow as the mesh for any load.
+ * Even the heaviest load leaves the weaker surfaces bare (threshold no lower than ~0.32): a crown
+ * loaded with snow still shows its dark needles between the white tiers, also from above, where a
+ * lower threshold made every tree a white cone. (Cap added by SNOW, per the look brief.)
  */
 export function snowCoverage(s: N, p: N, w: N = 0.08): N {
-  const th: N = float(1.04).sub(float(s).mul(0.94));
+  const th: N = float(1.04).sub(float(s).mul(0.72));
   return smoothstep(th.sub(w), th.add(w), p);
 }
 

@@ -148,7 +148,7 @@ export class Tracks {
     const bx = fx * ca + lx * sa, bz = fz * ca + lz * sa;
     const seed = seedAt(px, pz, left ? 3 : 4);
     const scale = 0.97 + 0.06 * seed;
-    const sink = g.sink * (run ? 1.12 : 1) * punch;
+    const sink = Math.min(0.4, g.sink * (run ? 1.12 : 1) * punch);
     const deepK = g.deepK;
     // powder caves in around a deep boot: the hole is wider than the boot and its rim is a berm
     const hw = (0.056 + 0.022 * deepK) * scale;
@@ -238,7 +238,8 @@ export class Tracks {
         const p = view?.ents.get(e.id) as PlayerEnt | undefined;
         if (!p) break;
         const h = Tracks.heading(p, this.dir);
-        const punch = 1 + Math.min(1, e.speed / 6);
+        // a landing drives the boots deeper, but powder stops a body within a hand's width more
+        const punch = 1 + Math.min(0.45, e.speed / 12);
         const s = this.ground(p.x, p.z, undefined, p.y);
         if (!s.ok) break;
         const fx = h.x, fz = h.z;

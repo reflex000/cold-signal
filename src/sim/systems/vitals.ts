@@ -7,7 +7,9 @@
 //              and a little warmth. Alone (no other living person), a bandage gets you up once per
 //              checkpoint; with teammates around it stops the bleeding (the timer starts again).
 //   death      when the timer runs out. 'respawn' puts a dead player back at the last checkpoint
-//              with low warmth and health; in co-op the others keep playing.
+//              with low warmth and health; in co-op the others keep playing. Waking is a reload of
+//              that moment as far as it can never soft-lock the run: the fire rested at burns again,
+//              and matches, tinder, rounds and flares are back to at least what was carried then.
 //   checkpoint resting warm (core 36+) and still beside a lit fire for 6 s; the spot is kept in
 //              state.vars and 'checkpoint' is emitted (the game saves). Again at the same fire only
 //              after 3 minutes.
@@ -17,7 +19,8 @@
 import { smoothstep } from '../../core/math';
 import type { SimCtx, System } from '../api';
 import { GRAVITY } from '../move';
-import { BTN, type FireEnt, type HurtCause, type PlayerEnt, type Surface } from '../types';
+import { BTN, type FireEnt, type HurtCause, type ItemId, type PlayerEnt, type Surface } from '../types';
+import { feedFire } from './fire';
 import { focusOf, removeItem, toast } from './items';
 
 export const BLEED_TIME = 90;
@@ -38,6 +41,11 @@ export const REST_RANGE = 3.5;
 export const CHECKPOINT_REPEAT = 180;
 export const RESPAWN_HEALTH = 35;
 export const RESPAWN_CORE = 33.5;
+/** What a checkpoint keeps of each player's pack, so a death after it cannot leave the run without fire or defence. */
+export const CHECKPOINT_KIT: readonly ItemId[] = ['matches', 'tinder', 'ammo', 'flare'];
+/** Seconds of wood the fire rested at holds when someone wakes beside it (about three sticks). */
+export const RESPAWN_WOOD = 120;
+const KIT_KEY = 'vitals.kit.'; // + item + '.' + player id: count at the last checkpoint
 const REVIVE_SLACK = 0.35; // the reviver's client saw the body ~100 ms ago
 const REGEN = 2 / 60; // health per second while resting warm by a fire
 
@@ -174,8 +182,15 @@ function rest(ctx: SimCtx, p: PlayerEnt): void {
   vars[CP.z] = p.z;
   vars[CP.fire] = f.id;
   vars[CP.t] = t;
-  // a new checkpoint gives everyone their solo self-revive back
-  for (const q of ctx.players()) delete vars[SELF_KEY + q.id];
+  // a new checkpoint gives everyone their solo self-revive back, and keeps what each one carries
+  for (const q of ctx.players()) {
+    delete vars[SELF_KEY + q.id];
+    for (const item of CHECKPOINT_KIT) {
+      const n = q.inv[item] ?? 0;
+      if (n > 0) vars[KIT_KEY + item + '.' + q.id] = n;
+      else delete vars[KIT_KEY + item + '.' + q.id];
+    }
+  }
   ctx.emit({ t: 'checkpoint' });
 }
 
@@ -239,6 +254,18 @@ function respawn(ctx: SimCtx, p: PlayerEnt): void {
   delete vars[AIR_KEY + p.id];
   delete vars[COLD_KEY + p.id];
   delete vars[REST_KEY + p.id];
+  if (has) {
+    // the moment of the checkpoint, as far as the run needs it: the kit, and the fire burning
+    for (const item of CHECKPOINT_KIT) {
+      const kept = vars[KIT_KEY + item + '.' + p.id] ?? 0;
+      if (kept > (p.inv[item] ?? 0)) p.inv[item] = kept;
+    }
+    const f = ctx.get<FireEnt>(vars[CP.fire] ?? 0);
+    if (f && f.kind === 'fire' && !f.lit) {
+      f.embers = Math.max(f.embers, 1);
+      feedFire(ctx, f, RESPAWN_WOOD, p, 'stick');
+    }
+  }
   toast(ctx, p, 'info', has ? 'You wake by the fire.' : 'You wake by the wreck.');
 }
 
@@ -360,6 +387,7 @@ export const vitals: System = {
     delete vars[COLD_KEY + p.id];
     delete vars[REST_KEY + p.id];
     delete vars[SELF_KEY + p.id];
+    for (const item of CHECKPOINT_KIT) delete vars[KIT_KEY + item + '.' + p.id];
     for (const q of ctx.players()) {
       if (q.reviver === p.id) {
         q.reviver = 0;

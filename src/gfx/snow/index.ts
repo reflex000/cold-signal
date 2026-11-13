@@ -33,7 +33,7 @@ export interface SnowSystem extends GfxSystem {
 
 /**
  * The fill clock: metres of snow that have settled into hollows. Falling snow (env.snowAccum,
- * metres laid down by the sim) and, above ~5 m/s, snow the wind carries along the ground, which
+ * metres laid down by the sim) and, above ~6 m/s, snow the wind carries along the ground, which
  * fills prints and knocks rims down even under a clear sky.
  */
 class SnowFill {
@@ -52,8 +52,9 @@ class SnowFill {
       return this.value;
     }
     const dt = Math.min(600, t - this.t);
+    // drifting snow starts near 6 m/s and grows fast with the wind (a whiteout gale fills a print in minutes)
     const ws = Math.hypot(e.windX, e.windZ) * (1 + 0.5 * (e.gust || 0));
-    const drift = 1.6e-5 * Math.pow(Math.max(0, ws - 5), 1.5);
+    const drift = 0.8e-5 * Math.pow(Math.max(0, ws - 6), 1.5);
     this.value += a - this.accum + drift * Math.max(0, dt);
     this.accum = a;
     this.t = t;

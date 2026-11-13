@@ -13,7 +13,7 @@ import * as TSL from 'three/tsl';
 import { U } from '../shared';
 import { MIE_G } from './atmosphere';
 
-const { texture, uniform: objUniform, renderGroup, vec2, vec3, float, abs, clamp, max, min, dot, exp, pow, sqrt, asin, acos, atan, sign, mix, select, length } = TSL as any;
+const { texture, uniform: objUniform, renderGroup, vec2, vec3, float, abs, clamp, max, min, dot, exp, pow, sqrt, asin, acos, atan, sign, mix, select, length, smoothstep } = TSL as any;
 
 export type N = any;
 
@@ -139,7 +139,11 @@ export function fogDepthSky(dy: N, share: N = AIR.sceneShare): N {
 /** The colour the fog adds toward direction d (unit). */
 export function fogColor(d: N): N {
   const az = atan(d.z, d.x).mul(1 / (2 * Math.PI)).add(0.5);
-  const haze = SKY.horizon.sample(vec2(az, 0.5)).level(0).rgb;
+  const raw = SKY.horizon.sample(vec2(az, 0.5)).level(0).rgb;
+  // Toward a low sun the horizon haze is yellow (r ~ g > b); laid over near-black rock lit blue by
+  // the sky it read olive-khaki. Where the haze is warm its green is eased toward gold. (SNOW)
+  const warm = smoothstep(0.15, 0.5, raw.x.sub(raw.z).div(max(raw.x, 1e-4)));
+  const haze = vec3(raw.x, raw.y.mul(float(1).sub(warm.mul(0.09))), raw.z);
   const g: N = AIR.glowG;
   const storm = vec3(U.fogColor)
     .add(vec3(U.sunColor).mul(hgPhase(dot(d, U.sunDir), g)).mul(AIR.glow))

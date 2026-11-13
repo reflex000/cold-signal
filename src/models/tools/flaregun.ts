@@ -106,6 +106,8 @@ register(
     if (c.pose === 'ground') layDown(g, 0, 0.8, Math.PI / 2);
     else {
       gripAnchor(b, 'gripR', [0, 0, 0], [0, -0.2881, -0.9576], [0, 0.9576, -0.2881]);
+      // FIGURES' item space: the barrel along the knuckles (+Y), above the fist (thumb up)
+      gripAnchor(b, 'item', [0, 0, 0], [0, 0, -1], [0, 1, 0]);
       gripAnchor(b, 'gripL', [0, Y - 0.004, -0.11], [1, 0, 0], [0, 0, -1]);
       b.anchor('muzzle', [0, Y, FLARE_MUZZLE_Z]);
       b.anchor('breech', [0, Y, FLARE_BREECH_Z]);

@@ -2,12 +2,16 @@
 // at noon and at dusk; go down and get up (a body hollow); a companion drags a heavy log alone; a
 // pack of wolves crosses the snow; then a storm fills the trail for three minutes (before / after).
 //   node tools/play.mjs tools/scenarios/snow.mjs [--backend webgl] [--mobile 1] [--query "beats=walk,dusk"]
-// beats: walk, dusk, deep, down, log, wolves, fill (default: all). Owner: SNOW.
+// beats: walk, dusk, deep, down, log, wolves, fill (default), storm, blizzard, forest; tag=xx suffixes the shots.
+// Owner: SNOW.
 const SPRINT = 1, JUMP = 4;
 
-export default async function ({ ev, step, shot, log, check, args }) {
+export default async function ({ ev, step, shot: shotRaw, log, check, args }) {
   const q = new URLSearchParams(args.query || '');
   const beats = new Set((q.get('beats') || 'walk,dusk,deep,down,log,wolves,fill').split(','));
+  // tag=gl: shots/snow_noon_trail_gl.jpg (one set per backend)
+  const tag = q.get('tag');
+  const shot = (name, o) => shotRaw(tag ? `${name}_${tag}` : name, o);
   await step(10);
   await ev(() => {
     const CS = window.CS;
@@ -153,9 +157,13 @@ export default async function ({ ev, step, shot, log, check, args }) {
       me.bleed = 0;
     });
     await step(10);
-    await ev((a) => window.CS.go(a.x + 2.2, a.z + 2.4, 0, 0), at);
+    // stand off to the side of the body's axis (head toward the facing) and look down at it
+    await ev((a) => {
+      const fx = -Math.sin(a.yaw), fz = -Math.cos(a.yaw);
+      window.CS.go(a.x - fx * 0.3 + fz * 1.5, a.z - fz * 0.3 - fx * 1.5, 0, 0);
+    }, at);
     await step(4);
-    await ev((a) => window.SN.lookAt(a.x - Math.sin(a.yaw) * 0.0, a.y, a.z), at);
+    await ev((a) => window.SN.lookAt(a.x + Math.sin(a.yaw) * 0.3, a.y, a.z + Math.cos(a.yaw) * 0.3), at);
     await step(4);
     await shot('snow_downed');
   }
@@ -197,15 +205,18 @@ export default async function ({ ev, step, shot, log, check, args }) {
       }, res.id);
       log('log dragged', res, end, await stats());
       check(end.a !== 0 || end.b !== 0, 'the companion holds the log');
+      // the companion lets go and leaves; we look back along the furrow from beside it
+      await ev(() => window.CS.game.host.removeBot(window.SN.bot));
+      await step(3);
+      // the trailing end ran along -u behind the log: stand beside its last metres, look back along it
       await ev(([r, e]) => {
         const CS = window.CS;
-        CS.go(e.x - r.ux * 3 + r.uz * 2.2, e.z - r.uz * 3 - r.ux * 2.2, 0, 0);
+        CS.go(e.x - r.ux * (r.h + 0.5) + r.uz * 1.4, e.z - r.uz * (r.h + 0.5) - r.ux * 1.4, 0, 0);
       }, [res, end]);
       await step(3);
-      await ev(([r, e]) => window.SN.lookAt(e.x - r.ux * 4.5, e.y, e.z - r.uz * 4.5), [res, end]);
+      await ev(([r, e]) => window.SN.lookAt(e.x - r.ux * (r.h + 3.5), e.y, e.z - r.uz * (r.h + 3.5)), [res, end]);
       await step(4);
       await shot('snow_logdrag');
-      await ev(() => window.CS.game.host.removeBot?.(window.SN.bot));
     }
   }
 
@@ -214,13 +225,102 @@ export default async function ({ ev, step, shot, log, check, args }) {
     await ev((s) => window.CS.go(s.x, s.z, -90, 0), spot);
     await step(10);
     await ev((s) => window.CS.act({ t: 'debug', cmd: 'wolves', args: [s.x + 25, s.z + 6, 4] }), spot);
-    for (let i = 0; i < 10; i++) await step(60);
+    // follow the pack in small steps (so their paws are drawn at their gait), remembering where
+    // they went within a few metres of us
+    await ev(() => (window.SN.wpath = []));
+    for (let i = 0; i < 60; i++) {
+      await step(6);
+      await ev(() => {
+        const me = window.SN.me();
+        for (const w of window.CS.view.list('wolf')) {
+          const d = Math.hypot(w.x - me.x, w.z - me.z);
+          if (d > 3 && d < 9) window.SN.wpath.push({ x: w.x, z: w.z, d });
+        }
+      });
+    }
     await ev(() => window.CS.act({ t: 'debug', cmd: 'wolvesClear' }));
     await step(4);
-    await ev((s) => window.SN.lookAt(s.x + 8, window.SN.me().y, s.z + 3), spot);
+    const near = await ev(() => window.SN.wpath.sort((a, b) => Math.abs(a.d - 4.5) - Math.abs(b.d - 4.5))[0] || null);
+    log('wolf passed', near);
+    await ev(([s, n]) => window.SN.lookAt(n ? n.x : s.x + 8, window.SN.me().y, n ? n.z : s.z + 3), [spot, near]);
     await step(4);
     log('wolves', await stats());
     await shot('snow_wolves');
+  }
+
+  if (beats.has('storm')) {
+    // the blizzard by day: open slope with a forest edge, wind across the view
+    const spot = await ev((w) => window.SN.find(w.x + 20, w.z - 70, 0.3), wreck);
+    await ev((s) => window.CS.go(s.x, s.z, -90, 0), spot);
+    await ev(() => window.CS.env({ storm: 0.6, clock: 13, lock: true }));
+    await step(60);
+    await ev(() => window.CS.look(-40, -4));
+    await step(6);
+    await shot('snow_storm_day');
+    await ev(() => window.CS.env({ storm: 0.92, clock: 13, lock: true }));
+    await step(60);
+    await shot('snow_whiteout_day');
+  }
+
+  if (beats.has('blizzard')) {
+    // the blizzard at night by the barrel fire at the wreck, the flashlight on
+    const fire = await ev(() => {
+      const b = window.CS.view.list('fire').find((f) => f.type === 'barrel');
+      return b ? { x: b.x, y: b.y, z: b.z } : null;
+    });
+    if (fire) {
+      await ev((f) => {
+        const CS = window.CS;
+        CS.env({ storm: 0.8, clock: 22.5, lock: true });
+        CS.go(f.x + 4.5, f.z + 3.5, 0, 0);
+      }, fire);
+      await step(60);
+      await ev((f) => window.SN.lookAt(f.x, f.y + 0.8, f.z), fire);
+      await step(6);
+      await shot('snow_blizzard_fire');
+      await ev(() => {
+        const CS = window.CS;
+        CS.give('flashlight', 1);
+        window.SN.me().cellCharge = 1;
+        CS.equip('flashlight');
+      });
+      await step(20);
+      if (!(await ev(() => window.SN.me().lightOn))) await ev(() => window.CS.act({ t: 'toggleLight' }));
+      await step(20);
+      check(await ev(() => window.SN.me().lightOn), 'the flashlight is on');
+      await ev((f) => window.SN.lookAt(f.x - 8, f.y + 0.6, f.z - 6), fire);
+      await step(10);
+      await shot('snow_blizzard_flashlight');
+    }
+  }
+
+  if (beats.has('forest')) {
+    // forests from above: the highest open ground near the cabin's valley, looking down on the trees
+    const v = await ev(() => {
+      const w = window.CS.world, c = w.poi('cabin');
+      let best = null, bh = -Infinity;
+      for (let r = 120; r <= 520; r += 20) {
+        for (let k = 0; k < 36; k++) {
+          const a = (k / 36) * Math.PI * 2;
+          const x = c.x + Math.sin(a) * r, z = c.z + Math.cos(a) * r;
+          if (!w.walkable(x, z)) continue;
+          const h = w.heightAt(x, z) - w.heightAt(c.x, c.z) - r * 0.05;
+          if (h > bh) { bh = h; best = { x, z, a }; }
+        }
+      }
+      return best;
+    });
+    log('forest vantage', v);
+    await ev((v) => {
+      const CS = window.CS, c = CS.world.poi('cabin');
+      CS.env({ storm: 0, clock: 11.5, lock: true });
+      CS.go(v.x, v.z, (Math.atan2(-(c.x - v.x), -(c.z - v.z)) * 180) / Math.PI, -16);
+    }, v);
+    await step(30);
+    await shot('snow_forest_above');
+    await ev(() => window.CS.env({ storm: 0, clock: 15.9, lock: true }));
+    await step(30);
+    await shot('snow_forest_above_low');
   }
 
   if (beats.has('fill') && trail) {

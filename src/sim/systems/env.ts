@@ -61,8 +61,9 @@ export function whiteoutWindow(seed: number, k: number): { t0: number; t1: numbe
 
 /** Storm intensity 0..1 at simulated time t (seconds) for a seed, before story and debug overrides. */
 export function stormAt(seed: number, t: number): number {
-  // Slow weather: stays between about 0.1 and 0.74, so only a scripted beat makes a whiteout.
-  let s = 0.42 + 0.22 * noise1(seed ^ 0x51ed, t / 170) + 0.1 * noise1(seed ^ 0x7a3b, t / 53);
+  // Slow weather: stays between about 0.1 and 0.69, so only a scripted beat makes a whiteout and the
+  // storms between the beats are travelling weather more often than not (RELEASE balance: was 0.42 / 0.22 / 0.1).
+  let s = 0.4 + 0.2 * noise1(seed ^ 0x51ed, t / 170) + 0.09 * noise1(seed ^ 0x7a3b, t / 53);
   // Opening: a steady moderate storm for the first minutes.
   s += (0.45 - s) * (1 - smoothstep(150, 300, t));
   // The clear spell.

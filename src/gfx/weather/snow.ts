@@ -5,18 +5,59 @@
 // wrapped into the box; the quad is a streak from where the flake is to where it was one shutter
 // time ago relative to the camera, so flakes stream sideways in a gale and smear as the player
 // turns or runs. Sub-pixel flakes are clamped to about a pixel and fade instead, so far flakes
-// never sparkle. Two layers: near flakes (soft round sprites) and mid streaks (long, faint).
-// Lit by the sun (strong forward scattering when backlit) and the ambient; fogged like the world.
-// Owner: ATMOS.
+// never sparkle. Three layers: close streaks (big, soft, crossing the view), near flakes and mid
+// streaks (long, faint). Lit by the sun and moon (strong forward scattering when backlit), the
+// ambient, and the eight best fire / flare / flashlight lights of FX's pool (PARTICLE_LIGHTS): ice
+// crystals glint, so near a fire they flicker orange and in a torch beam they blaze white.
+// In a storm the crystals read brighter than the haze they fall through (they are lit by the bright
+// overcast zenith; the haze is the horizon's light), and gust sheets sweep downwind: bands of denser
+// snow tens of metres apart, so a still frame shows a blizzard and not only fog. Fogged like the world.
+// Owner: ATMOS (local lights, close layer and gust sheets added by SNOW).
 import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
-import { U } from '../shared';
+import { U, horizonLit } from '../shared';
 import { fogAmount, fogColor, hgPhase, type N } from '../sky/common';
+import { PARTICLE_LIGHTS, PARTICLE_LIGHT_COUNT } from '../fx/lights';
 
 const {
-  Fn, attribute, uniform, varying, vec2, vec3, vec4, float, abs, clamp, max, dot, sin, cos, floor, mix, smoothstep, select,
-  length, mod, cameraViewMatrix, cameraProjectionMatrix, positionGeometry,
+  Discard, Fn, If, attribute, uniform, varying, vec2, vec3, vec4, float, abs, asin, clamp, max, dot, sin, cos, floor, mix, smoothstep, select,
+  length, mod, sqrt, cameraViewMatrix, cameraProjectionMatrix, positionGeometry,
 } = TSL as any;
+
+/**
+ * Radiance of a snow crystal at world `p` seen along `d` (camera -> flake). Sun and moon scatter
+ * forward; the ambient lights it from the bright zenith (`bright` lifts it over the haze); a fire
+ * or a beam within range lights it with a glint (a crystal is a tiny mirror: much brighter than a
+ * matte surface would be, strongest toward the light).
+ */
+function crystalLight(p: N, d: N, bright: N): N {
+  const amb = vec3(U.skyAmbient).mul(0.62).add(vec3(U.groundAmbient).mul(0.38)).mul(1 / Math.PI);
+  const sunPh = hgPhase(dot(d, U.sunDir), float(0.55)).mul(4 * Math.PI).mul(0.45).add(0.35);
+  const moonPh = hgPhase(dot(d, U.moonDir), float(0.55)).mul(4 * Math.PI).mul(0.45).add(0.35);
+  const sunVis = horizonLit(p.xz, asin(clamp(U.sunDir.y, -1, 1)));
+  const sky = amb.add(vec3(U.sunColor).mul(sunPh).mul(sunVis).add(vec3(U.moonColor).mul(moonPh)).mul(1 / Math.PI)).mul(bright);
+  let acc: N = vec3(0);
+  for (let i = 0; i < PARTICLE_LIGHT_COUNT; i++) {
+    const P = PARTICLE_LIGHTS.pos.element(i);
+    const C = PARTICLE_LIGHTS.col.element(i);
+    const D = PARTICLE_LIGHTS.dir.element(i);
+    const L = P.xyz.sub(p);
+    // a flake nearer than ~40 cm to a flame no longer brightens like 1/d^2
+    const d2 = max(dot(L, L), 0.16);
+    const dist = sqrt(d2);
+    const x = clamp(dist.div(P.w), 0, 1);
+    const x2 = x.mul(x);
+    const win = clamp(float(1).sub(x2.mul(x2)), 0, 1);
+    const toL = L.div(dist);
+    const cone = select(C.w.lessThan(-1.5), float(1), smoothstep(C.w, D.w, dot(toL.negate(), D.xyz)));
+    // facets flash: several times a matte surface's share from any side, far more toward the light
+    const glint = hgPhase(dot(toL, d), float(0.6)).mul(4 * Math.PI).mul(3).add(4.5);
+    acc = acc.add(C.xyz.mul(win.mul(win).mul(cone).mul(glint).div(d2)));
+  }
+  // a flake a hand's width from the torch would be hundreds of times too bright: cap it (keeps the hue)
+  const loc = acc.mul(1 / Math.PI);
+  return sky.add(loc.mul(float(2.5).div(max(max(loc.x, max(loc.y, loc.z)), 2.5))));
+}
 
 export interface SnowLayerOptions {
   name: string;
@@ -34,6 +75,10 @@ export interface SnowLayerOptions {
   opacity: number;
   /** Fraction of instances that are drawn at full snowfall. */
   seed: number;
+  /** 0..1 how strongly the gust sheets thin and thicken this layer. */
+  sheets?: number;
+  /** > 0: write depth where a flake's opacity exceeds this, and discard below it (see material()). */
+  depthCore?: number;
 }
 
 /** Uniforms shared by every snow layer; written by the weather system. */
@@ -48,6 +93,12 @@ export const SNOWU = {
   time: uniform(0),
   /** 0..1 intensity the layers fade with (snowfall). */
   amount: uniform(0),
+  /** How much brighter than the haze a crystal reads (1 calm .. ~2 in a storm by day). */
+  bright: uniform(1.3),
+  /** 0..1 strength of the gust sheets (storm, gusts). */
+  sheets: uniform(0),
+  /** Metres the gust sheets have travelled downwind (wrapped). */
+  sheetShift: uniform(0),
 };
 
 /** Seconds after which the snow clock wraps (see the material). */
@@ -91,7 +142,20 @@ export class SnowLayer {
     const m = new THREE.MeshBasicNodeMaterial();
     m.name = 'Snow.' + o.name;
     m.transparent = true;
-    m.depthWrite = false;
+    // The storm volume (an HDR stage after the scene) fogs every pixel up to the depth in the
+    // depth buffer, and flakes write no depth: a flake would be buried under the whole storm
+    // behind it. So colour blends as usual while alpha keeps 1 - coverage (the scene clears alpha
+    // to 1 and opaque things write 1): the storm composite (volume.ts) spares covered pixels.
+    m.blending = THREE.CustomBlending;
+    m.blendEquation = THREE.AddEquation;
+    m.blendSrc = THREE.SrcAlphaFactor;
+    m.blendDst = THREE.OneMinusSrcAlphaFactor;
+    m.blendEquationAlpha = THREE.AddEquation;
+    m.blendSrcAlpha = THREE.ZeroFactor;
+    m.blendDstAlpha = THREE.OneMinusSrcAlphaFactor;
+    // (optional) a solid core that also writes depth; off by default: fog thins most flakes below it
+    const core = o.depthCore ?? 0;
+    m.depthWrite = core > 0;
     m.depthTest = true;
     m.fog = false;
     m.lights = false;
@@ -111,12 +175,15 @@ export class SnowLayer {
     const w2 = floor(mix(float((0.7 * P) / TAU), float((1.9 * P) / TAU), seed.z)).mul(TAU / P);
     const w3 = floor(mix(float((0.9 * P) / TAU), float((2.1 * P) / TAU), seed.x)).mul(TAU / P);
     const ph = seed.xyz.mul(TAU);
-    const fl = mix(float(0.25), float(1.6), SNOWU.turbulence);
-    const swirl = vec3(sin(t.mul(w1).add(ph.x)), sin(t.mul(w2).add(ph.y)).mul(0.4), cos(t.mul(w3).add(ph.z))).mul(fl);
+    // a gale is eddying air: in a storm the flutter grows and turns vertical, so streaks cross at
+    // different angles instead of running in parallel lines
+    const fl = mix(float(0.25), length(SNOWU.wind).mul(0.28).add(0.6), SNOWU.turbulence);
+    const vf = mix(float(0.4), float(1.1), SNOWU.turbulence);
+    const swirl = vec3(sin(t.mul(w1).add(ph.x)), sin(t.mul(w2).add(ph.y)).mul(vf), cos(t.mul(w3).add(ph.z))).mul(fl);
     const vel = vec3(SNOWU.wind.x, fall.negate(), SNOWU.wind.y).add(swirl);
     // Integrated position: the wind drift comes from the CPU (wrapped per layer), the fall is
     // linear in time, the flutter integrates to -cos / sin.
-    const flutter = vec3(cos(t.mul(w1).add(ph.x)).negate().div(w1), cos(t.mul(w2).add(ph.y)).negate().div(w2).mul(0.4), sin(t.mul(w3).add(ph.z)).div(w3)).mul(fl);
+    const flutter = vec3(cos(t.mul(w1).add(ph.x)).negate().div(w1), cos(t.mul(w2).add(ph.y)).negate().div(w2).mul(vf), sin(t.mul(w3).add(ph.z)).div(w3)).mul(fl);
     const drift = vec3(this.drift.x, fall.negate().mul(t), this.drift.y);
     const origin = vec3(U.camPos).sub(vec3(o.half, o.below, o.half));
     const raw = seed.xyz.mul(box).add(drift).add(flutter);
@@ -150,13 +217,10 @@ export class SnowLayer {
       const toCam = vec3(U.camPos).sub(pos);
       const dist = length(toCam);
       const d = toCam.div(max(dist, 1e-4)).negate(); // camera -> flake
-      // Ice scatters forward: flakes against the sun light up.
-      const sunPh = hgPhase(dot(d, U.sunDir), float(0.55)).mul(4 * Math.PI).mul(0.45).add(0.35);
-      const moonPh = hgPhase(dot(d, U.moonDir), float(0.55)).mul(4 * Math.PI).mul(0.45).add(0.35);
-      const amb = vec3(U.skyAmbient).add(vec3(U.groundAmbient)).mul(0.5 / Math.PI);
-      // Ice crystals are brighter than the air they fall through (specular glints), so they read
-      // against dark trees and rock and, faintly, against the sky.
-      const lit = amb.add(vec3(U.sunColor).mul(sunPh).mul(1 / Math.PI)).add(vec3(U.moonColor).mul(moonPh).mul(1 / Math.PI)).mul(1.3);
+      // Ice scatters forward: flakes against the sun, a fire or a beam light up (FX's particle
+      // light: sun, moon, ambient and the eight best point / spot lights). Crystals read brighter
+      // than the haze (SNOWU.bright), so they show against dark trees and rock and against the grey.
+      const lit = crystalLight(pos, d, SNOWU.bright);
       const fa = fogAmount(dist, d);
       vcol.assign(mix(lit, fogColor(d), fa));
       vfog.assign(fa.oneMinus().mul(0.85).add(0.15));
@@ -168,7 +232,15 @@ export class SnowLayer {
         .mul(smoothstep(float(-o.below), float(-o.below * 0.7), dc.y))
         .mul(smoothstep(float(o.above), float(o.above * 0.75), dc.y));
       const near = smoothstep(0.12, 0.6, depth);
-      vfade.assign(area.mul(edge).mul(near));
+      // Gust sheets: wavy bands ~24 m apart across the wind, travelling downwind; a flake in a band
+      // is denser (more opaque), between bands the air thins. World-space, so they sweep past.
+      const wd: N = U.windDir;
+      const downwind: N = pos.x.mul(wd.x).add(pos.z.mul(wd.y));
+      const across: N = pos.z.mul(wd.x).sub(pos.x.mul(wd.y));
+      const front: N = downwind.sub(SNOWU.sheetShift).add(sin(across.mul(0.071).add(sin(across.mul(0.023)).mul(2.1))).mul(5.5));
+      const band: N = sin(front.mul((2 * Math.PI) / 24)).mul(0.5).add(0.5);
+      const sheet: N = mix(float(1), band.mul(band).mul(1.6).add(0.25), SNOWU.sheets.mul(o.sheets ?? 0));
+      vfade.assign(area.mul(edge).mul(near).mul(sheet));
       return cameraProjectionMatrix.mul(vec4(p, 1));
     })();
 
@@ -180,7 +252,17 @@ export class SnowLayer {
     const head = mix(float(1), float(0.55), vuv.y.add(1).mul(0.5));
     const shape = soft.mul(soft).mul(head);
     const alpha = shape.mul(vfade).mul(o.opacity).mul(SNOWU.amount).mul(vfog);
-    m.fragmentNode = vec4(vcol, clamp(alpha, 0, 1));
+    if (core > 0) {
+      // the solid core keeps its full opacity (it now hides what is behind it from the volume too)
+      m.fragmentNode = Fn(() => {
+        If(alpha.lessThan(core), () => {
+          Discard();
+        });
+        return vec4(vcol, clamp(alpha.mul(1.25), 0, 1));
+      })();
+    } else {
+      m.fragmentNode = vec4(vcol, clamp(alpha, 0, 1));
+    }
     return m;
   }
 

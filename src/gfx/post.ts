@@ -82,6 +82,12 @@ export interface HdrStageInput {
   backend: 'webgpu' | 'webgl2';
   /** False on the 8-bit fallback: colour above about 4x the exposed white is clipped. */
   hdr: boolean;
+  /**
+   * float. Alpha of the scene pass at this pixel: 1 everywhere except where falling snow wrote its
+   * coverage (weather/snow.ts blends alpha to 1 - coverage), so the storm volume can spare the
+   * flakes in front of it. (Optional member added by SNOW.)
+   */
+  alpha?: N;
 }
 
 /** What an overlay is given besides colour and uv. */
@@ -500,8 +506,10 @@ export class Post implements PostApi {
     aoStrength: uniform(0.9),
     saturation: uniform(0.9),
     contrast: uniform(1.03),
-    temperature: uniform(new THREE.Vector3(0.955, 0.995, 1.06)),
-    shadowTint: uniform(new THREE.Vector3(0.9, 0.97, 1.08)),
+    temperature: uniform(new THREE.Vector3(0.955, 0.985, 1.06)),
+    // Blue with a touch of magenta, not teal: a teal tint (green kept, red cut) turned warm low sun
+    // on near-black rock olive; this keeps it warm grey and the snow's shade blue. (SNOW, per brief.)
+    shadowTint: uniform(new THREE.Vector3(0.93, 0.92, 1.07)),
     vignette: uniform(0.22),
     grain: uniform(0.028),
   };
@@ -796,7 +804,13 @@ export class Post implements PostApi {
       // must not darken the air in front of a surface: faded by the fog's transmittance (squared,
       // so a storm or a whiteout takes it away well before the surface itself disappears).
       const vd: N = this.viewDepthOf(depthTex.sample(uvN).r);
-      const near: N = smoothstep(35, 75, vd).oneMinus();
+      // Nor where the depth buffer jumps within the AO's footprint (two pixels at half resolution):
+      // at a crest seen against trees far behind it the depth-derived normals break and GTAO goes
+      // to zero in hard black dashes along the ridge line (added by SNOW at the lead's request).
+      const px: N = vec2(2).div(U.resolution);
+      const dj = (o: N): N => this.viewDepthOf(depthTex.sample(uvN.add(o)).r).sub(vd).abs();
+      const jump: N = max(max(dj(vec2(px.x, 0)), dj(vec2(px.x.negate(), 0))), max(dj(vec2(0, px.y)), dj(vec2(0, px.y.negate())))).div(vd.max(0.1));
+      const near: N = smoothstep(35, 75, vd).oneMinus().mul(smoothstep(0.04, 0.15, jump).oneMinus());
       const clear: N = exp(U.fogDensity.mul(vd).mul(-2).max(-30));
       c = c.mul(mix(float(1), occ, u.aoStrength.mul(lit.oneMinus()).mul(near).mul(clear)));
     }
@@ -840,6 +854,9 @@ export class Post implements PostApi {
         quality: q,
         backend: this.backend,
         hdr,
+        get alpha() {
+          return sceneTex.sample(uvN).a;
+        },
       };
       const out = this.runStage(s, () => vec3(s.hdr!(input)), colorIn);
       if (out !== colorIn) pending = true;

@@ -235,7 +235,13 @@ export function compositeVolume(i: HdrStageInput, vol: StormVolumeNode, scale: n
   const v = acc.div(wsum);
   if (VOL_DEBUG.mode === 1) return vec3(v.a);
   if (VOL_DEBUG.mode === 2) return v.rgb;
-  return i.color.mul(v.a).add(v.rgb);
+  const fogged = i.color.mul(v.a).add(v.rgb);
+  // Falling snow writes no depth: without this the whole storm behind a flake would be laid over
+  // it and a blizzard would show no flakes. The flakes leave their coverage in the scene alpha
+  // (weather/snow.ts); a covered pixel keeps (most of) its own colour. (Added by SNOW.)
+  if (i.alpha === undefined) return fogged;
+  const cover = clamp(float(1).sub(i.alpha), 0, 1);
+  return mix(fogged, i.color, cover.mul(0.9));
 }
 
 /**

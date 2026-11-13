@@ -43,8 +43,8 @@ export function gripMatrix(def: ModelDef, name: string, out = new THREE.Matrix4(
 const ITEM_GRIP: Record<Tool, { grip: string; hand: 'R' | 'L' }> = {
   axe: { grip: 'gripR', hand: 'R' },
   flashlight: { grip: 'gripR', hand: 'R' },
-  flaregun: { grip: 'gripR', hand: 'R' },
-  rifle: { grip: 'gripR', hand: 'R' },
+  flaregun: { grip: 'item', hand: 'R' },
+  rifle: { grip: 'item', hand: 'R' },
   radio: { grip: 'carry', hand: 'L' },
 };
 

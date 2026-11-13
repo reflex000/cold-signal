@@ -20,8 +20,11 @@ export const FRESH_FILL = 0.015;
 export const SOFT_FILL = 0.05;
 /** Rims are knocked down and buried faster than the hollows fill. */
 export const RIM_FILL_RATE = 2.5;
-/** Hollows collect more than the level snowfall: the wind fills them first. */
-export const DEPTH_FILL_RATE = 1.15;
+/**
+ * Depth a hollow loses per metre of fill. Below 1: new snow bridges and drapes a narrow hole rather
+ * than levelling it, so a deep print survives a few minutes of storm as a soft dimple.
+ */
+export const DEPTH_FILL_RATE = 0.85;
 
 export interface SnowTier {
   /** Near window: texels across and metres across. */

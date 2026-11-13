@@ -414,7 +414,11 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     // On cliffs the edge is crisp and broken by the face noise: a couloir a few metres wide is only
     // a blurred trough in the 2 m normals, and a soft edge read as a glowing white streak.
     const steepIn: N = smoothstep(mix(float(0.31), float(0.345), cliffZone), mix(float(0.43), float(0.375), cliffZone), mix(slope, slopeC, 0.6).add(broadN.sub(0.5).mul(0.14)).add(faceNoise.sub(0.5).mul(0.24).add(facet.x.add(facet.z).mul(0.6)).mul(cliffZone)));
-    const rockArea: N = max(max(maskRock, steepIn), benchRock).mul(w).add(steepFar.mul(farW)).mul(mk.z.oneMinus()).mul(nearTrail.oneMinus()).clamp(0, 1).toVar();
+    // The masks are 2D: a trail at the foot of a wall projects straight up its face. A trail never
+    // runs up a cliff, so it keeps the rock off walkable ground only (it laid soft white streaks up
+    // the wall above the cave). (SNOW, per the look brief.)
+    const trailKeep: N = nearTrail.mul(smoothstep(0.3, 0.55, nM.y));
+    const rockArea: N = max(max(maskRock, steepIn), benchRock).mul(w).add(steepFar.mul(farW)).mul(mk.z.oneMinus()).mul(trailKeep.oneMinus()).clamp(0, 1).toVar();
     const rock: N = float(0).toVar();
     const nRock: N = nM.toVar();
     const rockAlb: N = vec3(0.045).toVar();
@@ -469,7 +473,12 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
       // on cliffs the edge between plastered snow and rock is crisper (no soft glow down the face)
       const e0: N = mix(float(0.6), float(0.65), cliffZone), e1: N = mix(float(0.84), float(0.76), cliffZone);
       const snowOnRock: N = smoothstep(e0, e1, holdY.add(hold.mul(0.18).add(broadN.sub(0.5).mul(0.12)).mul(vert)).add(faceN.mul(0.7)).add(snowDepth.mul(0.25)).add(gully));
-      rock.assign(rockArea.mul(snowOnRock.oneMinus()));
+      // A sheer face (steeper than ~70 deg at the 2 m scale) holds snow only on its ledges: the
+      // 8 m slope across a cut step (the cave's pad) reads gentle and laid soft vertical white
+      // smears down the wall above the cave. (SNOW, per the look brief.)
+      const sheer: N = smoothstep(0.26, 0.42, nM.y).oneMinus().mul(cliffZone);
+      const onLedge: N = smoothstep(0.5, 0.72, nRock.y);
+      rock.assign(rockArea.mul(mix(snowOnRock, snowOnRock.mul(onLedge), sheer).oneMinus()));
       // Near-black. Bedding shows only in places (a whole face of even stripes reads as concrete);
       // vertical joints (~1 m apart, ~5 m long, in the plane of the face) and broad tone patches
       // break the face up the way frost-shattered rock does.
@@ -481,7 +490,7 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
       const jn: N = mix(J(p.x, p.y, dpx.x, dpx.y, dpy.x, dpy.y, 0.71), J(p.z, p.y, dpx.z, dpx.y, dpy.z, dpy.y, 0.13), axJ);
       const joint: N = smoothstep(0.045, 0.0, abs(jn.sub(0.5))).mul(res(9 / 8)).mul(vert.oneMinus()).mul(0.55);
       const tone: N = broadN.sub(0.5).mul(0.6).add(faceNoise.sub(0.5).mul(0.5).mul(cliffZone));
-      rockAlb.assign(vec3(0.026, 0.023, 0.021).mul(v1.add(v2).add(tone).add(1)).mul(lowVar.mul(0.6).mul(vert).add(1)).mul(rockTex.mul(0.9).add(1)).mul(joint.oneMinus()));
+      rockAlb.assign(vec3(0.03, 0.025, 0.02).mul(v1.add(v2).add(tone).add(1)).mul(lowVar.mul(0.6).mul(vert).add(1)).mul(rockTex.mul(0.9).add(1)).mul(joint.oneMinus()));
       ledgeAO.mulAssign(joint.mul(0.4).oneMinus());
     });
 
@@ -564,7 +573,7 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     n.assign(mix(n, nIce, iceW.mul(rock.oneMinus())));
     n.assign(n.normalize());
 
-    const roughSnow: N = mix(float(0.82), float(0.66), exposure.mul(res(0.37))).sub(trail.mul(0.16)).sub(print.mul(0.1)).add(raised.mul(0.08));
+    const roughSnow: N = mix(float(0.82), float(0.66), exposure.mul(res(0.37))).sub(trail.mul(0.16)).sub(print.mul(0.04)).add(raised.mul(0.08));
     const rough: N = roughSnow.mul(snowW).add(float(0.8).mul(rock)).add(roughIce.mul(iceW).mul(rock.oneMinus())).add(float(0.9).mul(forestFar)).toVar();
     // detail lost to the footprint shows up as roughness, not as shimmer
     rough.assign(rough.add(smoothstep(0.02, 0.6, fp).mul(0.08)).clamp(0.03, 1));
@@ -584,7 +593,7 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
       // One candidate crystal per 3 cm cell. A glint stays at least about a pixel wide so it is
       // rasterised every frame (stable, no crawling); when cells shrink below a pixel it fades out.
       const CELL = 0.03;
-      const fadeG: N = clamp(float(CELL).div(fp).sub(0.9).div(0.9), 0, 1).mul(smoothstep(15, 45, dist).oneMinus()).mul(snowW).mul(trail.oneMinus()).mul(print.oneMinus()).toVar();
+      const fadeG: N = clamp(float(CELL).div(fp).sub(0.9).div(0.9), 0, 1).mul(smoothstep(15, 45, dist).oneMinus()).mul(snowW).mul(trail.oneMinus()).mul(pressed.oneMinus()).toVar(); // no glints on pressed snow: on its steep walls they flashed and bloomed
       If(fadeG.greaterThan(0.001), () => {
         const gp: N = xz.div(CELL);
         const ci: N = floor(gp);

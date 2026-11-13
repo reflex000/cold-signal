@@ -83,9 +83,11 @@ export function createWeatherSystem(engine: Engine, world: World | null = null):
   // ---- snow ----
   // (flakes and clumps of a wind-driven snowfall a little larger than single crystals, so that a
   // storm reads as falling snow in a frame and not only as fog)
-  const near = new SnowLayer({ name: 'snow.near', max: 24000, half: 11, below: 4, above: 9, size: [0.009, 0.022], shutter: 1 / 40, opacity: 0.95, seed: 1 });
-  const mid = new SnowLayer({ name: 'snow.mid', max: 9000, half: 26, below: 8, above: 18, size: [0.016, 0.04], shutter: 1 / 20, opacity: 0.6, seed: 2 });
-  scene.add(near.mesh, mid.mesh);
+  // close: big soft streaks crossing right in front of the eye, the depth cue of a blizzard (SNOW)
+  const close = new SnowLayer({ name: 'snow.close', max: 9000, half: 3.6, below: 1.8, above: 3.2, size: [0.012, 0.03], shutter: 1 / 30, opacity: 0.75, seed: 3, sheets: 0.5 });
+  const near = new SnowLayer({ name: 'snow.near', max: 24000, half: 11, below: 4, above: 9, size: [0.009, 0.022], shutter: 1 / 40, opacity: 0.95, seed: 1, sheets: 0.8 });
+  const mid = new SnowLayer({ name: 'snow.mid', max: 9000, half: 26, below: 8, above: 18, size: [0.016, 0.04], shutter: 1 / 20, opacity: 0.6, seed: 2, sheets: 1 });
+  scene.add(close.mesh, near.mesh, mid.mesh);
   const drift = new Spindrift(world);
   scene.add(drift.mesh);
 
@@ -180,10 +182,16 @@ export function createWeatherSystem(engine: Engine, world: World | null = null):
     SNOWU.turbulence.value = Math.min(1, storm * 0.8 + gust * 0.4);
     SNOWU.camVel.value.copy(camVel);
     SNOWU.amount.value = smooth(0, 0.15, snowfall);
+    // a storm by day: crystals lit by the bright overcast zenith read well above the haze
+    SNOWU.bright.value = 1.3 + 0.9 * smooth(0.15, 0.6, storm);
+    SNOWU.sheets.value = smooth(0.2, 0.7, storm) * (0.65 + 0.35 * gust);
+    SNOWU.sheetShift.value = (SNOWU.sheetShift.value + speed * 0.9 * dt) % 24;
     const count = quality.snowParticles;
+    close.setCount(Math.min(close.max, count * 0.5) * Math.min(1, snowfall * 1.15));
     near.setCount(Math.min(near.max, count) * Math.min(1, snowfall * 1.15));
     mid.setCount(Math.min(mid.max, count * 0.5) * Math.min(1, snowfall * 1.15));
     const wx = env.windX * (1 + 0.65 * gust) * dt, wz = env.windZ * (1 + 0.65 * gust) * dt;
+    close.advance(wx, wz);
     near.advance(wx, wz);
     mid.advance(wx, wz);
 
@@ -218,7 +226,8 @@ export function createWeatherSystem(engine: Engine, world: World | null = null):
     dispose() {
       post?.remove('storm');
       post?.remove('whiteout');
-      scene.remove(near.mesh, mid.mesh, drift.mesh);
+      scene.remove(close.mesh, near.mesh, mid.mesh, drift.mesh);
+      close.dispose();
       near.dispose();
       mid.dispose();
       drift.dispose();
