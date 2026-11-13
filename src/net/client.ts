@@ -340,7 +340,13 @@ export class ClientSession {
     Object.assign(this.env, st.env);
     Object.assign(this.objective, st.objective);
     if (st.stats) Object.assign(this.stats, st.stats);
-    if (Array.isArray(st.ice)) for (const c of st.ice) this.ice.set(c.i, { i: c.i, stress: c.stress, hole: c.hole });
+    if (Array.isArray(st.ice)) {
+      for (const c of st.ice) {
+        const cell: IceCell = { i: c.i, stress: c.stress, hole: c.hole };
+        if (typeof c.skin === 'number') cell.skin = c.skin;
+        this.ice.set(c.i, cell);
+      }
+    }
     this.frames.push({ tick: st.tick, env: st.env, objective: st.objective, stats: undefined, ice: [], events: [], done: true });
     for (const e of st.ents) {
       const tr = this.makeTrack(e, true);
@@ -450,12 +456,15 @@ export class ClientSession {
     const ice = fr.ice;
     for (let i = 0; i < ice.length; i++) {
       const c = ice[i];
-      if (!c.hole && !(c.stress > 0)) this.ice.delete(c.i);
+      if (!c.hole && !(c.stress > 0) && c.skin === undefined) this.ice.delete(c.i);
       else {
         let m = this.ice.get(c.i);
         if (!m) this.ice.set(c.i, (m = { i: c.i, stress: 0, hole: false }));
         m.stress = c.stress;
         m.hole = c.hole;
+        // new ice over a broken cell (IceCell.skin): present on such cells only
+        if (typeof c.skin === 'number') m.skin = c.skin;
+        else delete m.skin;
       }
     }
     if (fr.stats) Object.assign(this.stats, fr.stats);

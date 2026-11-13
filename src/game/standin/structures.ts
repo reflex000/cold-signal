@@ -12,7 +12,7 @@ import type { GfxSystem } from '../../gfx/api';
 import type { CsEngine } from '../../gfx/engine';
 import { createPropsSystem, type PropsSystem } from '../../models/instances';
 import { Builder, MAT, PAL, hex, type MatId, type RGB } from '../../models/kit';
-import { hasModel, register } from '../../models/registry';
+import { getModel, hasModel, modelKey, register } from '../../models/registry';
 import type { Blueprint, SolidKind } from '../../world/blueprints';
 import { blueprint } from '../../world/index';
 import type { PropInst, World } from '../../world/types';
@@ -147,16 +147,42 @@ export interface StandinStructures extends GfxSystem {
   readonly props: PropsSystem;
 }
 
-/** Adds KIT's props system with every placed model and stand-in. */
-export function createStandinStructures(engine: CsEngine, world: World): StandinStructures {
+/**
+ * Adds KIT's props system with every placed model and stand-in. Building the models takes seconds
+ * (the fuselage and the cabin about a second each): they are built first, one at a time, with a
+ * pause whenever a slice of work passes ~40 ms (pass `pause`, e.g. a frame, and the loading screen
+ * keeps moving); the registry keeps every build for the page's life, so a second game (or a return
+ * to the title) builds nothing again. Then the props system takes them from the registry's cache.
+ */
+export async function createStandinStructures(
+  engine: CsEngine, world: World,
+  onProgress?: (f: number) => void, pause?: () => Promise<void>,
+): Promise<StandinStructures> {
   const list: PropInst[] = world.props.map((p) => {
     const model = modelFor(p);
     return model === p.model ? p : { ...p, model };
   });
   // Barrels are drawn cold: a burning barrel is a FireEnt, and its flames come from the fire's own visual.
+  const optsOf = (inst: PropInst) => (inst.model === 'barrel' ? { lit: false } : undefined);
+  if (pause) {
+    const seen = new Set<string>();
+    let slice = performance.now();
+    for (let i = 0; i < list.length; i++) {
+      const inst = list[i];
+      const key = modelKey(inst.model, inst.seed, optsOf(inst));
+      if (seen.has(key)) continue;
+      seen.add(key);
+      getModel(inst.model, inst.seed, optsOf(inst));
+      if (performance.now() - slice > 40) {
+        onProgress?.(i / list.length);
+        await pause();
+        slice = performance.now();
+      }
+    }
+  }
   const props = createPropsSystem({ scene: engine.scene, camera: engine.camera }, list, {
     shadows: true,
-    opts: (inst) => (inst.model === 'barrel' ? { lit: false } : undefined),
+    opts: optsOf,
   });
   return {
     name: 'structures',

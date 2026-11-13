@@ -469,10 +469,12 @@ export interface TerrainResult {
 }
 
 /** Build the heightmap (before the route is carved into it). */
-export function buildTerrain(seed: number, progress: (p: number, label: string) => void): TerrainResult {
+/** The terrain build, one phase per step: yields [progress 0..0.3, label] between phases (so a caller can let
+ * the browser draw the loading line), returns the result. buildTerrain() runs it straight through. */
+export function* buildTerrainSteps(seed: number): Generator<[number, string], TerrainResult, void> {
   const nz = makeNoises(seed);
   // --- coarse shape
-  progress(0.02, 'Shaping the mountain');
+  yield [0.02, 'Shaping the mountain'];
   const c = new Float64Array(CN * CN);
   const colRidge = new Float64Array(CN);
   for (let i = 0; i < CN; i++) colRidge[i] = L.ridgeZ(-EXT + i * CCELL);
@@ -482,7 +484,7 @@ export function buildTerrain(seed: number, progress: (p: number, label: string) 
     const creek = L.westCreekX(z);
     for (let i = 0; i < CN; i++) c[j * CN + i] = macro(-EXT + i * CCELL, z, nz, rr, colRidge[i], creek);
   }
-  progress(0.06, 'Eroding the slopes');
+  yield [0.06, 'Eroding the slopes'];
   // the ravine floor and the side gully are graded by hand (the route and the tail section
   // depend on their heights): erosion leaves them alone
   const hard = new Float32Array(CN * CN).fill(1);
@@ -507,7 +509,7 @@ export function buildTerrain(seed: number, progress: (p: number, label: string) 
       cs[k] = Math.sqrt(gx * gx + gz * gz);
     }
   }
-  progress(0.11, 'Raising the walls');
+  yield [0.11, 'Raising the walls'];
   const h = new Float32Array(N * N);
   upsample(c, h);
   // the ground that closes the square, as a delta on a 4 m grid
@@ -521,7 +523,7 @@ export function buildTerrain(seed: number, progress: (p: number, label: string) 
       wd[j2 * MN + i2] = walls(base, x, z, nz) - base;
     }
   }
-  progress(0.16, 'Cutting the cliffs');
+  yield [0.16, 'Cutting the cliffs'];
   // per-column values
   // the cliff band: its foot meanders, its height varies, buttresses jut from the face; all of
   // it held still for a few metres either side of the cave, which is built against the face
@@ -608,7 +610,7 @@ export function buildTerrain(seed: number, progress: (p: number, label: string) 
       h[k] = v;
     }
   }
-  progress(0.3, 'Levelling the sites');
+  yield [0.3, 'Levelling the sites'];
   for (const id of ['wreck', 'camp', 'tower'] as const) {
     const p = L.PLACES[id];
     steer(h, p.x, p.z, p.alt, 150);
@@ -616,6 +618,15 @@ export function buildTerrain(seed: number, progress: (p: number, label: string) 
   flattenLake(h, seed);
   const pads = applyPads(h);
   return { h, pads };
+}
+
+export function buildTerrain(seed: number, progress: (p: number, label: string) => void): TerrainResult {
+  const g = buildTerrainSteps(seed);
+  for (;;) {
+    const r = g.next();
+    if (r.done) return r.value;
+    progress(r.value[0], r.value[1]);
+  }
 }
 
 /** Footprint circle (world) of every structure part of a site, for keeping trees and rocks off. */

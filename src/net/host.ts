@@ -30,8 +30,36 @@ interface Conn {
   starved: number;
   /** rev of every slow entity as last sent to this client. */
   sent: Map<NetId, number>;
+  /** The wire form (JSON) of every dynamic entity as last sent to this client: unchanged ones are skipped. */
+  dynSent: Map<NetId, string>;
   open: boolean;
 }
+
+/**
+ * The wire copy of an entity, env or objective: a deep copy with every fractional number rounded to
+ * a thousandth (a millimetre, a milliradian). Remote things are drawn 100 ms in the past between two
+ * such samples, so nothing a player sees changes; the snapshot shrinks by about a third. The receiving
+ * client's own player goes at full precision (its prediction replays commands on top of it).
+ */
+function wire<T>(v: T): T {
+  if (Array.isArray(v)) {
+    const a = new Array(v.length);
+    for (let i = 0; i < v.length; i++) {
+      const x = v[i];
+      a[i] = typeof x === 'object' && x !== null ? wire(x) : typeof x === 'number' ? q3(x) : x;
+    }
+    return a as unknown as T;
+  }
+  const o = { ...(v as object) } as Record<string, unknown>;
+  for (const k in o) {
+    const x = o[k];
+    if (typeof x === 'number') o[k] = q3(x);
+    else if (typeof x === 'object' && x !== null) o[k] = wire(x);
+  }
+  return o as T;
+}
+
+const q3 = (x: number): number => (Number.isInteger(x) ? x : Math.round(x * 1000) / 1000);
 
 /**
  * Deep copy of plain JSON data (entities, env, objective). The spread copies an object's shape in
@@ -85,7 +113,7 @@ export class Host {
 
   /** Start listening to a transport. The client joins by sending 'hello'. */
   connect(t: HostSideTransport): void {
-    const conn: Conn = { t, id: 0, queue: [], lastSeq: 0, starved: 0, sent: new Map(), open: true };
+    const conn: Conn = { t, id: 0, queue: [], lastSeq: 0, starved: 0, sent: new Map(), dynSent: new Map(), open: true };
     this.conns.push(conn);
     t.onClose = () => this.drop(conn, false);
     t.onMessage = (m) => this.receive(conn, m);
@@ -150,13 +178,20 @@ export class Host {
       return events;
     }
 
-    // --- what every client gets, copied once --------------------------------------------------
-    const env: Env = clone(st.env);
+    // --- what every client gets, copied once (the wire copies, rounded; see wire()) --------------
+    const env: Env = wire(st.env);
     const objective: Objective = clone(st.objective);
-    const dyn: Entity[] = [];
+    const dyn = this.dyn;
+    const dynJson = this.dynJson;
+    dyn.length = 0;
+    dynJson.length = 0;
     for (const k of DYNAMIC_KINDS) {
       const list = sim.ctx.all(k);
-      for (let i = 0; i < list.length; i++) dyn.push(clone(list[i] as Entity));
+      for (let i = 0; i < list.length; i++) {
+        const copy = wire(list[i] as Entity);
+        dyn.push(copy);
+        dynJson.push(JSON.stringify(copy));
+      }
     }
     const removed = sim.removed.length > 0 ? sim.removed.slice() : (EMPTY_IDS as NetId[]);
     const ice = this.iceChanges();
@@ -186,7 +221,22 @@ export class Host {
     for (const c of conns) {
       if (!c.id || !c.open) continue;
       const me = sim.ctx.get<PlayerEnt>(c.id);
-      let ents = dyn;
+      // Dynamic entities: the client's own player always, at full precision (its prediction starts
+      // from it); every other one only when its wire form changed since this client last got it (a
+      // heavy log lying in the snow, a dead wolf, a fire between two changes): the client holds an
+      // entity that is not in a snapshot at its last state, exactly as it does slow entities.
+      const ents: Entity[] = [];
+      const ds = c.dynSent;
+      for (let i = 0; i < dyn.length; i++) {
+        const e = dyn[i];
+        if (e.id === c.id) {
+          if (me) ents.push(clone(me as Entity));
+          continue;
+        }
+        if (ds.get(e.id) === dynJson[i]) continue;
+        ds.set(e.id, dynJson[i]);
+        ents.push(e);
+      }
       for (const k of STATIC_KINDS) {
         const list = sim.ctx.all(k);
         for (let i = 0; i < list.length; i++) {
@@ -195,11 +245,13 @@ export class Host {
           c.sent.set(e.id, e.rev);
           let copy = copies.get(e.id);
           if (!copy) copies.set(e.id, (copy = clone(e)));
-          if (ents === dyn) ents = dyn.slice();
           ents.push(copy);
         }
       }
-      for (let i = 0; i < removed.length; i++) c.sent.delete(removed[i]);
+      for (let i = 0; i < removed.length; i++) {
+        c.sent.delete(removed[i]);
+        ds.delete(removed[i]);
+      }
       const snap: Snapshot = {
         t: 'snap',
         tick: st.tick,
@@ -230,6 +282,9 @@ export class Host {
 
   private readonly copies = new Map<NetId, Entity>();
   private readonly connScratch: Conn[] = [];
+  /** This tick's wire copies of the dynamic entities and their JSON (shared by every client). */
+  private readonly dyn: Entity[] = [];
+  private readonly dynJson: string[] = [];
 
   private receive(c: Conn, m: ClientMsg): void {
     if (!c.open || !m || typeof m !== 'object') return;
@@ -283,6 +338,7 @@ export class Host {
     this.claimed.add(p.id);
     // Baseline: the welcome carries everything, so the client has every slow entity at its current rev.
     c.sent.clear();
+    c.dynSent.clear();
     for (const k of STATIC_KINDS) for (const e of sim.ctx.all(k)) c.sent.set(e.id, e.rev);
     c.t.send({ t: 'welcome', proto: PROTOCOL, you: p.id, seed: sim.state.seed, state: JSON.parse(sim.serialize()) });
   }
@@ -323,7 +379,10 @@ export class Host {
       const code = iceCode(c);
       if (sent.get(c.i) !== code) {
         sent.set(c.i, code);
-        (out ??= []).push({ i: c.i, stress: c.stress, hole: c.hole });
+        // the new ice over a broken cell goes too (in millimetres): clients draw the film and the scar
+        const cell: IceCell = { i: c.i, stress: c.stress, hole: c.hole };
+        if (c.skin !== undefined) cell.skin = Math.round(c.skin * 1000) / 1000;
+        (out ??= []).push(cell);
       }
     }
     if (sent.size > cells.length) {
@@ -342,9 +401,9 @@ export class Host {
   }
 }
 
-/** A cell's state at the resolution worth sending: a hole, or stress in hundredths. */
+/** A cell's state at the resolution worth sending: a hole, or stress in hundredths; and its new skin in millimetres. */
 function iceCode(c: IceCell): number {
-  return c.hole ? 1000 : Math.round(c.stress * 100);
+  return (c.hole ? 1000 : Math.round(c.stress * 100)) + (c.skin !== undefined ? 2000 + Math.round(c.skin * 1000) * 4096 : 0);
 }
 
 function sameStats(a: Stats | null, b: Stats): boolean {

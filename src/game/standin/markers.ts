@@ -1,6 +1,6 @@
 // STAND-IN for the entity visuals nobody else draws yet: plain coloured shapes so everything can
 // be seen and walked to. Pickups, crates, wood, heavy logs, notes, campfire stones, flares,
-// players, wolves and the helicopter. One instanced mesh per shape, rewritten every frame from
+// players and wolves (the helicopter is game/heli.ts). One instanced mesh per shape, rewritten every frame from
 // view.list(kind) (no allocation).
 // Others take over kinds at run time by wrapping update() with a filtered view (keep `update` a
 // plain assignable property): FX hides fires and flares (and lights them from its own pool),
@@ -284,10 +284,6 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
           const s = Math.sin(e.yaw), co = Math.cos(e.yaw);
           add(posts, e.x + co * fx + s * -fz, e.y, e.z - s * fx + co * -fz, 0, 0, 0, 0.045, 0.5, 0.045, c);
         }
-      }
-      for (const e of view.list('heli')) {
-        add(boxes, e.x, e.y, e.z, e.yaw, 0, 0, 2.6, 2.6, 11, [0.1, 0.11, 0.12]);
-        add(cyls, e.x, e.y + 2.8, e.z, t * 20, 0, 0, 6.5, 0.04, 0.2, [0.05, 0.05, 0.05]);
       }
       for (const p of all) done(p);
     },

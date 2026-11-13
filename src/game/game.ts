@@ -30,13 +30,14 @@ import { DT, type Action, type InputCmd, type SimEvent, type ToolId } from '../s
 import { TOOL_ORDER } from '../ui/text';
 import { createUI } from '../ui/index';
 import type { UiApi, UiGame } from '../ui/api';
-import { createWorld, type WorldEx } from '../world/index';
+import { createWorldAsync, type WorldEx } from '../world/index';
 import type { World } from '../world/types';
 import { BotBrain, litFires, Mind, type BodyLink } from './bots';
 import { ViewReader } from './botnav';
 import { CameraRig } from './camera';
 import { FocusPicker } from './focus';
 import { HudModel } from './hudmodel';
+import { itemIcon } from './icons';
 import { Input } from './input';
 import { MapMaker } from './map';
 import { readParams, type Params } from './params';
@@ -103,6 +104,8 @@ export class Game {
   private tickMs = 0;
   private ticks = 0;
   private framesRendered = 0;
+  /** Milliseconds from boot to the first frame on screen. */
+  loadMs = 0;
   private readyResolve: (() => void) | null = null;
   readonly ready: Promise<void>;
   private bootError: unknown = null;
@@ -159,15 +162,26 @@ export class Game {
 
   private loading(progress: number, label: string): void {
     this.bus.emit('loading', { progress, label });
+    // the longest stretch the loading line stood still (the browser could not draw), for the tools
+    const now = performance.now();
+    if (this.loadLast > 0 && now - this.loadLast > this.loadGap.ms) this.loadGap = { ms: now - this.loadLast, before: label };
+    if (this.loadLast > 0 && now - this.loadLast > 250) this.loadStalls.push(`${Math.round(now - this.loadLast)} ms before '${label}'`);
+    this.loadLast = now;
   }
+  private loadLast = 0;
+  /** Every stretch over 250 ms without a loading-line update (tools). */
+  readonly loadStalls: string[] = [];
+  /** The longest gap between two loading-line updates during boot, and the step that ended it. */
+  loadGap = { ms: 0, before: '' };
 
   private async boot(): Promise<void> {
     const p = this.params;
+    const bootT0 = performance.now();
     const uiGame: UiGame = {
       view: this.view,
       actions: this.actions,
       touch: this.input.sink,
-      icon: () => null, // the UI draws its own icons until item models exist
+      icon: (item) => itemIcon(item), // canvas still lifes (icons.ts); the HUD keeps the UI's line icons
       map: () => (this.mapMaker ? this.mapMaker.get() : null),
       gpu: this.gpu,
       sfx: (name) => this.audio?.sfx(name),
@@ -205,7 +219,8 @@ export class Game {
     await nextFrame();
     await nextFrame();
     const t0 = performance.now();
-    this.world = createWorld(p.seed, (f, label) => this.loading(0.08 + f * 0.6, label));
+    // phase by phase, a frame between phases: the loading line keeps moving (about 1.5 s of work)
+    this.world = await createWorldAsync(p.seed, (f, label) => this.loading(0.08 + f * 0.6, label), nextFrame);
     const world = this.world;
     (this.view as unknown as { world: World }).world = world;
     if (p.dev) console.info(`[game] world ${p.seed} built in ${Math.round(performance.now() - t0)} ms`);
@@ -220,7 +235,7 @@ export class Game {
     // --- what you see
     this.loading(0.72, 'Laying the snow');
     await nextFrame();
-    this.visuals = await addVisualSystems(engine, world, realSelection(p.real));
+    this.visuals = await addVisualSystems(engine, world, realSelection(p.real), (f, label) => this.loading(0.72 + f * 0.13, label), nextFrame);
 
     // --- a new game waits behind the title
     this.openSession(null);
@@ -243,6 +258,8 @@ export class Game {
     await nextFrame();
     await nextFrame();
     (window as unknown as Record<string, unknown>).DONE = true;
+    this.loadMs = performance.now() - bootT0;
+    if (p.dev) console.info(`[game] first frame ${Math.round(this.loadMs)} ms after boot`);
     this.mapMaker.start();
     if (!p.still) this.startLoop();
     this.readyResolve?.();
@@ -732,6 +749,9 @@ export class Game {
       tickMs: Math.round(this.tickMs * 1000) / 1000,
       ticks: this.ticks,
       frames: this.framesRendered,
+      loadMs: Math.round(this.loadMs),
+      loadGap: { ms: Math.round(this.loadGap.ms), before: this.loadGap.before },
+      loadStalls: this.loadStalls,
       ents: counts,
       backend: e.backend,
       quality: e.quality.name,

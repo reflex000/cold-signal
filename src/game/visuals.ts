@@ -15,6 +15,10 @@ import { createStandinSky } from './standin/sky';
 import { createStandinStructures } from './standin/structures';
 import { createStandinTerrain } from './standin/terrain';
 import { createStandinWeather } from './standin/weather';
+import { createIceVisuals } from './icevis';
+import { createInteriorLight } from './interior';
+import { createHeliVisual } from './heli';
+import type { WorldEx } from '../world/index';
 // STRUCTURES: registers the wreck and every place's models under their blueprint names (so they replace the stand-ins) and drives their doors, crank, panel and lights.
 import { createStructureDriver } from '../models/structures';
 
@@ -79,21 +83,50 @@ async function real(name: VisualName, engine: CsEngine, world: World): Promise<G
   }
 }
 
-/** Add every visual system to the engine. Resolves once all are in (call engine.warmup() after). */
-export async function addVisualSystems(engine: CsEngine, world: World, want: Set<VisualName>): Promise<VisualReport> {
+const LABEL: Record<VisualName, string> = {
+  sky: 'Lighting the sky',
+  weather: 'Bringing in the storm',
+  terrain: 'Laying the snow',
+  forest: 'Growing the forest',
+};
+
+/**
+ * Add every visual system to the engine. Resolves once all are in (call engine.warmup() after).
+ * With `pause` (e.g. one animation frame) the browser gets to draw between systems and inside the
+ * long structure build, so the loading line keeps moving; `onProgress` reports 0..1 and a label.
+ */
+export async function addVisualSystems(
+  engine: CsEngine, world: World, want: Set<VisualName>,
+  onProgress?: (f: number, label: string) => void, pause?: () => Promise<void>,
+): Promise<VisualReport> {
   const used = {} as Record<VisualName, 'real' | 'standin'>;
+  let k = 0;
   for (const name of NAMES) {
+    onProgress?.((k++ / NAMES.length) * 0.5, LABEL[name]);
+    if (pause) await pause();
     let sys: GfxSystem | null = want.has(name) ? await real(name, engine, world) : null;
     used[name] = sys ? 'real' : 'standin';
     if (!sys) sys = standin(name, engine, world);
     engine.add(sys);
   }
-  const structures = createStandinStructures(engine, world);
+  onProgress?.(0.5, 'Building the places');
+  if (pause) await pause();
+  const structures = await createStandinStructures(engine, world, (f) => onProgress?.(0.5 + f * 0.45, 'Building the places'), pause);
+  onProgress?.(0.95, 'Last things');
+  if (pause) await pause();
   engine.add(structures);
   engine.add(structures.props);
   engine.add(createStructureDriver(structures.props));
+  engine.add(createIceVisuals(engine, world)); // TOGETHER: open water and new ice on the lake (view.ice)
+  engine.add(createHeliVisual(structures.props)); // TOGETHER: the rescue helicopter (a KIT model flown where the HeliEnt is)
   engine.add(createStandinMarkers(engine));
+  onProgress?.(0.97, 'Lighting the fires');
+  if (pause) await pause();
   try { engine.add((await import('../gfx/fx')).createFxSystem(engine, world)); } catch (e) { console.warn('[visuals] src/gfx/fx failed to start:', e); } // FX: fire, flares, light pool, breath, goggle overlays
+  engine.add(createInteriorLight(engine, world as WorldEx)); // TOGETHER: daylight in the rooms, the eye adapting indoors (uses FX's light pool)
+  onProgress?.(0.99, 'Waking the others');
+  if (pause) await pause();
   try { engine.add((await import('../actors')).createActorsSystem(engine, world)); } catch (e) { console.warn('[visuals] src/actors failed to start:', e); } // FIGURES: players and wolves, animated (the markers stop drawing them)
+  try { engine.add((await import('../gfx/snow')).createSnowSystem(engine, world)); } catch (e) { console.warn('[visuals] src/gfx/snow failed to start:', e); } // SNOW: footprints, paw tracks, drags and hollows in the snow (U.trailTex)
   return { used };
 }

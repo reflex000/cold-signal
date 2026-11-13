@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makePickup, makeWolf } from '../sim/entities';
+import { makeLog, makePickup, makeWolf } from '../sim/entities';
 import { Sim } from '../sim/sim';
 import { cmd, jsonIssues, scriptCmd } from '../sim/testkit';
 import { createTestWorld } from '../sim/testworld';
@@ -242,7 +242,8 @@ describe('host and client', () => {
     const ref = final({ wire: 'ref' }), json = final({ wire: 'json' }), lag = final({ wire: 'json', lagMs: 150 });
     expect(json.digest).toEqual(ref.digest);
     expect(json.r.sim.serialize()).toBe(ref.r.sim.serialize());
-    for (const x of [ref, json, lag]) expect(x.bot).toEqual(x.hostBot);
+    // remote entities travel rounded to a thousandth (host.ts wire()): a millimetre of the host's position
+    for (const x of [ref, json, lag]) for (let i = 0; i < 3; i++) expect(x.bot[i]).toBeCloseTo(x.hostBot[i], 3);
     for (let i = 0; i < 3; i++) {
       expect(lag.me[i]).toBeCloseTo(ref.me[i], 9);
       expect(lag.bot[i]).toBeCloseTo(ref.bot[i], 9);
@@ -278,7 +279,7 @@ describe('host and client', () => {
     expect(lagged).toBeLessThan(INTERP_DELAY + 0.15 + 0.08);
     // Yaw and the newer snapshot's other fields came along.
     const v = r.client.ents.get(bot.id) as PlayerEnt;
-    expect(v.yaw).toBeCloseTo(EAST, 9);
+    expect(v.yaw).toBeCloseTo(EAST, 3); // a milliradian on the wire
     expect(v.bot).toBe(true);
     expect(v.name).toBe('Bo');
   });
@@ -488,8 +489,9 @@ describe('host and client', () => {
     const pa = sim.ctx.get<PlayerEnt>(a.myId)!, pb = sim.ctx.get<PlayerEnt>(b.myId)!;
     expect(a.me!.x).toBeCloseTo(pa.x, 6);
     expect(b.me!.z).toBeCloseTo(pb.z, 6);
-    expect(a.ents.get(b.myId)!.x).toBeCloseTo(pb.x, 9);
-    expect(b.ents.get(a.myId)!.z).toBeCloseTo(pa.z, 9);
+    // the other player arrives rounded to a millimetre (host.ts wire()); each own player at full precision
+    expect(a.ents.get(b.myId)!.x).toBeCloseTo(pb.x, 3);
+    expect(b.ents.get(a.myId)!.z).toBeCloseTo(pa.z, 3);
     expect(a.list('player').length).toBe(2);
   });
 
@@ -531,6 +533,32 @@ describe('host and client', () => {
     for (let n = 0; n < 30; n++) r.tick({ yaw: Math.PI });
     const h = hostPlayer(r), me = r.client.me!;
     expect(Math.hypot(me.x - h.x, me.z - h.z)).toBeLessThan(1e-6);
+  });
+
+  it('keeps a snapshot at 4 players and 16 wolves under 8 KB: numbers rounded, unchanged entities not resent', () => {
+    const sim = new Sim(world, { seed: 8, debug: true, players: 4 });
+    const r = rig({ wire: 'json' }, sim);
+    const bots = [1, 2, 3].map((k) => r.host.addBot('B' + k));
+    for (let i = 0; i < 16; i++) sim.ctx.spawn(makeWolf(10 + (i % 4) * 3, 0, -20 - Math.floor(i / 4) * 3, { pack: i % 4, alpha: i % 4 === 0 }));
+    const log = sim.ctx.spawn(makeLog(-6, 0, 12, { len: 2.4 })); // a heavy log nobody touches
+    const from = r.got.length;
+    for (let n = 0; n < 150; n++) {
+      for (let k = 0; k < 3; k++) r.host.setBotInput(bots[k].id, scriptCmd(k + 1, n));
+      r.tick(scriptCmd(0, n));
+    }
+    const snaps = r.got.slice(from).filter((m): m is Snapshot => m.t === 'snap');
+    const bytes = snaps.map((s) => JSON.stringify(s).length);
+    const avg = bytes.reduce((a, b) => a + b, 0) / bytes.length;
+    expect(snaps.length).toBeGreaterThan(140);
+    expect(avg, `${(avg / 1024).toFixed(2)} KB per snapshot`).toBeLessThan(8 * 1024);
+    // the log went out once, then not again until it changes
+    expect(snaps.filter((s) => s.ents.some((e) => e.id === log.id)).length).toBe(1);
+    // remote numbers come rounded to a thousandth; the client's own player at full precision
+    const last = snaps[snaps.length - 1];
+    const wolf = last.ents.find((e) => e.kind === 'wolf')!;
+    expect(Math.abs(wolf.x * 1000 - Math.round(wolf.x * 1000))).toBeLessThan(1e-6);
+    const mine = last.ents.find((e) => e.id === r.client.myId)!;
+    expect(mine.x).toBe(hostPlayer(r).x);
   });
 
   it('runs a host tick and a client frame for 4 players, 12 wolves and 600 statics in well under 1 ms', () => {

@@ -16,12 +16,14 @@
 //             a flare between the pack and the group in the dark; otherwise close up on the group
 //   revive    a downed teammate within 60 m: go, kneel, hold USE until they are up
 //   carry     the leader lifts a heavy log: take the free end and walk it at their pace
-//   tower     carry radio parts to the panel and fit them; crank the generator; the winch circle at the end
+//   tower     once all five are found, whoever carries a part takes it to the panel and fits it; crank the
+//             generator (two on the handles go faster); shelter in the shed for the hold-out; the winch circle
 //   lead      (autopilot) warm up at a fire or build one when cold, sit out a whiteout at a fire, then the
 //             next radio part in route order, picking up useful things it passes
-//   follow    (companion) build and feed a fire when the group stops in the cold, hand over what the leader
-//             lacks, gather sticks and chop dead wood while the group is camped, and keep a slot beside the
-//             leader: closer in bad weather (inside huddle range), never onto thin ice or off a cliff
+//   follow    (companion) build and feed a fire when the group stops in the cold; hand over what the leader
+//             lacks (radio parts always: the leader goes where they are needed); gather sticks and chop dead
+//             wood while the group is camped; keep a slot beside the leader: closer in bad weather (inside
+//             huddle range), never onto thin ice or off a cliff
 // Movement goes through botnav.ts (trail, local A*, hazard checks). Simple, readable rules; no cheats:
 // a mind reads the state (as any client does) and its body obeys the same simulation as everyone's.
 // Owner: TOGETHER (first version: GAME).
@@ -36,6 +38,11 @@ import type { WorldEx } from '../world/index';
 import { iceRisk, Planner, SimReader, steer, Walker, type Reader, type Steer } from './botnav';
 
 const NAMES = ['Mara', 'Tomas', 'Ines'];
+/** Extra detail in Mind.doing (tools). */
+export let DEBUG_BOTS = false;
+export function debugBots(on: boolean): void {
+  DEBUG_BOTS = on;
+}
 
 export type Role = 'follow' | 'lead';
 
@@ -71,6 +78,8 @@ export class Mind {
   leader: NetId = 0;
   /** What the mind is doing right now (for tools and debugging). */
   doing = 'idle';
+  /** Navigation detail for tools (with DEBUG_BOTS). */
+  dbg = '';
   private readonly cmd: InputCmd = neutralInput();
   private readonly walker: Walker;
   private readonly sv: Steer = { yaw: 0, mz: 0, sprint: false, jump: false, arrived: false, blocked: false };
@@ -93,8 +102,9 @@ export class Mind {
   private camping = false;
   private stormPrev = 0;
   private stormRise = 0;
-  /** Lead: goals that failed recently (part -> retry time). */
+  /** Things that could not be reached lately (key -> time to try again), and how often they failed. */
   private readonly skip = new Map<string, number>();
+  private readonly fails = new Map<string, number>();
   private chopId: NetId = 0;
   private yawSet = false;
   private lastFlare = -1e9;
@@ -173,6 +183,10 @@ export class Mind {
   /** Walk toward (x, z); true once within `near`. */
   private go(r: Reader, pl: Planner, p: PlayerEnt, x: number, z: number, near: number, dt: number, run = false, goal?: (x: number, z: number) => boolean): boolean {
     const s = steer(pl, r, this.walker, p, x, z, near, dt, this.sv, { run, goal });
+    if (DEBUG_BOTS) {
+      const w = this.walker, q = w.path[0];
+      this.dbg = ` -> ${x.toFixed(1)},${z.toFixed(1)} path${w.path.length}${q ? `(${q.x.toFixed(1)},${q.z.toFixed(1)})` : ''}${s.blocked ? ' BLOCKED' : ''} stuck${w.stuck}`;
+    }
     if (s.arrived) return true;
     this.yaw = s.yaw;
     this.cmd.mz = s.mz;
@@ -459,7 +473,8 @@ export class Mind {
     }
     const carried = PARTS.find((k) => has(p, PART_ITEM[k]) > 0);
     const atTower = dist(p, r.world.poi('tower')) < 90;
-    if (carried && (stage === 'tower' || stage === 'power') && (atTower || this.role === 'lead')) {
+    // every part found: whoever carries one takes it to the panel, from wherever they are
+    if (carried && (stage === 'tower' || stage === 'power')) {
       const panel = this.device(r, 'panel');
       if (!panel) return false;
       this.doing = 'install ' + carried;
@@ -554,40 +569,67 @@ export class Mind {
     }
     this.look(p, f.x, f.y + 0.2, f.z);
     if (!f.lit) {
+      if (f.size <= 0.01) {
+        // burnt down to embers: wood on the embers catches by itself; no wood, no fire
+        const item = has(p, 'stick') > 0 ? 'stick' : has(p, 'log') > 0 ? 'log' : null;
+        if (f.embers <= 0 || !item) return false;
+        this.act({ t: 'feed', fire: f.id, item }, 'feed', 0.8);
+        return true;
+      }
       // a laid fire lights with a match (or by blowing on its embers); with neither it is no use
       if (has(p, 'matches') === 0 && f.embers <= 0) return false;
       this.act({ t: 'ignite', fire: f.id }, 'ignite', 1.6);
       return true;
     }
     if (f.fuel < FEED_BELOW && p.act === 'none') {
-      const item = has(p, 'log') > 0 && f.fuel < 90 ? 'log' : has(p, 'stick') > 0 ? 'stick' : has(p, 'log') > 0 ? 'log' : null;
+      // three sticks stay in the pack for the next fire, unless this one is all that stands between
+      // us and a storm or a freezing body; split logs burn longest and go first when it runs low
+      const reserve = this.camping || r.env().storm > 0.6 || p.core < 34.8 ? 0 : 3;
+      const sticks = has(p, 'stick') > reserve;
+      const item = has(p, 'log') > 0 && (f.fuel < 90 || !sticks) ? 'log' : sticks ? 'stick' : null;
       if (item) this.act({ t: 'feed', fire: f.id, item }, 'feed', 0.8);
     }
     return true;
   }
 
-  /** Build a campfire near the spot (x, z), facing it; true while working at it. */
+  /**
+   * Lay a campfire at a spot near (x, z), chosen once and kept until it is done or given up (the
+   * request moves with whoever asks; the spot must not). Stands 1.1 m short of it (buildFire lays the
+   * fire that far in front), faces it, holds still a moment so the host has the same facing, and asks.
+   * True while working at it.
+   */
   private build(r: Reader, pl: Planner, p: PlayerEnt, x: number, z: number, dt: number): boolean {
-    if (has(p, 'stick') < 3 || p.carry) return false;
-    // stand 1.1 m short of the spot (where buildFire lays it), facing it
-    const tryYaw = this.buildYaw;
-    const sx = x + Math.sin(tryYaw) * 1.1, sz = z + Math.cos(tryYaw) * 1.1;
-    if (!pl.passable(r, sx, sz) || !this.layable(r, pl, p, x, z)) {
+    if (has(p, 'stick') < 3 || p.carry || this.buildTries >= 12) return false;
+    let s = this.buildSpot;
+    if (!s || Math.hypot(s.x - x, s.z - z) > 4) {
+      s = this.buildSpot = { x, z };
+      this.buildYaw = Math.atan2(p.x - x, p.z - z); // first try: from the side we come from
+    }
+    const sx = s.x + Math.sin(this.buildYaw) * 1.1, sz = s.z + Math.cos(this.buildYaw) * 1.1;
+    if (!pl.passable(r, sx, sz) || !this.layable(r, pl, p, s.x, s.z)) {
+      // another stand, or (every third try) another spot a little way off
       this.buildYaw += 1.1;
       this.buildTries++;
+      if (this.buildTries % 3 === 0) s.x += 1.6 * Math.sin(this.buildTries), s.z += 1.6 * Math.cos(this.buildTries);
       return this.buildTries < 12;
     }
-    if (!this.go(r, pl, p, sx, sz, 0.35, dt)) return true;
-    this.look(p, x, r.world.heightAt(x, z), z, true);
-    if (Math.abs(wrapAngle(this.yaw - this.cmd.yaw)) < 0.06 && p.act === 'none') {
-      if (this.ready('buildFire', 2.5)) {
-        this.link?.act({ t: 'buildFire' });
-        this.buildTries++;
-        this.buildYaw += 0.7; // if it is refused, the next try faces another way
-      }
+    if (!this.go(r, pl, p, sx, sz, 0.3, dt)) {
+      this.aligned = 0;
+      if (this.giveUp('build' + this.buildTries)) this.buildTries++;
+      return true;
+    }
+    this.look(p, s.x, r.world.heightAt(s.x, s.z), s.z, true);
+    this.aligned = Math.abs(wrapAngle(this.yaw - p.yaw)) < 0.05 ? this.aligned + dt : 0;
+    if (this.aligned > 0.4 && p.act === 'none' && this.ready('buildFire', 2.5)) {
+      this.link?.act({ t: 'buildFire' });
+      this.buildTries++;
+      this.buildYaw += 0.7; // if it is refused, the next try faces another way
     }
     return true;
   }
+
+  private buildSpot: { x: number; z: number } | null = null;
+  private aligned = 0;
 
   /**
    * Get warm at a fire near (cx, cz): tend a lit one, light a laid one, build one, or fetch sticks
@@ -601,21 +643,39 @@ export class Mind {
       return this.tend(r, pl, p, lit, dt);
     }
     const laid = this.laidFire(r, cx, cz, Math.min(reach, 15));
-    if (laid && (has(p, 'matches') > 0 || laid.embers > 0)) return this.tend(r, pl, p, laid, dt);
+    if (laid && (has(p, 'matches') > 0 || laid.embers > 0)) {
+      this.buildSpot = null;
+      return this.tend(r, pl, p, laid, dt);
+    }
     if (has(p, 'matches') === 0 && !laid) return false;
-    if (has(p, 'stick') >= 3 && this.buildTries < 12) {
+    if (this.buildTries >= 12) {
+      // this place would not take a fire: try again somewhere else in a while
+      if (this.t - this.buildFailT > 45) {
+        this.buildTries = 0;
+        this.buildSpot = null;
+      } else {
+        if (this.buildFailT < this.t - 46) this.buildFailT = this.t;
+        return false;
+      }
+    }
+    if (has(p, 'stick') >= 3) {
       this.doing = 'build a fire';
       // on a frozen lake the fire goes on the nearest shore
       let bx = cx, bz = cz;
       if (r.world.iceAt(bx, bz) > 0) {
-        const t = pl.world.trail[pl.trailIndex(p.x, p.z)];
-        bx = t.x;
-        bz = t.z;
+        const s = pl.shore(p.x, p.z);
+        bx = s.x;
+        bz = s.z;
       }
-      return this.build(r, pl, p, bx, bz, dt);
+      if (this.build(r, pl, p, bx, bz, dt)) return true;
+      this.buildFailT = this.t;
+      return false;
     }
-    return this.fetch(r, pl, p, 'stick', 40, dt);
+    // no sticks: fetch some (further afield if need be), or cut them from dead wood with the axe
+    return this.fetch(r, pl, p, 'stick', 40, dt) || this.chop(r, pl, p, p.x, p.z, 30, dt) || this.fetch(r, pl, p, 'stick', 120, dt) || this.chop(r, pl, p, p.x, p.z, 70, dt);
   }
+
+  private buildFailT = -1e9;
 
   // ----------------------------------------------------------------------------------------- gathering
 
@@ -636,14 +696,25 @@ export class Mind {
   /** Walk to a pickup and press USE on it. True while busy. */
   private take(r: Reader, pl: Planner, p: PlayerEnt, pk: PickupEnt, dt: number): boolean {
     const key = 'pk' + pk.id;
+    // the host's reach (items.ts canReach): the eye within about 3.4 m of the thing, nothing solid
+    // in between; kept to 2.4 m across and 2.9 m from the eye for the ~100 ms the view is behind
     const reachable = (x: number, z: number) => {
       const dd = Math.hypot(x - pk.x, z - pk.z);
-      return dd < 1.9 && r.world.lineClear(x, p.y + 1.5, z, pk.x, pk.y + 0.25, pk.z);
+      if (dd > 2.4) return false;
+      const ey = p.y + EYE_STAND, ty = pk.y + 0.1;
+      const e = Math.hypot(dd, ty - ey);
+      if (e > 2.9) return false;
+      const k = Math.max(0, e - 0.45) / Math.max(e, 1e-3);
+      return r.world.lineClear(x, ey, z, x + (pk.x - x) * k, ey + (ty - ey) * k, z + (pk.z - z) * k);
     };
-    const d = dist(pk, p);
-    if (d > 1.9 || !reachable(p.x, p.z)) {
+    if (!reachable(p.x, p.z)) {
       this.go(r, pl, p, pk.x, pk.z, 0.9, dt, false, reachable);
-      if (this.giveUp(key)) this.skip.set(key, this.t + 120); // cannot get there: forget it for a while
+      // cannot get there: forget it for a while (a pickup that keeps failing, for good)
+      if (this.giveUp(key)) {
+        const n = (this.fails.get(key) ?? 0) + 1;
+        this.fails.set(key, n);
+        this.skip.set(key, this.t + (n >= 2 ? 1e9 : 150));
+      }
       return true;
     }
     this.look(p, pk.x, pk.y + 0.1, pk.z);
@@ -768,10 +839,16 @@ export class Mind {
         if (pk && this.take(r, pl, p, pk, dt)) return;
       }
       if (this.warmAt(r, pl, p, p.x, p.z, dt, 40)) return;
+      // no fire can be made here: back to the nearest one burning (the camp we left), however far
+      const back = this.litFire(r, p.x, p.z, 260);
+      if (back && this.tend(r, pl, p, back, dt)) return;
     } else this.camp = 0;
 
     // 2. keep the fire-making kit: sticks
-    if (has(p, 'stick') < 4 && this.fetch(r, pl, p, 'stick', 18, dt)) return;
+    // (further afield while the sky darkens: the next fire may have to be made in a whiteout)
+    if (has(p, 'stick') < 6 && this.fetch(r, pl, p, 'stick', env.storm > 0.45 || has(p, 'stick') < 3 ? 25 : 12, dt)) return;
+    // with fewer than a fire's worth, a detour is worth it: a whiteout without a fire is how people die up here
+    if (has(p, 'stick') < 3 && r.objective().stage !== 'holdout' && (this.fetch(r, pl, p, 'stick', 60, dt) || this.chop(r, pl, p, p.x, p.z, 30, dt))) return;
 
     // 3. useful things on the way
     if (this.scavenge(r, pl, p, 9, dt)) return;
@@ -787,7 +864,7 @@ export class Mind {
     goals.sort((a, b) => (this.routeOrder.get(a.part) ?? 0) - (this.routeOrder.get(b.part) ?? 0));
     const g = goals.find((q) => !(this.skip.has(q.part) && this.t < (this.skip.get(q.part) ?? 0)));
     if (g) {
-      this.doing = 'find the ' + g.part;
+      this.doing = 'find the ' + g.part + (DEBUG_BOTS ? ` ${g.x.toFixed(0)},${g.z.toFixed(0)}${g.pk ? ' pk' : ''} d${dist(g, p).toFixed(0)}` : '');
       if (dist(g, p) < 14 && g.pk) {
         this.take(r, pl, p, g.pk, dt);
         if (this.on("part" + g.part) > 75) this.skip.set(g.part, this.t + 90);
@@ -849,8 +926,7 @@ export class Mind {
       const laid = this.laidFire(r, L.x, L.z, 6);
       if (laid && (has(p, 'matches') > 0 || laid.embers > 0)) {
         this.doing = 'light the fire';
-        this.tend(r, pl, p, laid, dt);
-        return;
+        if (this.tend(r, pl, p, laid, dt)) return;
       }
       if (has(p, 'stick') >= 3 && has(p, 'matches') > 0 && this.buildTries < 12) {
         this.doing = 'build a fire';
@@ -859,7 +935,10 @@ export class Mind {
         const ux = (p.x - L.x) / d, uz = (p.z - L.z) / d;
         if (this.build(r, pl, p, L.x + ux * 1.5, L.z + uz * 1.5, dt)) return;
       } else if (has(p, 'stick') < 3 && this.fetch(r, pl, p, 'stick', 20, dt)) return;
-    } else this.buildTries = 0;
+    } else {
+      this.buildTries = 0;
+      this.buildSpot = null;
+    }
 
     // hand over what the leader lacks
     if (this.give(r, pl, p, L, dt)) return;
@@ -894,12 +973,22 @@ export class Mind {
       tz = L.z + ((p.z - L.z) / d) * 5;
     }
     const far = dist(L, p) > 16;
-    if (this.go(r, pl, p, tx, tz, still ? 1.2 : 0.8, dt, far)) {
+    // a slot that cannot be reached (behind a rock, over a drift edge): walk to the leader instead
+    if (this.sv.blocked || this.walker.stuck >= 2) this.slotBlocked += dt;
+    else this.slotBlocked = Math.max(0, this.slotBlocked - dt);
+    if (this.slotBlocked > 4) {
+      tx = L.x;
+      tz = L.z;
+      if (dist(L, p) < 2.4) this.slotBlocked = 0;
+    }
+    if (this.go(r, pl, p, tx, tz, this.slotBlocked > 4 ? 2.2 : still ? 1.2 : 0.8, dt, far)) {
       // there: face where the leader looks, or toward them when they stopped
       if (still) this.look(p, L.x, L.y + 1.4, L.z);
       else this.yaw = this.cmd.yaw + wrapAngle(ly - this.cmd.yaw) * 0.08;
     }
   }
+
+  private slotBlocked = 0;
 
   private walkerSide(): number {
     return this.walker.side >= 0 ? 1 : -1;
@@ -910,10 +999,13 @@ export class Mind {
     if (L.life !== 'alive' || !this.ready('giveCheck', 1)) return this.giving !== null && this.giveTo(r, pl, p, L, dt);
     this.giving = null;
     const lacks = (item: ItemId) => L.inv[item] ?? 0;
-    if (lacks('matches') < 2 && has(p, 'matches') >= 4) this.giving = { item: 'matches', n: 2 };
+    // a radio part goes to the leader, who goes where the parts are needed
+    const part = PARTS.find((k) => has(p, PART_ITEM[k]) > 0);
+    if (part && L.carry === 0) this.giving = { item: PART_ITEM[part], n: 1 };
+    else if (lacks('matches') < 2 && has(p, 'matches') >= 4) this.giving = { item: 'matches', n: 2 };
     else if (L.health < 60 && lacks('bandage') === 0 && has(p, 'bandage') > 0) this.giving = { item: 'bandage', n: 1 };
     else if (lacks('rifle') > 0 && lacks('ammo') + L.loaded < 3 && has(p, 'ammo') > 0 && has(p, 'rifle') === 0) this.giving = { item: 'ammo', n: has(p, 'ammo') };
-    else if (lacks('stick') < 3 && has(p, 'stick') >= 6) this.giving = { item: 'stick', n: 3 };
+    else if (lacks('stick') < 3 && has(p, 'stick') >= 5) this.giving = { item: 'stick', n: 3 };
     else if (L.core < 34.6 && lacks('thermos') === 0 && has(p, 'thermos') > 0) this.giving = { item: 'thermos', n: 1 };
     else if (L.hunger > 0.7 && lacks('ration') === 0 && has(p, 'ration') > 0) this.giving = { item: 'ration', n: 1 };
     else if (lacks('flaregun') > 0 && lacks('flare') === 0 && L.flareLoaded === 0 && has(p, 'flare') > 0 && has(p, 'flaregun') === 0) this.giving = { item: 'flare', n: 1 };
@@ -987,7 +1079,7 @@ export class BotBrain {
   /** What each bot is doing (tools, debugging). */
   doing(): Record<string, string> {
     const out: Record<string, string> = {};
-    for (const b of this.bots) out[String(b.id)] = b.mind.doing;
+    for (const b of this.bots) out[String(b.id)] = b.mind.doing + (DEBUG_BOTS ? b.mind.dbg : '');
     return out;
   }
 

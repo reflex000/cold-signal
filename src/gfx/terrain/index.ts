@@ -106,7 +106,7 @@ class TerrainSystemImpl implements TerrainSystem {
   }
 
   set debug(v: number) {
-    TERRAIN_U.debug.value = Math.max(0, Math.min(6, Math.round(v)));
+    TERRAIN_U.debug.value = Math.max(0, Math.min(8, Math.round(v))); // 7, 8: snow deformation (see material.ts)
   }
 
   get wireframe(): boolean {

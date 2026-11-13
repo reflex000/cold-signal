@@ -16,7 +16,7 @@ import { buildRoute, type Stop } from './route';
 import { makeClearGrid, scatterRocks, scatterTrees, type RockObj, type TreeObj } from './scatter';
 import { buildSpawn } from './spawn';
 import { buildStructures, scarLine, sitePoses } from './structures';
-import { applyPads, buildTerrain, flattenLake, sampleGrid, siteClears } from './terrain';
+import { applyPads, buildTerrainSteps, flattenLake, sampleGrid, siteClears } from './terrain';
 import {
   WORLD_HALF, WORLD_SIZE,
   type Collider, type Floor, type PackDef, type Poi, type PoiId, type PropInst, type ShelterVol, type SpawnDef, type World,
@@ -44,20 +44,26 @@ const N = L.N;
 const EXT = L.EXTENT;
 const CELL = L.CELL;
 
-export function createWorld(seed: number, onProgress?: (p: number, label: string) => void): WorldEx {
-  const prog = (p: number, label: string) => {
-    if (onProgress) onProgress(p, label);
-  };
-
+/**
+ * The world build, one phase per step: yields [progress 0..1, label] between phases so a caller can let
+ * the browser draw (createWorldAsync); createWorld() runs it straight through. The result is the same.
+ */
+export function* createWorldSteps(seed: number): Generator<[number, string], WorldEx, void> {
   // --- terrain ------------------------------------------------------------------------------
-  const terr = buildTerrain(seed, (p, l) => prog(p * 0.42 / 0.32, l));
+  const tg = buildTerrainSteps(seed);
+  let tr = tg.next();
+  while (!tr.done) {
+    yield [(tr.value[0] * 0.42) / 0.32, tr.value[1]];
+    tr = tg.next();
+  }
+  const terr = tr.value;
   const h = terr.h;
   const padY: Partial<Record<PoiId, number>> = {};
   for (const p of terr.pads) padY[p.id] = p.y;
   const poses = sitePoses(padY);
 
   // --- route --------------------------------------------------------------------------------
-  prog(0.44, 'Finding the way up');
+  yield [0.44, 'Finding the way up'];
   const approach = (id: Exclude<PoiId, 'lake'>): Stop => {
     const a = SITES[id].anchors.approach;
     const w = toWorld(poses[id], a.x, 0, a.z);
@@ -90,11 +96,11 @@ export function createWorld(seed: number, onProgress?: (p: number, label: string
   };
 
   // --- structures ---------------------------------------------------------------------------
-  prog(0.55, 'Building the places');
+  yield [0.55, 'Building the places'];
   const st = buildStructures({ seed, heightAt, poses, path: route.path, stopAt: route.stopAt, onIce: onLake });
 
   // --- masks and snow -----------------------------------------------------------------------
-  prog(0.6, 'Laying the snow');
+  yield [0.6, 'Laying the snow'];
   const clearings: Clearing[] = st.clears.map((c) => ({ x: c.x, z: c.z, r: c.r + 1, feather: 6 }));
   const packed: Clearing[] = [];
   for (const p of terr.pads) for (const d of p.discs) packed.push({ x: d.x, z: d.z, r: d.r * 0.8, feather: d.feather * 0.7 });
@@ -106,15 +112,15 @@ export function createWorld(seed: number, onProgress?: (p: number, label: string
   const snowGrid = fields.snow;
 
   // --- trees and rocks ----------------------------------------------------------------------
-  prog(0.72, 'Growing the forest');
+  yield [0.72, 'Growing the forest'];
   const clearGrid = makeClearGrid(st.clears);
   const sc = { seed, h, masks, lee: fields.lee, exposure: fields.exposure, clear: clearGrid, heightAt };
   const trees: TreeObj[] = scatterTrees(sc);
-  prog(0.82, 'Scattering rocks');
+  yield [0.82, 'Scattering rocks'];
   const rocks: RockObj[] = scatterRocks(sc);
 
   // --- collision ----------------------------------------------------------------------------
-  prog(0.88, 'Solid things');
+  yield [0.88, 'Solid things'];
   const colList: Collider[] = [];
   const kinds: number[] = [];
   for (const t of trees) if (t.r > 0) { colList.push(t); kinds.push(KIND_TREE); }
@@ -134,7 +140,7 @@ export function createWorld(seed: number, onProgress?: (p: number, label: string
   const scs = shelters.map((s) => dcos(s.yaw)), ssn = shelters.map((s) => dsin(s.yaw));
 
   // --- lake ice -----------------------------------------------------------------------------
-  prog(0.92, 'Freezing the lake');
+  yield [0.92, 'Freezing the lake'];
   const safeLine = { ax: shore.x, az: shore.z, bx: hutA.x, bz: hutA.z };
   const lakeB = buildLake(seed, { x: L.PLACES.hut.x, z: L.PLACES.hut.z }, safeLine);
   const lake = lakeB.info;
@@ -387,7 +393,7 @@ export function createWorld(seed: number, onProgress?: (p: number, label: string
   }
 
   // --- spawn tables -------------------------------------------------------------------------
-  prog(0.95, 'Leaving things behind');
+  yield [0.95, 'Leaving things behind'];
   const spawn = buildSpawn({
     seed, anchors: st.anchors, groundAt, walkable,
     blocked: (x, y, z, r) => {
@@ -428,6 +434,26 @@ export function createWorld(seed: number, onProgress?: (p: number, label: string
     thinIce: lakeB.thin,
     stats: { routeLength: route.length, trees: trees.length, rocks: rocks.length, props: props.length, colliders: colList.length, defs: spawn.defs.length },
   };
-  prog(1, 'Ready');
+  yield [1, 'Ready'];
   return world;
+}
+
+export function createWorld(seed: number, onProgress?: (p: number, label: string) => void): WorldEx {
+  const g = createWorldSteps(seed);
+  for (;;) {
+    const r = g.next();
+    if (r.done) return r.value;
+    onProgress?.(r.value[0], r.value[1]);
+  }
+}
+
+/** createWorld with a pause between phases (await a frame there and the loading screen keeps moving). */
+export async function createWorldAsync(seed: number, onProgress: ((p: number, label: string) => void) | undefined, pause: () => Promise<void>): Promise<WorldEx> {
+  const g = createWorldSteps(seed);
+  for (;;) {
+    const r = g.next();
+    if (r.done) return r.value;
+    onProgress?.(r.value[0], r.value[1]);
+    await pause();
+  }
 }

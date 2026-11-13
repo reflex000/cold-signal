@@ -503,7 +503,8 @@ function circleR(bold: number): number {
   return CIRCLE_MAX - (CIRCLE_MAX - CIRCLE_MIN) * sat((bold - 0.4) / 0.45);
 }
 
-function packSize(ctx: SimCtx, base: number): number {
+/** Wolves in a pack for this many players (bots count): one more for two, two more for three or four, at most six. */
+export function packSize(ctx: SimCtx, base: number): number {
   const n = Math.max(ctx.players().length, ctx.v('sim.players', 1));
   return Math.min(6, Math.max(1, base) + (n >= 3 ? 2 : n >= 2 ? 1 : 0));
 }

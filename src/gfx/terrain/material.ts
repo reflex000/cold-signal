@@ -16,18 +16,21 @@
 //   ice    masks.B: black-blue clear ice, white fracture lines, wind-polished patches, drifts
 //          blown over it along the wind, thin ice greyer (world.lake.thickness).
 //   trail  masks.A: packed, darker, smoother.
-//   prints U.trailTex (R = depth): lowered surface, compressed-snow look, normals from the map.
+//   prints U.trailTex through gfx/snow/sample.ts: footprints, drags and hollows with crisp walls,
+//          rims, a compacted floor (darker, smoother, bluer when deep), their own shadow at a low sun
+//          (a march through the map toward the key light), low-passed dents in the mesh.
 //   far    outside the heightmap: snow, rock on steep faces, dark forest below the tree line.
 // Lighting: a PhysicalLightingModel that multiplies the matching directional light by the baked
 // horizon shadow, adds a soft subsurface wrap on snow, and adds the glints.
 // Owner: TERRAIN.
 import * as THREE from 'three/webgpu';
 import {
-  Fn, If, abs, asin, attribute, cameraViewMatrix, cameraWorldMatrix, clamp, diffuseColor, dot, dFdx, dFdy, exp2, float, floor, fract,
+  Fn, If, abs, asin, attribute, cameraPosition, cameraViewMatrix, cameraWorldMatrix, clamp, diffuseColor, dot, dFdx, dFdy, exp2, float, floor, fract,
   length, max, min, mix, normalLocal, normalView, positionGeometry, positionView, positionViewDirection, positionWorld, pow, property,
-  roughness, select, smoothstep, sqrt, step, tan, texture, uniform, varying, vec2, vec3, vec4,
+  roughness, select, smoothstep, sqrt, step, tan, texture, uniform, varying, varyingProperty, vec2, vec3, vec4,
 } from 'three/tsl';
 import { U, keyLightHorizon } from '../shared';
+import { trailDebug, trailFragment, trailShadow, trailVertex } from '../snow/sample';
 import { WIND_X, WIND_Z } from '../../world/layout';
 import type { TerrainData } from './data';
 import type { HeightFns } from './height';
@@ -53,7 +56,7 @@ export const TERRAIN_U = {
   snowAlbedo: uniform(new THREE.Color(0.87, 0.9, 0.95)),
   sparkle: uniform(1),
   detail: uniform(1), // scale on all detail normals
-  printDepth: uniform(0.14), // metres a full-strength footprint presses down
+  printDepth: uniform(1), // scale on the depth of the snow-deformation map in the mesh (1 = as pressed)
   debug: uniform(0), // 0 off, 1 LOD colours, 2 horizon shadow, 3 normals, 4 masks, 5 NaN finder, 6 visible skirts
   skirt: uniform(1), // scale on the skirt depth (debug)
 };
@@ -101,7 +104,7 @@ class TerrainSkyNode extends THREE.LightingNode {
 // Lighting: horizon shadow on the matching directional light, snow subsurface wrap, glints.
 // ------------------------------------------------------------------------------------------
 class TerrainLighting extends THREE.PhysicalLightingModel {
-  constructor(private hz: HorizonMaps, private props: Props, private sparkle: boolean) {
+  constructor(private hz: HorizonMaps, private props: Props, private sparkle: boolean, private printShadows: boolean) {
     super();
   }
 
@@ -111,8 +114,12 @@ class TerrainLighting extends THREE.PhysicalLightingModel {
     // material applies, see keyLightHorizon in ../shared.ts)
     const k: N = keyLightHorizon(input);
     let col: N = k ? input.lightColor.mul(k) : input.lightColor;
-    // the crowns' shade on the snow of the forest floor, where the trees' own shadows do not reach
-    if (input.lightNode?.light?.isDirectionalLight) col = col.mul(this.props.canopy.oneMinus());
+    if (input.lightNode?.light?.isDirectionalLight) {
+      // the crowns' shade on the snow of the forest floor, where the trees' own shadows do not reach
+      col = col.mul(this.props.canopy.oneMinus());
+      // a print's wall and rim shade its own floor (the shadow map cannot hold a 3 cm wall)
+      if (this.printShadows) col = col.mul(trailShadow(this.props.trailXZ, this.props.trailH, lightDirection.transformDirection(cameraWorldMatrix), this.props.trailNear));
+    }
     super.direct({ ...input, lightColor: col }, builder);
 
     const p = this.props;
@@ -134,6 +141,9 @@ class TerrainLighting extends THREE.PhysicalLightingModel {
 
 interface Props {
   canopy: N; // 0..1 share of the direct light the forest canopy takes (far forest floor)
+  trailH: N; // height of the pressed snow surface relative to untouched snow, m (gfx/snow)
+  trailNear: N; // > 0 where something is pressed near this pixel
+  trailXZ: N; // world xz where the view ray meets the pressed surface (parallax)
   albedo: N;
   normal: N; // view space
   rough: N;
@@ -181,9 +191,12 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
   const grad = (s: N): N => vec2(s.y, s.z).sub(0.5).mul(DERIV_RANGE);
 
   const aNode: N = attribute('aNode', 'vec4');
+  // how far the mesh was lowered by the snow-deformation map here (the parallax march starts there)
+  const vDent: N = varyingProperty('float', 'vTrailDent');
 
   // ---------------------------------------------------------------- vertex ----
   m.positionNode = Fn(() => {
+    vDent.assign(0);
     const g: N = positionGeometry;
     const lod: N = aNode.w;
     const cell: N = tu.cell0.mul(exp2(lod));
@@ -215,12 +228,10 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
       const n1: N = detail(xz.div(42)).level(0).x.sub(0.5);
       const n2: N = detail(xz.div(14).add(0.37)).level(0).x.sub(0.5);
       y.addAssign(n1.mul(0.16).add(n2.mul(0.05)).mul(amp).mul(fade));
-      If(U.trailOn.greaterThan(0.5), () => {
-        const uvT: N = xz.sub(U.trailOrigin).div(U.trailSize).add(0.5);
-        const inside: N = step(0, uvT.x).mul(step(uvT.x, 1)).mul(step(0, uvT.y)).mul(step(uvT.y, 1));
-        const pr: N = U.trailTex.sample(uvT).level(0).x.mul(inside);
-        y.subAssign(pr.mul(TERRAIN_U.printDepth));
-      });
+      // footprints, drags and hollows (gfx/snow), low-passed to the 25 cm grid
+      const dent: N = trailVertex(xz).mul(TERRAIN_U.printDepth).mul(fade);
+      y.addAssign(dent);
+      vDent.assign(dent);
     });
 
     // Skirts hang below the node edge; they only show through a would-be crack.
@@ -251,7 +262,10 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
   const pGlintN: N = property('vec3', 'trGlintN');
   const pEnv: N = property('float', 'trEnv');
   const pCanopy: N = property('float', 'trCanopy');
-  const props: Props = { canopy: pCanopy, albedo: pAlbedo, normal: pNormal, rough: pRough, ao: pAO, sss: pSSS, glint: pGlint, glintN: pGlintN };
+  const pTrailH: N = property('float', 'trPrintH');
+  const pTrailNear: N = property('float', 'trPrintNear');
+  const pTrailXZ: N = property('vec2', 'trPrintXZ');
+  const props: Props = { canopy: pCanopy, trailH: pTrailH, trailNear: pTrailNear, trailXZ: pTrailXZ, albedo: pAlbedo, normal: pNormal, rough: pRough, ao: pAO, sss: pSSS, glint: pGlint, glintN: pGlintN };
 
   const vLod: N = varying(aNode.w);
   const vSkirt: N = varying(step(positionGeometry.y, -0.5));
@@ -355,25 +369,20 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     // normal-mapped bumps steeper than ~40 deg turn away from the viewer at grazing angles
     sg.assign(sg.mul(min(float(1), float(0.8).div(length(sg).max(1e-4)))));
 
-    // ---- footprints (snow-deformation hook: U.trailTex R = how far the snow is pressed) ----
-    const uvT: N = xz.sub(U.trailOrigin).div(U.trailSize).add(0.5);
-    const inT: N = step(0, uvT.x).mul(step(uvT.x, 1)).mul(step(0, uvT.y)).mul(step(uvT.y, 1)).mul(step(0.5, U.trailOn)).mul(w).toVar();
-    const print: N = float(0).toVar();
-    const pg: N = vec2(0).toVar();
-    If(inT.greaterThan(0), () => {
-      const e = 1 / 512;
-      const tg = (v: N): N => v.div(U.trailSize);
-      const pt = (o2: N): N => (U.trailTex.sample(uvT.add(o2)) as N).grad(tg(gx), tg(gy)).x;
-      print.assign(pt(vec2(0)).mul(inT));
-      const px: N = pt(vec2(e, 0)).sub(pt(vec2(-e, 0)));
-      const pz: N = pt(vec2(0, e)).sub(pt(vec2(0, -e)));
-      pg.assign(vec2(px, pz).mul(TERRAIN_U.printDepth.negate()).div(U.trailSize.mul(2 * e)).mul(inT));
-    });
-
-    // combined snow normal
+    // ---- footprints, drags and hollows (gfx/snow: the snow-deformation map) ----
     const slopeX: N = nM.x.negate().div(nM.y);
     const slopeZ: N = nM.z.negate().div(nM.y);
-    const snowG: N = sg.mul(trail.mul(0.7).oneMinus()).mul(print.oneMinus()).add(pg);
+    // parallax on the desktop tiers: the view ray finds the floor of a hole behind its near wall
+    const tr = trailFragment(xz, fp, o.mobile ? undefined : { view: p.sub(cameraPosition).normalize(), slope: vec2(slopeX, slopeZ), dent: vDent });
+    const print: N = tr.compact.mul(w).toVar(); // compacted floor showing (darker, smoother)
+    const pressed: N = tr.inside.mul(w).toVar(); // inside a print at all
+    // deep holes glow blue in shade: light comes through the snow walls
+    const hole: N = pressed.mul(smoothstep(0.02, 0.3, tr.depth)).toVar();
+    const raised: N = smoothstep(0.0, 0.03, tr.rim).mul(w).toVar(); // loose snow pushed up or kicked out
+    const pg: N = tr.grad.mul(w);
+
+    // combined snow normal (pressing flattens the wind crust and the sastrugi)
+    const snowG: N = sg.mul(trail.mul(0.7).oneMinus()).mul(pressed.mul(0.85).oneMinus()).add(pg);
     const nSnow: N = vec3(slopeX.add(snowG.x).negate(), 1, slopeZ.add(snowG.y).negate()).normalize().toVar();
 
     // ---- rock ----
@@ -539,7 +548,9 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     const forestShade: N = mk.x.mul(0.05);
     const snowAlb: N = vec3(TERRAIN_U.snowAlbedo as N).mul(lowVar.mul(0.06).add(1).sub(hollow).sub(forestShade).sub(thinSnow)).toVar();
     snowAlb.mulAssign(mix(vec3(1), vec3(0.84, 0.87, 0.92), trail));
-    snowAlb.mulAssign(mix(vec3(1), vec3(0.8, 0.86, 0.93), print));
+    snowAlb.mulAssign(mix(vec3(1), vec3(0.84, 0.875, 0.92), print));
+    snowAlb.mulAssign(mix(vec3(1), vec3(0.8, 0.9, 1.0), hole));
+    snowAlb.mulAssign(raised.mul(0.03).add(1));
 
     // ---- combine ----
     const snowW: N = rock.oneMinus().mul(iceW.oneMinus()).mul(forestFar.oneMinus()).toVar();
@@ -553,7 +564,7 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     n.assign(mix(n, nIce, iceW.mul(rock.oneMinus())));
     n.assign(n.normalize());
 
-    const roughSnow: N = mix(float(0.82), float(0.66), exposure.mul(res(0.37))).sub(trail.mul(0.16)).sub(print.mul(0.2));
+    const roughSnow: N = mix(float(0.82), float(0.66), exposure.mul(res(0.37))).sub(trail.mul(0.16)).sub(print.mul(0.1)).add(raised.mul(0.08));
     const rough: N = roughSnow.mul(snowW).add(float(0.8).mul(rock)).add(roughIce.mul(iceW).mul(rock.oneMinus())).add(float(0.9).mul(forestFar)).toVar();
     // detail lost to the footprint shows up as roughness, not as shimmer
     rough.assign(rough.add(smoothstep(0.02, 0.6, fp).mul(0.08)).clamp(0.03, 1));
@@ -562,7 +573,9 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     // takes most of the direct light and a share of the sky, so from a distance or from above a
     // forest reads as a dark stand, not as white snow with dark specks on it.
     const canopy: N = smoothstep(0.12, 0.65, mk.x).mul(smoothstep(tu.canopyFade.x, tu.canopyFade.y, dist)).toVar();
-    const ao: N = float(1).sub(smoothstep(0.0, 0.35, curv).mul(0.3)).sub(rock.mul(ledgeAO.oneMinus())).sub(print.mul(0.25)).sub(forestFar.mul(0.3)).sub(canopy.mul(0.5)).clamp(0.3, 1);
+    // a print sees less of the sky the deeper it is (its white walls give some of it back)
+    const printAO: N = pressed.mul(smoothstep(0.0, 0.28, tr.depth).mul(0.36).add(0.05));
+    const ao: N = float(1).sub(smoothstep(0.0, 0.35, curv).mul(0.3)).sub(rock.mul(ledgeAO.oneMinus())).sub(printAO.mul(snowW)).sub(forestFar.mul(0.3)).sub(canopy.mul(0.5)).clamp(0.3, 1);
 
     // ---- glints ----
     pGlint.assign(0);
@@ -600,7 +613,11 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
       const bad = (v: N): N => select(v.equal(v), float(0), float(1));
       albedo.assign(mix(albedo, vec3(bad(nM.x.add(nM.y).add(curv)), bad(rock.add(snowW).add(rough)), bad(sg.x.add(sg.y).add(fp))).add(0.05), step(4.5, dbg).mul(step(dbg, 5.5))));
       // 6: skirts that show (magenta)
-      albedo.assign(mix(albedo, mix(vec3(0.05), vec3(1, 0, 1), step(0.001, vSkirt)), step(5.5, dbg)));
+      albedo.assign(mix(albedo, mix(vec3(0.05), vec3(1, 0, 1), step(0.001, vSkirt)), step(5.5, dbg).mul(step(dbg, 6.5))));
+      // 7: snow deformation (red pressed, green compacted, blue raised; white = near-window presence)
+      albedo.assign(mix(albedo, vec3(pressed, print, raised).mul(0.8).add(tr.near.mul(0.12)), step(6.5, dbg).mul(step(dbg, 7.5))));
+      // 8: the raw near-window texels (R x 2, G, B x 4)
+      albedo.assign(mix(albedo, trailDebug(xz), step(7.5, dbg)));
     });
 
     pAlbedo.assign(albedo);
@@ -608,8 +625,13 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     pRough.assign(rough);
     pAO.assign(ao);
     pCanopy.assign(canopy.mul(0.88));
-    pSSS.assign(snowW.mul(0.55).mul(print.mul(0.5).oneMinus()));
-    pEnv.assign(float(1).sub(rock.mul(0.65)).sub(forestFar.mul(0.6)));
+    // compacted snow scatters less; a deep hole's walls pass blue light into it
+    pSSS.assign(snowW.mul(0.55).mul(print.mul(0.45).oneMinus()).mul(hole.mul(0.8).add(1)));
+    pTrailH.assign(tr.h);
+    pTrailNear.assign(tr.near.mul(w));
+    pTrailXZ.assign(tr.xz);
+    // the sky reflection in a hole sees its walls, not the sky
+    pEnv.assign(float(1).sub(rock.mul(0.65)).sub(forestFar.mul(0.6)).mul(pressed.mul(smoothstep(0.01, 0.15, tr.depth)).mul(0.7).oneMinus()));
     return albedo;
   })();
 
@@ -618,6 +640,6 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
   m.metalnessNode = float(0);
   m.aoNode = pAO;
   m.skyOcclusion = pEnv;
-  m.terrainLighting = () => new TerrainLighting(hz, props, o.sparkle);
+  m.terrainLighting = () => new TerrainLighting(hz, props, o.sparkle, !o.mobile);
   return m;
 }

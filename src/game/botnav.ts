@@ -98,28 +98,80 @@ const yawTo = (dx: number, dz: number): number => Math.atan2(-dx, -dz);
 // =============================================================================================== planning
 
 const CELL = 0.5;
-const MAX_HALF = 40; // metres: local plans reach this far from the goal
-const MAX_EXPAND = 26000;
+const MAX_HALF = 46; // metres: half the side of the largest local plan window
+const MAX_EXPAND = 16000;
 
-/** Walkability per 0.5 m cell for the whole session (the static world never changes). */
+/** A doorway: its centre and the unit normal pointing out of the building. */
+interface Door { x: number; z: number; nx: number; nz: number }
+
+/** Clearance a planned cell keeps from walls and trunks: a little under the body's radius (0.32 m),
+ * so a doorway still has cell centres in it; the movement code slides the body along the rest. */
+const CLEAR = 0.24;
+const STEP = 0.4; // colliders this low are stepped over (move.ts STEP_HEIGHT)
+const HEAD = 1.8; // ... and these high are walked under (PLAYER_HEIGHT)
+const SLOPE_MAX = 40 / 90; // world WALK_SLOPE: slopeAt is the slope angle / 90 degrees
+
+/**
+ * Can a body stand at a point of the 0.5 m lattice: inside the map, not too steep (floors are flat),
+ * and clear of every wall, trunk and rock in the band between a step above the feet and the head.
+ * world.walkable() samples a point and misses thin walls (a hull, a plank wall); this keeps a margin.
+ * Cached for the session: the static world never changes.
+ */
 class WalkCache {
   private readonly m = new Map<number, boolean>();
-  constructor(private readonly world: WorldEx) {}
+  private readonly near: import('../world/types').Collider[] = [];
+  constructor(private readonly world: WorldEx, private readonly doors: Door[]) {}
+
   at(x: number, z: number): boolean {
     const i = Math.round(x / CELL), j = Math.round(z / CELL);
     const k = (i + 8192) * 16384 + (j + 8192);
     let v = this.m.get(k);
     if (v === undefined) {
-      v = this.world.walkable(i * CELL, j * CELL);
+      v = this.test(i * CELL, j * CELL);
       if (this.m.size > 400000) this.m.clear();
       this.m.set(k, v);
     }
     return v;
   }
-}
 
-/** A doorway: its centre and the unit normal pointing out of the building. */
-interface Door { x: number; z: number; nx: number; nz: number }
+  private test(x: number, z: number): boolean {
+    const w = this.world;
+    const lim = w.half - 2;
+    if (x <= -lim || x >= lim || z <= -lim || z >= lim) return false;
+    // feet on the terrain; only where it is too steep can a floor (a deck, a cabin floor) save the cell
+    let feet = w.heightAt(x, z);
+    if (w.slopeAt(x, z) >= SLOPE_MAX) {
+      const g = w.groundAt(x, z, feet + 1);
+      if (g.y <= feet + 0.05) return false;
+      feet = g.y;
+    }
+    // in a doorway's corridor only a solid right at the point blocks (the jambs are the movement's)
+    let r = CLEAR;
+    for (const d of this.doors) {
+      const dx = x - d.x, dz = z - d.z;
+      const along = dx * d.nx + dz * d.nz, across = Math.abs(dx * d.nz - dz * d.nx);
+      if (Math.abs(along) < 1.6 && across < 0.36) r = 0.04;
+    }
+    const cols = this.near;
+    cols.length = 0;
+    w.collidersNear(x, z, r + 0.6, cols);
+    for (let k = 0; k < cols.length; k++) {
+      const c = cols[k];
+      if (c.y1 <= feet + STEP || c.y0 >= feet + HEAD) continue;
+      const dx = x - c.x, dz = z - c.z;
+      if (c.s === 'c') {
+        if (dx * dx + dz * dz < (c.r + r) * (c.r + r)) return false;
+      } else {
+        const cs = Math.cos(c.yaw), sn = Math.sin(c.yaw);
+        const lx = dx * cs - dz * sn, lz = dx * sn + dz * cs;
+        const qx = lx < -c.hx ? -c.hx : lx > c.hx ? c.hx : lx;
+        const qz = lz < -c.hz ? -c.hz : lz > c.hz ? c.hz : lz;
+        if ((lx - qx) * (lx - qx) + (lz - qz) * (lz - qz) < r * r) return false;
+      }
+    }
+    return true;
+  }
+}
 
 /** Binary heap of grid indices keyed by f. */
 class Heap {
@@ -191,17 +243,21 @@ export class Planner {
   fires: number[] = [];
 
   constructor(readonly world: WorldEx) {
-    this.walk = new WalkCache(world);
     for (const [k, a] of Object.entries(world.anchors)) {
       if (!/\.door$/.test(k)) continue;
       // anchors carry the building's yaw; a door is in the front (+Z) wall, so out is +Z turned by yaw
       this.doors.push({ x: a.x, z: a.z, nx: Math.sin(a.yaw), nz: Math.cos(a.yaw) });
     }
+    this.walk = new WalkCache(world, this.doors);
   }
 
   /** Can a body stand here and walk on: walkable ground, not thin ice or open water, not in a fire. */
   passable(r: Reader, x: number, z: number): boolean {
-    if (!this.walk.at(x, z)) return false;
+    return this.walk.at(x, z) && this.hazardFree(r, x, z);
+  }
+
+  /** No thin ice, open water or lit fire here (the hazards that come and go). */
+  hazardFree(r: Reader, x: number, z: number): boolean {
     if (iceRisk(r, x, z) > 0.25) return false;
     const f = this.fires;
     for (let i = 0; i < f.length; i += 2) {
@@ -259,10 +315,13 @@ export class Planner {
    * goal cell itself), inside a square of half-size up to 40 m around the goal. Returns smoothed
    * waypoints (start excluded), or null when there is no way inside the window.
    */
-  plan(r: Reader, sx: number, sz: number, gx: number, gz: number, goal?: (x: number, z: number) => boolean): Pt[] | null {
-    const half = Math.min(MAX_HALF, Math.max(10, Math.hypot(sx - gx, sz - gz) + 8));
+  plan(r: Reader, sx: number, sz: number, gx: number, gz: number, goal?: (x: number, z: number) => boolean, o: { partial?: boolean; wide?: boolean } = {}): Pt[] | null {
+    // the window: centred between start and goal, with room to go round (a ledge may only open far
+    // to one side), on the walk cache's lattice so every cell is tested exactly where it is
+    const half = o.wide ? MAX_HALF : Math.min(MAX_HALF, Math.max(14, 0.5 * Math.hypot(sx - gx, sz - gz) + 22));
     const n = Math.ceil((half * 2) / CELL) + 1;
-    const ox = gx - half, oz = gz - half;
+    const mx = o.wide ? sx : 0.5 * (sx + gx), mz = o.wide ? sz : 0.5 * (sz + gz);
+    const ox = Math.round((mx - half) / CELL) * CELL, oz = Math.round((mz - half) / CELL) * CELL;
     const size = n * n;
     if (this.g.length < size) {
       this.g = new Float32Array(size);
@@ -275,7 +334,13 @@ export class Planner {
     };
     const cx = (c: number) => ox + (c % n) * CELL;
     const cz = (c: number) => oz + Math.floor(c / n) * CELL;
-    const isGoal = goal ?? ((x: number, z: number) => Math.hypot(x - gx, z - gz) < CELL * 0.75);
+    let isGoal = goal;
+    if (!isGoal) {
+      // the goal point itself may be inside something (a part on a shelf): then the free spot nearest it
+      const q = this.nearestPassable(r, gx, gz, 3);
+      const qx = q ? q.x : gx, qz = q ? q.z : gz;
+      isGoal = (x: number, z: number) => Math.hypot(x - qx, z - qz) < CELL * 0.75;
+    }
     const st = this.state, g = this.g, from = this.from;
     const free = (c: number): boolean => {
       const s = st[c];
@@ -309,7 +374,7 @@ export class Planner {
     from[start] = -1;
     st[start] = 1;
     heap.push(start, h(start));
-    let found = -1, expanded = 0;
+    let found = -1, expanded = 0, best = -1, bestH = Infinity;
     while (heap.size > 0 && expanded < MAX_EXPAND) {
       const c = heap.pop();
       if (st[c] === 2) continue;
@@ -319,6 +384,11 @@ export class Planner {
       if (isGoal(x, z)) {
         found = c;
         break;
+      }
+      const hc = h(c);
+      if (hc < bestH) {
+        bestH = hc;
+        best = c;
       }
       const i = c % n, j = (c - i) / n;
       for (let dj = -1; dj <= 1; dj++) {
@@ -345,7 +415,11 @@ export class Planner {
         }
       }
     }
-    if (found < 0) return null;
+    if (found < 0) {
+      // no way all the way: as close as it gets, only when asked (it can lead into a dead end)
+      if (!o.partial || best < 0 || bestH > h(start) - 2) return null;
+      found = best;
+    }
     const raw: Pt[] = [];
     for (let c = found; c !== -1 && c !== start; c = from[c]) raw.push({ x: cx(c), z: cz(c) });
     raw.reverse();
@@ -404,6 +478,46 @@ export class Planner {
 
   // --------------------------------------------------------------------------------------- trail
 
+  private trailGrid: Map<number, number[]> | null = null;
+
+  /** True if a trail point with index in [lo, hi] lies within 1.3 m of (x, z). */
+  nearTrail(x: number, z: number, lo: number, hi: number): boolean {
+    const t = this.world.trail;
+    if (!this.trailGrid) {
+      this.trailGrid = new Map();
+      for (let k = 0; k < t.length; k++) {
+        const key = Math.floor(t[k].x / 4) * 4096 + Math.floor(t[k].z / 4);
+        let l = this.trailGrid.get(key);
+        if (!l) this.trailGrid.set(key, (l = []));
+        l.push(k);
+      }
+    }
+    const ci = Math.floor(x / 4), cj = Math.floor(z / 4);
+    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+      const l = this.trailGrid.get((ci + di) * 4096 + cj + dj);
+      if (!l) continue;
+      for (const k of l) if (k >= lo && k <= hi && Math.hypot(t[k].x - x, t[k].z - z) < 1.3) return true;
+    }
+    return false;
+  }
+
+  /** The nearest point of the trail off the lake ice, searching along the trail both ways from (x, z). */
+  shore(x: number, z: number): Pt {
+    const t = this.world.trail;
+    const i = this.trailIndex(x, z);
+    for (let k = 0; k < t.length; k++) {
+      for (const j of [i - k, i + k]) {
+        if (j < 0 || j >= t.length) continue;
+        if (this.world.iceAt(t[j].x, t[j].z) <= 0) {
+          // a few metres further off the ice, so a fire there is not on the shore ice
+          const n = Math.min(t.length - 1, Math.max(0, j + (j < i ? -3 : 3)));
+          return { x: t[n].x, z: t[n].z };
+        }
+      }
+    }
+    return { x, z };
+  }
+
   /** Index of the trail point nearest (x, z). */
   trailIndex(x: number, z: number): number {
     const t = this.world.trail;
@@ -412,6 +526,27 @@ export class Planner {
       const d = (t[i].x - x) * (t[i].x - x) + (t[i].z - z) * (t[i].z - z);
       if (d < bd) {
         bd = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Index of a trail point near (x, z), choosing among the passes of the trail that come this close
+   * (the route goes out to a place and back the same way) the one nearest in order to index `toward`.
+   * Without this a walker on an out-and-back stretch flips between the two passes and never leaves.
+   */
+  trailIndexToward(x: number, z: number, toward: number): number {
+    const t = this.world.trail;
+    const i0 = this.trailIndex(x, z);
+    const d0 = Math.hypot(t[i0].x - x, t[i0].z - z);
+    const lim = (d0 + 3) * (d0 + 3);
+    let best = i0, bk = Math.abs(i0 - toward);
+    for (let i = 0; i < t.length; i++) {
+      const d = (t[i].x - x) * (t[i].x - x) + (t[i].z - z) * (t[i].z - z);
+      if (d <= lim && Math.abs(i - toward) < bk) {
+        bk = Math.abs(i - toward);
         best = i;
       }
     }
@@ -435,9 +570,41 @@ export class Walker {
   side = 1;
   /** Seconds the current goal has been pursued. */
   age = 0;
+  /** Seconds in a row with no way on (no plan, nothing safe ahead). */
+  blockedT = 0;
+  /**
+   * Breadcrumbs: where this body has walked, a point every 2 m, newest last. A way it came by is a
+   * way out: a body boxed in on a ledge walks back along them and tries again from there.
+   */
+  readonly crumbs: Pt[] = [];
 
   constructor(side: number) {
     this.side = side;
+  }
+
+  /** Drop a breadcrumb when 2 m from the last one. */
+  track(x: number, z: number): void {
+    const c = this.crumbs, last = c[c.length - 1];
+    if (last && Math.hypot(x - last.x, z - last.z) < 2) return;
+    if (last && Math.hypot(x - last.x, z - last.z) > 12) c.length = 0; // a teleport or a respawn: the old trail is no way out
+    c.push({ x, z });
+    if (c.length > 80) c.shift();
+  }
+
+  /** Walk back the way we came, about `metres` (the crumbs used are spent). True if there were any. */
+  retreat(metres: number): boolean {
+    const c = this.crumbs;
+    if (c.length < 2) return false;
+    const back: Pt[] = [];
+    let run = 0;
+    for (let k = c.length - 1; k >= 0 && run < metres; k--) {
+      if (back.length > 0) run += Math.hypot(c[k].x - back[back.length - 1].x, c[k].z - back[back.length - 1].z);
+      back.push(c[k]);
+    }
+    c.length = Math.max(0, c.length - back.length);
+    this.path = back;
+    this.planAge = 0;
+    return true;
   }
 
   reset(): void {
@@ -480,8 +647,9 @@ export function steer(pl: Planner, r: Reader, w: Walker, p: PlayerEnt, gx: numbe
     return out;
   }
   out.arrived = false;
-  if (Math.hypot(gx - w.goalX, gz - w.goalZ) > Math.max(1.5, d * 0.15)) {
-    // a new goal (or the old one moved): plan again
+  w.track(p.x, p.z);
+  if (!(Math.hypot(gx - w.goalX, gz - w.goalZ) <= Math.max(1.5, d * 0.15))) {
+    // a new goal (or the old one moved, or none yet: NaN): plan again
     w.goalX = gx;
     w.goalZ = gz;
     w.path.length = 0;
@@ -495,7 +663,9 @@ export function steer(pl: Planner, r: Reader, w: Walker, p: PlayerEnt, gx: numbe
   if (d > FAR) {
     // far: along the trail, toward the trail point nearest the goal
     const t = pl.world.trail;
-    const i = pl.trailIndex(p.x, p.z), gi = pl.trailIndex(gx, gz);
+    // which pass of the trail: the goal's nearest to where we are, ours nearest to the goal's
+    const gi = pl.trailIndexToward(gx, gz, pl.trailIndex(p.x, p.z));
+    const i = pl.trailIndexToward(p.x, p.z, gi);
     const onTrail = Math.hypot(t[i].x - p.x, t[i].z - p.z) < 12;
     if (onTrail && Math.abs(gi - i) > 3 && Math.hypot(t[gi].x - gx, t[gi].z - gz) < d * 0.6) {
       const dir = gi > i ? 1 : -1;
@@ -504,14 +674,21 @@ export function steer(pl: Planner, r: Reader, w: Walker, p: PlayerEnt, gx: numbe
       while (k !== gi && Math.hypot(t[k].x - p.x, t[k].z - p.z) < 7) k += dir;
       tx = t[k].x;
       tz = t[k].z;
-      w.path.length = 0;
-    } else if (!pl.lineOk(r, p.x, p.z, p.x + (gx - p.x) * (8 / d), p.z + (gz - p.z) * (8 / d))) {
-      // off the trail with something in the way: plan to a point 30 m along the way
-      const k = 30 / d;
-      if (w.path.length === 0 && w.planAge > 1.5) {
-        w.planAge = 0;
-        w.path = pl.plan(r, p.x, p.z, p.x + (gx - p.x) * k, p.z + (gz - p.z) * k) ?? [];
-      }
+    } else {
+      // off the trail: straight for a point 30 m along the way
+      const k = Math.min(1, 30 / d);
+      tx = p.x + (gx - p.x) * k;
+      tz = p.z + (gz - p.z) * k;
+    }
+    // something in the way of that (a wall of the building we are in, a rock, a cliff below a
+    // ledge): plan to the nearest stretch of the trail further on that can be reached, and follow
+    // that plan to its end before taking up the trail again
+    if (w.path.length === 0 && w.planAge > 1.2 && !pl.lineOk(r, p.x, p.z, tx, tz)) {
+      w.planAge = 0;
+      const lo = Math.min(i, gi), hi = Math.max(i, gi);
+      const ahead = gi >= i ? (x: number, z: number) => pl.nearTrail(x, z, i + 2, hi) : (x: number, z: number) => pl.nearTrail(x, z, lo, i - 2);
+      w.path = (onTrail ? pl.plan(r, p.x, p.z, tx, tz, ahead) : null) ?? pl.plan(r, p.x, p.z, tx, tz) ?? pl.plan(r, p.x, p.z, tx, tz, ahead, { wide: true }) ?? [];
+      if (w.path.length === 0) out.blocked = w.age > 3;
     }
   } else if (w.path.length === 0 && w.planAge > 0.8 && (opts.goal || !pl.lineOk(r, p.x, p.z, gx, gz))) {
     w.planAge = 0;
@@ -529,11 +706,15 @@ export function steer(pl: Planner, r: Reader, w: Walker, p: PlayerEnt, gx: numbe
   }
 
   let yaw = yawTo(tx - p.x, tz - p.z);
-  // the next 1.6 m must be safe: turn away from a hazard right ahead, toward the goal side
+  // The next metres must be safe: turn away from a hazard right ahead, toward the goal side. On a
+  // plan the walls are already accounted for: only what moves or melts is checked (thin ice, open
+  // water, a lit fire, a drop); steering straight also checks for walls and trunks.
+  const planned = path.length > 0;
   const ok = (a: number): boolean => {
-    for (const s of [0.6, 1.2, 1.7]) {
+    for (const s of planned ? [0.6, 1.1] : [0.6, 1.2, 1.7]) {
       const x = p.x - Math.sin(a) * s, z = p.z - Math.cos(a) * s;
-      if (!pl.passable(r, x, z) || !pl.noDrop(p.x, p.z, x, z)) return false;
+      if (!pl.noDrop(p.x, p.z, x, z)) return false;
+      if (planned ? !pl.hazardFree(r, x, z) : !pl.passable(r, x, z)) return false;
     }
     return true;
   };
@@ -556,6 +737,7 @@ export function steer(pl: Planner, r: Reader, w: Walker, p: PlayerEnt, gx: numbe
         w.planAge = 0;
         w.path = pl.plan(r, p.x, p.z, gx, gz, opts.goal) ?? [];
       }
+      boxedIn(w, dt, out);
       return out;
     }
   }
@@ -574,6 +756,8 @@ export function steer(pl: Planner, r: Reader, w: Walker, p: PlayerEnt, gx: numbe
       w.planAge = 99;
     }
     if (w.stuck >= 2 && w.stuck % 2 === 0) out.jump = true;
+    // pushing against something for a long while: back out the way we came
+    if (w.stuck >= 6 && w.retreat(20)) w.stuck = 0;
   }
   if (w.stuck >= 3) yaw += 0.9 * w.side;
 
@@ -581,5 +765,12 @@ export function steer(pl: Planner, r: Reader, w: Walker, p: PlayerEnt, gx: numbe
   const left = path.length > 0 ? Infinity : d - near;
   out.mz = left < 1.2 ? 0.45 : 1;
   out.sprint = !!opts.run && d > 14 && p.stamina > 0.45 && iceRisk(r, p.x, p.z) === 0 && p.carry === 0;
+  boxedIn(w, dt, out);
   return out;
+}
+
+/** No way on for 5 s (a ledge, a pocket between drifts and rock): walk back 30 m the way we came. */
+function boxedIn(w: Walker, dt: number, out: Steer): void {
+  w.blockedT = out.blocked ? w.blockedT + dt : 0;
+  if (w.blockedT > 5 && w.retreat(30)) w.blockedT = 0;
 }

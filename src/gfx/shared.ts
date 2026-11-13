@@ -57,7 +57,21 @@ const _U = {
   horizonTex: texture(blank),
   horizonMap: uniform(new THREE.Vector4(1, 0, 0, 6144)), // x inner half extent (m), y weight of slot B, z 1 once valid, w domain half extent (m)
   horizonDir: uniform(new THREE.Vector2(0, -1)), // unit world XZ toward the light the maps were baked for
+  // Snow deformation, the full map (written by gfx/snow, read through gfx/snow/sample.ts). trailOn = 2
+  // means trailTex holds SNOW's encoding (R depth, G edge distance, B raised snow, A freshness) and,
+  // when trailFar.w = 1, is a 2:1 atlas [near | far]; trailOn = 1 is the plain R-only map.
+  trailFar: uniform(new THREE.Vector4(0, 0, 256, 0)), // far window: world XZ centre, metres across, 1 when present
+  trailAtlas: uniform(new THREE.Vector4(1, 0, 0, 1)), // layout: near u scale, far u offset, far u scale, far v scale
+  trailTexel: uniform(new THREE.Vector2(1, 1)), // 1 / atlas size in texels (u, v)
+  trailFill: uniform(new THREE.Vector4(0, 0, 0, 0)), // snow filled in since each window's last re-render: near R, near B, near A, far R (encoded units)
 };
+
+// Texture uniforms whose value is swapped later must never merge: three merges texture uniforms
+// by the texture's uuid at compile time, and both of these start as the same `blank`, so a
+// material compiled before their owners publish would read one map through the other's binding.
+// (Added by SNOW: the trail map read the horizon atlas in every material built before it.)
+(_U.trailTex as any).mergeable = false;
+(_U.horizonTex as any).mergeable = false;
 
 /**
  * The shared uniforms. Members are typed `any` on purpose: TSL node typings are strict about
