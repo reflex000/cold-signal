@@ -457,8 +457,8 @@ export function createSkySystem(engine: Engine, world: World | null = null): Sky
     const DAY = Math.log10(0.6), DUSK = Math.log10(0.08);
     const adapt = lk >= DAY ? 0 : lk >= DUSK ? 0.55 * (lk - DAY) : 0.55 * (DUSK - DAY) + 0.95 * (lk - DUSK);
     const target = 0.86 * Math.pow(10, adapt);
-    // (cap 4.5: at 3 every twilight and night was pinned to the cap, below the curve's own target)
-    const expT = Math.min(4.5, Math.max(0.25, target / Math.max(1e-6, keyLum)));
+    // (cap 4: at 3 every twilight and night was pinned to the cap, below the curve's own target)
+    const expT = Math.min(4.0, Math.max(0.25, target / Math.max(1e-6, keyLum)));
     if (force) expLog = Math.log(expT);
     else expLog += (Math.log(expT) - expLog) * (1 - Math.exp(-dt * 1.4));
     U.exposure.value = Math.exp(expLog) * Math.pow(2, sys.exposureBias);

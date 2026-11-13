@@ -766,11 +766,7 @@ export class FpAnimator {
   /** Flare gun reload, s = 0..1: in to the middle, barrel drops open, cartridge in, flick shut. */
   private flareReload(s: number, base: P6, g: Grips, a: ActGrip, dt: number): void {
     track(this.tmp, FLARE_LOAD, s);
-    const inK = sstep(0, 0.12, s) * (1 - sstep(0.9, 1, s));
-    mix6(base, base, this.tmp, inK);
-    // (POLISH: lower and further out while it is loaded, so the loading arm does not cross the eye)
-    base[1] -= inK * 0.05;
-    base[2] -= inK * 0.1;
+    mix6(base, base, this.tmp, sstep(0, 0.12, s) * (1 - sstep(0.9, 1, s)));
     const open = sstep(0.16, 0.3, s) * (1 - sstep(0.8, 0.86, s));
     this.out.barrel = open;
     // the open chamber in model space
@@ -1175,10 +1171,11 @@ const FLARE_IDLE = POSES.flaregun.idle;
 const FLARE_LOAD: readonly (readonly [number, Readonly<P6>])[] = [
   [0.0, FLARE_IDLE],
   // muzzle down: the barrel drops open and the chamber faces up, the cartridge goes in from above
-  [0.14, [0.07, -0.21, -0.45, -0.45, 0.35, 0.3]],
-  [0.3, [0.05, -0.22, -0.47, -0.6, 0.4, 0.4]],
-  [0.7, [0.05, -0.22, -0.47, -0.6, 0.4, 0.4]],
-  [0.8, [0.07, -0.21, -0.45, -0.3, 0.38, 0.35]],
+  // (POLISH: lower and to the right, so the loading arm does not cross the middle of the view)
+  [0.14, [0.11, -0.26, -0.45, -0.45, 0.35, 0.3]],
+  [0.3, [0.1, -0.27, -0.47, -0.6, 0.4, 0.4]],
+  [0.7, [0.1, -0.27, -0.47, -0.6, 0.4, 0.4]],
+  [0.8, [0.1, -0.25, -0.45, -0.3, 0.38, 0.35]],
   [0.86, [0.1, -0.19, -0.42, 0.25, 0.3, 0.25]],
   [1.0, FLARE_IDLE],
 ];

@@ -173,7 +173,9 @@ export function createWeatherSystem(engine: Engine, world: World | null = null):
     VOLU.windDir.value.set(wdx, wdz);
     VOLU.contrast.value = 0.55 + 0.35 * gust + 0.1 * storm;
     VOLU.frame.value = frameNo++ % 64;
-    VOLU.streaks.value = volActive ? 0 : smooth(0.12, 0.55, storm) * 0.55;
+    // (POLISH: 0.55 laid the veils over the full analytic fog: the WebGL2 storm read denser than the
+    // WebGPU volume, which keeps the mean extinction; 0.38 makes the two backends read alike)
+    VOLU.streaks.value = volActive ? 0 : smooth(0.12, 0.55, storm) * 0.38;
 
     // Camera velocity (for the streaks of the falling snow), smoothed.
     const cx = cam.x, cy = cam.y, cz = cam.z;

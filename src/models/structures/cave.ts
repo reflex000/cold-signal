@@ -114,7 +114,9 @@ register(
       return [x + vx * Math.max(low ? 0 : -0.2, out), y + vy * out, z];
     };
     // ---- the inner shell, its back wall ----
-    b.ink({ color: rockCol, mat: MAT.ROCK, wear: 0.3, rough: 0.92, snow: 0, vary: 0.04 });
+    // (POLISH: the cliff's near-black rock under the baked darkness of the vault drew the inside
+    // black even with the daylight fill and the torch; out of the weather the rock is paler, drier)
+    b.ink({ color: mixRGB(rockCol, hex(0x5d5850), 0.5), mat: MAT.ROCK, wear: 0.3, rough: 0.92, snow: 0, vary: 0.04 });
     const zs: number[] = [];
     for (let z = ZM; z > ZB + 0.01; z -= 0.42) zs.push(z);
     zs.push(ZB);

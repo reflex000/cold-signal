@@ -913,12 +913,13 @@ export class Post implements PostApi {
       const p = sqrt(clamp(g, 0, 1)).toVar();
       const sCurve = p.mul(p).mul(float(3).sub(p.mul(2)));
       p.assign(mix(p, sCurve, u.contrast.sub(1).mul(2.5)));
-      // A film toe: the deepest shades open up (about +0.6 stop at 1/400 of white, +10% at 1/10,
+      // A film toe against the ACES fit's own (it scales the darks by ~0.36): the deepest shades open
+      // up (about +1.1 stops at 1/400 of white, +0.4 at 1/25, +12% at 1/6,
       // nothing above mid grey) so dark needles, bark and rock keep their form beside sunlit snow,
       // the way a print holds detail a video black would clip. Black stays black.
       const q = float(1).sub(p);
       const q2 = q.mul(q);
-      p.addAssign(p.mul(q2.mul(q2).mul(q2)).mul(0.35));
+      p.addAssign(p.mul(q2.mul(q2).mul(q2)).mul(0.55));
       g.assign(p.mul(p));
       // Clean blacks.
       g.assign(max(g.sub(blackLift), 0).div(1 - blackLift));

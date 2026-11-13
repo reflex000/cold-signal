@@ -79,6 +79,9 @@ register(
         wallLog([WALL_X, ys, z0], [WALL_X, ys, WALL_Z + 0.36]);
       }
     }
+    // Top plates on the long walls: the rafters sit on them, and with them the wall closes up under
+    // the roof (POLISH: a window-high band of daylight showed between the top course and the steel).
+    for (const sz of [-1, 1]) wallLog([-WALL_X - 0.34, 0.13 + courses * COURSE, sz * WALL_Z], [WALL_X + 0.34, 0.13 + courses * COURSE, sz * WALL_Z]);
     // chinking between the courses: pale lime mortar
     b.ink({ color: hex(0x9b978b), mat: MAT.ROCK, wear: 0.3, rough: 0.95, snow: 1, vary: 0.06 });
     const chink = b.group(() => { for (let k = 0; k < courses - 1; k++) {
@@ -100,8 +103,17 @@ register(
         }
         b.box(0.17, 0.06, WALL_Z - 0.05 - z0, { bevel: 0 }).move(WALL_X, ys, (z0 + WALL_Z - 0.05) / 2);
       }
+      // under the long walls' top plates
+      if (k === courses - 2) for (const sz of [-1, 1]) b.box(WALL_X * 2 - 0.1, 0.06, 0.17, { bevel: 0 }).move(0, y + COURSE, sz * WALL_Z);
     } });
     mergeAll(chink.parts);
+    // Eave blocking: boards between the rafters on the plates, up to the steel, so no slit of sky
+    // shows over the round of the top log from inside or under the eaves.
+    b.ink({ color: mixRGB(PAL.timber, PAL.timberDark, 0.5), mat: MAT.WOOD, wear: 0.6, snow: 0.3, vary: 0.08 });
+    for (const sz of [-1, 1]) {
+      const yTop = roofY(sz * WALL_Z) - 0.01, y0 = 0.13 + courses * COURSE + 0.04;
+      b.plank(WALL_X * 2 + 0.5, yTop - y0, 0.03, { straight: true }).rotZ(Math.PI / 2).move(0, (yTop + y0) / 2, sz * WALL_Z).ghost();
+    }
 
     // stone piers under the sill logs at the corners
     b.ink({ color: PAL.rock, mat: MAT.ROCK, wear: 0.3, snow: 1 });
@@ -115,10 +127,14 @@ register(
     b.group(() => sash(b, winF.w - 0.04, winF.h - 0.04, { cols: 2, rows: 2, frame: PAL.timber })).move(winF.x, winF.y + winF.h / 2, WALL_Z - 0.04);
     b.group(() => sash(b, winE.w - 0.04, winE.h - 0.04, { cols: 2, rows: 2, frame: PAL.timber, broken: 0.25 })).rotY(Math.PI / 2).move(WALL_X - 0.04, winE.y + winE.h / 2, winE.z);
     // warm light behind the panes, shown while the stove burns
+    // (one-sided cards facing out: as boxes they glowed white from inside too, a lit slab where the
+    // night should have been. POLISH)
     b.part('glow', () => {
       b.ink({ color: PAL.lampWarm, mat: MAT.EMISSIVE, emissive: 1.1, snow: 0 });
-      b.box(winF.w - 0.1, winF.h - 0.1, 0.004, { bevel: 0.001 }).move(winF.x, winF.y + winF.h / 2, WALL_Z - 0.075);
-      b.box(0.004, winE.h - 0.1, winE.w - 0.1, { bevel: 0.001 }).move(WALL_X - 0.075, winE.y + winE.h / 2, winE.z);
+      const fx0 = winF.x - (winF.w - 0.1) / 2, fx1 = winF.x + (winF.w - 0.1) / 2, fy0 = winF.y + 0.05, fy1 = winF.y + winF.h - 0.05, fz = WALL_Z - 0.075;
+      b.mesh([[fx0, fy0, fz], [fx1, fy0, fz], [fx1, fy1, fz], [fx0, fy1, fz]], [[0, 1, 2, 3]]);
+      const ez0 = winE.z - (winE.w - 0.1) / 2, ez1 = winE.z + (winE.w - 0.1) / 2, ey0 = winE.y + 0.05, ey1 = winE.y + winE.h - 0.05, ex = WALL_X - 0.075;
+      b.mesh([[ex, ey0, ez1], [ex, ey0, ez0], [ex, ey1, ez0], [ex, ey1, ez1]], [[0, 1, 2, 3]]);
     });
     // the threshold: a worn sill across the wall under the door, floor height inside
     b.ink({ color: mixRGB(PAL.timber, PAL.timberDark, 0.35), mat: MAT.WOOD, wear: 0.9, snow: 0.6 });
@@ -160,8 +176,9 @@ register(
       for (let z = -2.45; z < 2.45; z += 0.2) {
         const top = Math.min(roofY(z), roofY(z + 0.2)) - 0.05;
         if (top <= WALL_TOP + 0.05) continue;
-        const h = top - WALL_TOP + 0.05;
-        b.plank(h, 0.215, 0.025, { straight: true }).rotY(Math.PI / 2).move(sx * (WALL_X + 0.02), WALL_TOP + h / 2 - 0.02, z + 0.1);
+        // (down over the top side log: a slit of sky showed under the gable boards. POLISH)
+        const h = top - WALL_TOP + 0.15;
+        b.plank(h, 0.215, 0.025, { straight: true }).rotY(Math.PI / 2).move(sx * (WALL_X + 0.02), WALL_TOP + h / 2 - 0.12, z + 0.1);
       }
       for (let z = -2.25; z < 2.3; z += 0.2) {
         const top = roofY(z) - 0.06;
@@ -263,10 +280,26 @@ register(
         b.box(0.01, 0.12, 0.01, { bevel: 0.002 }).move(st.x + Math.cos(a) * 0.08, chim.y - 0.05, st.z - 0.12 + Math.sin(a) * 0.08);
       }
       b.emitter('smoke', [st.x, chim.y + 0.12, st.z - 0.12], { name: 'chimney', size: 0.1, source: 'stove' });
-      // heat shield on standoffs behind the stove
-      b.ink({ color: hex(0x55524b), mat: MAT.METAL, wear: 0.7, rough: 0.55, snow: 0 });
-      b.box(1.0, 1.4, 0.012, { bevel: 0.003 }).move(st.x, SY + 0.9, -WALL_Z + LOG_R + 0.06);
-      b.box(0.012, 1.4, 0.9, { bevel: 0.003 }).move(-WALL_X + LOG_R + 0.06, SY + 0.9, st.z + 0.05);
+      // heat shield on standoffs behind the stove: sooty, blued sheet steel gone dull (POLISH: as a
+      // bare metal in a dark room it reflected only darkness, a flat black hole in the wall; a dull
+      // sooted sheet catches the stove light), screwed to the wall through spacers
+      b.ink({ color: hex(0x4b4843), mat: MAT.PAINT, wear: 0.85, rough: 0.82, snow: 0, vary: 0.05 });
+      const shB = b.box(1.0, 1.4, 0.012, { bevel: 0.003, rows: 3 }).move(st.x, SY + 0.9, -WALL_Z + LOG_R + 0.06);
+      const shS = b.box(0.012, 1.4, 0.9, { bevel: 0.003, rows: 3 }).move(-WALL_X + LOG_R + 0.06, SY + 0.9, st.z + 0.05);
+      // soot darkest just above the stove top, heat-blued and paler toward the edges
+      for (const p of [shB, shS]) {
+        p.crumple(0.004, 2);
+        p.each((q) => {
+          const dy = q.y - (SY + 0.85), dh = Math.hypot(q.x - st.x, q.z - st.z);
+          const soot = Math.max(0, 1 - Math.hypot(dh / 0.55, dy / 0.6)) * 0.7;
+          q.r *= 1 - soot; q.g *= 1 - soot; q.b *= 1 - soot * 0.9;
+        });
+      }
+      b.ink({ color: PAL.iron, mat: MAT.METAL, wear: 0.8, rough: 0.6, snow: 0 });
+      for (const sy of [-0.6, 0.6]) for (const sx of [-0.42, 0.42]) {
+        b.cyl(0.012, 0.006, { sides: 6 }).rotX(Math.PI / 2).move(st.x + sx, SY + 0.9 + sy, -WALL_Z + LOG_R + 0.068);
+        b.cyl(0.012, 0.006, { sides: 6 }).rotZ(Math.PI / 2).move(-WALL_X + LOG_R + 0.068, SY + 0.9 + sy, st.z + 0.05 + sx * 0.9);
+      }
     }
     // wood box beside the stove
     b.ink({ color: PAL.timber, mat: MAT.WOOD, wear: 0.7, snow: 0 });

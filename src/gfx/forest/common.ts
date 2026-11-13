@@ -211,7 +211,10 @@ class ForestEnvIrradiance extends THREE.LightingNode {
     // it the shaded side of a spruce beside a bright snowfield drew black. (POLISH)
     const lit: N = vec3(U.sunColor).mul(max(U.sunDir.y, 0)).add(vec3(U.moonColor).mul(max(U.moonDir.y, 0)));
     const below: N = float(0.5).sub(normalWorld.y.mul(0.5));
-    builder.context.irradiance.addAssign(irr.add(lit.mul(below).mul(SNOW_BOUNCE)));
+    // Never less than the sky's own hemisphere light (the irradiance the sky system computes for
+    // the snow): in an overcast dusk the prefiltered cube alone left near crowns at a third of it.
+    const hemi: N = vec3(U.skyAmbient).mul(below.oneMinus()).add(vec3(U.groundAmbient).mul(below));
+    builder.context.irradiance.addAssign(max(irr, hemi).add(lit.mul(below).mul(SNOW_BOUNCE)));
     return null;
   }
   updateBefore(frame: any): boolean | undefined {

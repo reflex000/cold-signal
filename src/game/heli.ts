@@ -101,11 +101,35 @@ register(
 const UP = new THREE.Vector3(0, 1, 0);
 const SIDE = new THREE.Vector3(1, 0, 0);
 
-/** Flies the 'rescue_heli' prop where the HeliEnt is (the props system places it by position and yaw). */
-export function createHeliVisual(props: PropsSystem): GfxSystem {
+/** The FX light pool's handle (src/gfx/fx/lights.ts), the fields used here. */
+interface PoolLight {
+  on: boolean;
+  position: THREE.Vector3;
+  direction: THREE.Vector3;
+  color: THREE.Color;
+  intensity: number;
+  range: number;
+  angle: number;
+  penumbra: number;
+  fadeIn: number;
+  release(): void;
+}
+
+/**
+ * Flies the 'rescue_heli' prop where the HeliEnt is (the props system places it by position and yaw).
+ * With `engine`, the searchlight under the nose is a real spot from FX's light pool (POLISH): it lights
+ * the deck it hovers over and, in the storm's air, draws its beam (weather/volume.ts localAirlight),
+ * so the rescue reads even in the whiteout of the last minutes.
+ */
+export function createHeliVisual(props: PropsSystem, engine?: { get(name: string): unknown }): GfxSystem {
   let id = -1;
   let entId = 0;
   let spin = 0, tailSpin = 0;
+  let lamp: PoolLight | null = null;
+  const _d = new THREE.Vector3();
+  const lampOff = (): void => {
+    if (lamp) lamp.on = false;
+  };
   return {
     name: 'heli',
     update(f: Frame): void {
@@ -116,6 +140,7 @@ export function createHeliVisual(props: PropsSystem): GfxSystem {
           props.remove(id);
           id = -1;
         }
+        lampOff();
         return;
       }
       const yaw = h.yaw + Math.PI;
@@ -131,10 +156,34 @@ export function createHeliVisual(props: PropsSystem): GfxSystem {
       tailSpin = (tailSpin + dt * 23) % (Math.PI * 2);
       props.part(id, 'rotor')?.quaternion.setFromAxisAngle(UP, spin);
       props.part(id, 'tailrotor')?.quaternion.setFromAxisAngle(SIDE, tailSpin);
+      // the searchlight: the lens under the nose (model (0, 0.85, 3.72)), aimed forward and down
+      if (engine) {
+        if (!lamp) {
+          const fx = engine.get('fx') as { lights?: { acquire(kind: 'point' | 'spot', priority?: number): PoolLight } } | undefined;
+          if (fx?.lights) {
+            lamp = fx.lights.acquire('spot', 7);
+            lamp.fadeIn = 0.6;
+          }
+        }
+        if (lamp) {
+          const s = Math.sin(yaw), c = Math.cos(yaw);
+          lamp.on = true;
+          lamp.position.set(h.x + s * 3.8, h.y - 0.3 + 0.8, h.z + c * 3.8);
+          _d.set(s * 0.5, -0.86, c * 0.5).normalize();
+          lamp.direction.copy(_d);
+          lamp.color.setRGB(1, 0.95, 0.86);
+          lamp.intensity = 320;
+          lamp.range = 70;
+          lamp.angle = 0.3;
+          lamp.penumbra = 0.6;
+        }
+      }
     },
     dispose(): void {
       if (id >= 0) props.remove(id);
       id = -1;
+      lamp?.release();
+      lamp = null;
     },
   };
 }

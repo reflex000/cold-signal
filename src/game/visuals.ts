@@ -118,7 +118,7 @@ export async function addVisualSystems(
   engine.add(structures.props);
   engine.add(createStructureDriver(structures.props));
   engine.add(createIceVisuals(engine, world)); // TOGETHER: open water and new ice on the lake (view.ice)
-  engine.add(createHeliVisual(structures.props)); // TOGETHER: the rescue helicopter (a KIT model flown where the HeliEnt is)
+  engine.add(createHeliVisual(structures.props, engine)); // TOGETHER: the rescue helicopter (a KIT model flown where the HeliEnt is); POLISH: its searchlight from the FX pool
   engine.add(createStandinMarkers(engine));
   onProgress?.(0.97, 'Lighting the fires');
   if (pause) await pause();

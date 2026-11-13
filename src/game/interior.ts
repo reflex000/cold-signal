@@ -127,7 +127,11 @@ export function createInteriorLight(engine: CsEngine, world: WorldEx): GfxSystem
         return;
       }
       // the colour of the light coming in: the sky's, a touch of the low sun
-      sky.copy(ATMOS.skyAmbient).add(warm.clone().multiplyScalar(ATMOS.sunIntensity * Math.max(0, ATMOS.sunDir.y) * 0.25));
+      const ks = ATMOS.sunIntensity * Math.max(0, ATMOS.sunDir.y) * 0.25;
+      sky.copy(ATMOS.skyAmbient);
+      sky.r += warm.r * ks;
+      sky.g += warm.g * ks;
+      sky.b += warm.b * ks;
       const l = Math.max(1e-4, (sky.r + sky.g + sky.b) / 3);
       sky.multiplyScalar(1 / l);
       const size = Math.max(room.hx, room.hz);
@@ -136,7 +140,8 @@ export function createInteriorLight(engine: CsEngine, world: WorldEx): GfxSystem
       fill.color.copy(sky).lerp(warm, 0.7); // off the timber and the floor: warmer than the sky
       fill.colorFar = null;
       fill.range = size * 2.4 + 1.5;
-      fill.intensity = 7 * day * Math.min(1.6, size / 2.2);
+      // (POLISH: 7 x min(1.6, size / 2.2) left the cave and the cabin near black; big rooms need more)
+      fill.intensity = 9 * day * Math.min(2.4, size / 2);
       if (room.door) {
         const d = room.door;
         doorway.on = true;

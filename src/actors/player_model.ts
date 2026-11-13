@@ -300,7 +300,7 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
   const detail = lod === 0;
 
   // ---------------- torso (parka body and collar) ----------------
-  b.ink({ color: REF, mat: MAT.CLOTH, wear: 0.32, snow: 0.7, vary: 0 });
+  b.ink({ color: REF, mat: MAT.CLOTH, wear: 0.32, snow: 0.5, vary: 0 });
   {
     const rings: Ring[] = [];
     const y0 = 0.735, y1 = 1.575;
@@ -558,7 +558,8 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
         return [rx * c * lump, (s > 0 ? ryT : ryB) * s * lump];
       },
     }));
-    b.ink({ color: REF, mat: MAT.CLOTH, wear: 0.3, snow: 0.75, vary: 0 });
+    // (snow 0.75 drew a white cap on every hood: a walking body sheds most of it. POLISH)
+    b.ink({ color: REF, mat: MAT.CLOTH, wear: 0.3, snow: 0.35, vary: 0 });
     const hood = loft(b, rings, N, { capStart: true, fixed: true, bulge: 0.3 });
     tag(hood, CH.HEAD);
     klass(hood, 1);
@@ -705,7 +706,7 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
 
   // ---------------- pack, mat, straps ----------------
   {
-    b.ink({ color: PACK, mat: MAT.CLOTH, wear: 0.5, snow: 0.85, vary: 0.03 });
+    b.ink({ color: PACK, mat: MAT.CLOTH, wear: 0.5, snow: 0.55, vary: 0.03 }); // (0.85: a white slab on every pack. POLISH)
     const body = b.pillow(0.31, 0.47, 0.19, { round: 0.06, bulge: 0.02, seg: detail ? 3 : 1, ring: detail ? 2 : 1 });
     body.move(0, 1.205, 0.252);
     if (detail) body.crumple(0.006, 6);

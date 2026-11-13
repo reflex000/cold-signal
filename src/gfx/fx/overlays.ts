@@ -20,7 +20,7 @@ import * as TSL from 'three/tsl';
 import type { Quality } from '../api';
 import type { CsEngine } from '../engine';
 import type { View } from '../../game/view';
-import { U } from '../shared';
+import { ATMOS, U } from '../shared';
 import { Rand } from './noise';
 
 type N = any;
@@ -189,6 +189,8 @@ export class Overlays {
   readonly uSnow = uniform(0);
   readonly uHurt = uniform(0);
   readonly uLow = uniform(0);
+  /** Display brightness the frost scatters at least: the adapted scene, not the pixel behind it. */
+  readonly uVeil = uniform(0.05);
   private frostTex: THREE.DataTexture;
   private frostNode: N;
   private frost = 0;
@@ -242,7 +244,9 @@ export class Overlays {
           seen = i.sample(uv.add(off)).add(i.sample(uv.sub(off.mul(1.7)))).mul(0.5);
         }
         const lum = luminance(seen);
-        const veil = vec3(0.85, 0.9, 0.96).mul(lum.mul(0.85).add(0.03));
+        // Frost scatters the light of the whole view: over the dark it glows dimly with the scene's
+        // adapted brightness instead of going black (POLISH: at night it drew a black ragged frame)
+        const veil = vec3(0.85, 0.9, 0.96).mul(max(lum.mul(0.85).add(0.03), this.uVeil));
         const milk = clamp(grown.mul(thick.mul(0.5).add(0.3)).add(ridge.mul(grown).mul(0.25)), 0, 0.92);
         const c = mix(seen, veil, milk).toVar();
         c.addAssign(vec3(0.78, 0.85, 0.93).mul(ridge.mul(grown)).mul(lum.mul(0.55).add(0.02)).mul(0.5));
@@ -392,6 +396,8 @@ export class Overlays {
     const st = storm * snowfall * Math.pow(facing, 1.5) * Math.min(1, ws / 8) * open * k;
     this.snow += (st - this.snow) * Math.min(1, dt * 1.5);
     this.uFrost.value = this.frost;
+    // what snow returns at the eye's adaptation, as display brightness (about the sRGB of lit snow)
+    this.uVeil.value = Math.min(0.32, Math.max(0.03, Math.sqrt(Math.max(0, ATMOS.luminance * U.exposure.value)) * 0.4));
     this.uWet.value = this.wet;
     this.uSnow.value = this.snow;
     this.uHurt.value = Math.min(1, hud.hurt || 0);

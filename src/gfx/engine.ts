@@ -117,7 +117,7 @@ class EngineImpl implements CsEngine {
   readonly device: DeviceInfo;
   readonly hdr: boolean;
   readonly depthMode: 'reversed' | 'standard';
-  readonly stats = { calls: 0, tris: 0, frameMs: 16.7, fps: 60, gpuMs: 0 };
+  readonly stats = { calls: 0, tris: 0, frameMs: 16.7, fps: 60, gpuMs: 0, warmCompileMs: 0, warmFrameMs: 0 };
   quality: Quality;
   width = 1;
   height = 1;
@@ -415,20 +415,24 @@ class EngineImpl implements CsEngine {
   async warmup(): Promise<void> {
     if (this.lost || this.disposed) return;
     this.camera.updateMatrixWorld();
+    const t0 = performance.now();
     try {
       await this.post.compile();
     } catch (e) {
       console.error('[engine] warmup compile failed', e);
     }
+    this.stats.warmCompileMs = Math.round(performance.now() - t0);
     if (this.lost || this.disposed) return;
     // One real frame: builds the post materials and anything compileAsync does not reach
     // (shadow passes), while a loading screen is still up.
+    const t1 = performance.now();
     try {
       this.syncCamera();
       this.post.render();
     } catch (e) {
       console.error('[engine] warmup render failed', e);
     }
+    this.stats.warmFrameMs = Math.round(performance.now() - t1);
   }
 
   private deviceLost(info: any): void {

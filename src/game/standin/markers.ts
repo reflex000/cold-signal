@@ -23,6 +23,7 @@ import { getModel, hasModel, modelMeta } from '../../models/registry';
 import { getPropMaterial } from '../../models/material';
 import { getExtra, type ExtraName } from '../../models/tools/extras';
 import '../../models/props';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 type RGB = [number, number, number];
 const PARKA: RGB[] = [[0.5, 0.12, 0.05], [0.07, 0.14, 0.36], [0.2, 0.24, 0.09], [0.55, 0.34, 0.05]];
@@ -90,12 +91,25 @@ const PICKUP_MODEL: Partial<Record<ItemId, Look>> = {
 };
 const CRATE_MODEL: Partial<Record<CrateEnt['type'], string>> = { luggage: 'luggage', crate: 'crate', toolbox: 'toolbox', medkit: 'pickup_medkit' };
 const WOOD_MODEL: Record<WoodEnt['type'], string> = { snag: 'snag', deadfall: 'deadfall', stump: 'stump', branchpile: 'branchpile' };
+/** Kinds drawn with fewer variants than they are built with (see modelBatch). */
+const FOLD: Record<string, number> = { pickup_sticks: 2, deadfall: 2, pickup_logs: 2, luggage: 3 };
+/** Open instances a batch can show at once (looted crates in view). */
+const OPEN_CAP = 6;
 
-/** One (model, variant): its instanced body and one instanced mesh per hinged part. */
+/**
+ * One (model, variant). Closed (and part-less) instances draw as ONE mesh, the hinged parts merged
+ * in at rest; only the few that stand open (a looted crate) draw the body and each part on its own,
+ * so a lid costs a draw (and its shadow draws) only while some crate of that kind is open.
+ */
 interface Batch {
   mesh: THREE.InstancedMesh;
-  parts: { mesh: THREE.InstancedMesh; pivot: THREE.Vector3; axis: THREE.Vector3; angle: number }[];
   n: number;
+  /** Open instances: the body without its parts, and one mesh per hinged part. */
+  body: THREE.InstancedMesh | null;
+  parts: { mesh: THREE.InstancedMesh; pivot: THREE.Vector3; axis: THREE.Vector3; angle: number }[];
+  nOpen: number;
+  /** Whether `mesh` holds the parts merged at rest (else closed instances go the open way too). */
+  merged: boolean;
   /** Lays the model down and rests it on y = 0 (identity for registered models). */
   base: THREE.Matrix4;
   /** Height above the ground once laid down (how far 'snow' sinks it). */
@@ -233,6 +247,8 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
   const propMat = getPropMaterial();
   const batches = new Map<string, Batch>();
   const batchList: Batch[] = [];
+  /** Geometries this system made (the merged closed models): the registry owns the rest. */
+  const ownGeo: THREE.BufferGeometry[] = [];
   const _box = new THREE.Box3();
   const _rz = new THREE.Matrix4().makeRotationZ(Math.PI / 2);
   function makeBatch(def: ModelDef, cap: number, shadow: boolean, lay: 'x' | undefined, name: string): Batch {
@@ -245,33 +261,40 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
     // extras are centred on their origin: rest them on the ground (registered models already are)
     const lift = -_box.min.y;
     base.premultiply(new THREE.Matrix4().makeTranslation(0, lift, 0));
-    const mesh = new THREE.InstancedMesh(def.geometry!, propMat, cap);
-    mesh.name = 'markers-' + name;
-    mesh.count = 0;
-    mesh.frustumCulled = false;
-    mesh.castShadow = shadow;
-    mesh.receiveShadow = true;
-    group.add(mesh);
-    const parts: Batch['parts'] = [];
-    for (const p of Object.values(def.parts)) {
-      if (!p.geometry) continue;
-      const pm = new THREE.InstancedMesh(p.geometry, propMat, cap);
-      pm.name = 'markers-' + name + '-' + p.name;
-      pm.count = 0;
-      pm.frustumCulled = false;
-      pm.castShadow = shadow;
-      pm.receiveShadow = true;
-      group.add(pm);
-      parts.push({ mesh: pm, pivot: p.pivot.clone(), axis: p.axis.clone(), angle: p.openAngle });
-    }
-    const b: Batch = { mesh, parts, n: 0, base, height: _box.max.y - _box.min.y };
+    const inst = (geo: THREE.BufferGeometry, n: number, label: string): THREE.InstancedMesh => {
+      const m = new THREE.InstancedMesh(geo, propMat, n);
+      m.name = 'markers-' + label;
+      m.count = 0;
+      m.visible = false;
+      m.frustumCulled = false;
+      m.castShadow = shadow;
+      m.receiveShadow = true;
+      group.add(m);
+      return m;
+    };
+    const withParts = Object.values(def.parts).filter((p) => p.geometry);
+    const closed: THREE.BufferGeometry[] = [def.geometry!];
+    for (const p of withParts) closed.push(p.geometry!.clone().translate(p.pivot.x, p.pivot.y, p.pivot.z));
+    // the closed model, parts merged at rest: one draw (if the layouts ever disagree, every
+    // instance goes the open way instead, body and parts, and nothing is lost)
+    const merged = withParts.length ? mergeGeometries(closed, false) : null;
+    for (let i = 1; i < closed.length; i++) closed[i].dispose();
+    const openCap = merged ? OPEN_CAP : cap;
+    const parts: Batch['parts'] = withParts.map((p) => ({ mesh: inst(p.geometry!, openCap, name + '-' + p.name), pivot: p.pivot.clone(), axis: p.axis.clone(), angle: p.openAngle }));
+    const mesh = inst(merged ?? def.geometry!, cap, name);
+    const body = withParts.length ? inst(def.geometry!, openCap, name + '-open') : null;
+    const b: Batch = { mesh, n: 0, body, parts, nOpen: 0, base, height: _box.max.y - _box.min.y, merged: !!merged };
+    if (merged) ownGeo.push(merged);
     batchList.push(b);
     return b;
   }
   /** The batch of a registered model's variant for `seed` (built on first use). */
   function modelBatch(name: string, seed: number, cap: number, shadow: boolean): Batch | null {
     if (!hasModel(name)) return null;
-    const v = Math.abs(Math.floor(seed)) % Math.max(1, modelMeta(name).variants);
+    // a few small kinds draw fewer variants than they have: every variant in view is a draw (and
+    // three shadow draws), and two kinds of dropped sticks or deadfall read as well as four
+    const vmax = Math.min(Math.max(1, modelMeta(name).variants), FOLD[name] ?? 99);
+    const v = Math.abs(Math.floor(seed)) % vmax;
     const key = name + '#' + v;
     let b = batches.get(key);
     if (!b) {
@@ -300,18 +323,23 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
   const _pr = new THREE.Matrix4();
   /** One instance: world position, yaw, scale (x, y, z), lid opening 0..1. */
   function put(b: Batch, x: number, y: number, z: number, yaw: number, sx: number, sy: number, sz: number, open = 0): void {
-    if (b.n >= b.mesh.instanceMatrix.count) return;
     _q2.setFromAxisAngle(_yAxis, yaw);
     _inst.compose(_p.set(x, y, z), _q2, _s.set(sx, sy, sz)).multiply(b.base);
-    b.mesh.setMatrixAt(b.n, _inst);
+    if (!b.body || (open <= 0 && b.merged)) {
+      if (b.n >= b.mesh.instanceMatrix.count) return;
+      b.mesh.setMatrixAt(b.n++, _inst);
+      return;
+    }
+    if (b.nOpen >= b.body.instanceMatrix.count) return;
+    b.body.setMatrixAt(b.nOpen, _inst);
     for (const part of b.parts) {
       // the part's geometry is relative to its pivot: place the pivot, then swing about the hinge
       _pm.makeTranslation(part.pivot.x, part.pivot.y, part.pivot.z);
-      if (open > 0 && part.angle !== 0) _pm.multiply(_pr.makeRotationAxis(part.axis, part.angle * open));
+      if (part.angle !== 0) _pm.multiply(_pr.makeRotationAxis(part.axis, part.angle * open));
       _pm.premultiply(_inst);
-      part.mesh.setMatrixAt(b.n, _pm);
+      part.mesh.setMatrixAt(b.nOpen, _pm);
     }
-    b.n++;
+    b.nOpen++;
   }
   /** Small stable per-entity number for variants. */
   const vseed = (id: number): number => (id * 2654435761) >>> 0;
@@ -322,7 +350,7 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
     modelBatch('pickup_sticks', v, 160, false);
     modelBatch('snag', v, 48, true);
     modelBatch('deadfall', v, 48, true);
-    modelBatch('luggage', v, 16, true);
+    modelBatch('luggage', v, 16, false);
     modelBatch('log_heavy', v, 12, true);
   }
 
@@ -335,10 +363,15 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
       const view = f.view;
       const t = f.time;
       for (const p of all) p.n = 0;
-      for (const b of batchList) b.n = 0;
+      for (const b of batchList) {
+        b.n = 0;
+        b.nOpen = 0;
+      }
       // small things are not drawn far away (sub-pixel specks): metres, squared
       const cx = view.camera.x, cz = view.camera.z;
       const beyond = (e: { x: number; z: number }, r: number) => (e.x - cx) * (e.x - cx) + (e.z - cz) * (e.z - cz) > r * r;
+      const tn = engine.quality.treeNear;
+      const snagFar = Math.min(400, tn * 5), woodFar = Math.min(200, tn * 3);
 
       for (const e of view.list('pickup') as ViewEnt<PickupEnt>[]) {
         if (beyond(e, e.item.startsWith('part_') ? 200 : 110)) continue;
@@ -360,7 +393,7 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
       for (const e of view.list('crate') as ViewEnt<CrateEnt>[]) {
         if (BUILT_IN_CRATES.has(e.type) || beyond(e, 250)) continue;
         const name = CRATE_MODEL[e.type];
-        const b = name ? modelBatch(name, vseed(e.id), 16, true) : null;
+        const b = name ? modelBatch(name, vseed(e.id), 16, e.type === 'crate') : null;
         if (b) {
           put(b, e.x, e.y, e.z, e.yaw, 1, 1, 1, e.open ? 1 : 0);
           continue;
@@ -369,7 +402,8 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
         add(boxes, e.x, e.y, e.z, e.yaw, 0, 0, look.s[0], look.s[1], look.s[2], look.c, e.open ? 0.55 : 1);
       }
       for (const e of view.list('wood') as ViewEnt<WoodEnt>[]) {
-        if (beyond(e, e.type === 'snag' ? 400 : 200)) continue;
+        // (draw range from the tier: a phone draws the forest itself only to ~36 m)
+        if (beyond(e, e.type === 'snag' ? snagFar : woodFar)) continue;
         const s = e.scale || 1;
         const b = modelBatch(WOOD_MODEL[e.type], e.seed ?? vseed(e.id), 48, true);
         if (b) {
@@ -455,14 +489,18 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
       }
       for (const p of all) done(p);
       for (const b of batchList) {
-        const n = b.n;
+        const n = b.n, no = b.nOpen;
         b.mesh.count = n;
         b.mesh.visible = n > 0;
         if (n > 0) b.mesh.instanceMatrix.needsUpdate = true;
+        if (!b.body) continue;
+        b.body.count = no;
+        b.body.visible = no > 0;
+        if (no > 0) b.body.instanceMatrix.needsUpdate = true;
         for (const part of b.parts) {
-          part.mesh.count = n;
-          part.mesh.visible = n > 0;
-          if (n > 0) part.mesh.instanceMatrix.needsUpdate = true;
+          part.mesh.count = no;
+          part.mesh.visible = no > 0;
+          if (no > 0) part.mesh.instanceMatrix.needsUpdate = true;
         }
       }
     },
@@ -475,8 +513,10 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
       // the model geometries belong to the registry's cache: only the instance buffers go
       for (const b of batchList) {
         b.mesh.dispose();
+        b.body?.dispose();
         for (const part of b.parts) part.mesh.dispose();
       }
+      for (const g of ownGeo) g.dispose();
     },
   };
 }
