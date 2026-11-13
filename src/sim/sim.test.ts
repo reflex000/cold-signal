@@ -89,7 +89,7 @@ describe('Sim: a new game', () => {
     ps.forEach((p, k) => {
       expect(p.slot).toBe(k);
       expect([p.x, p.z]).toEqual([world.spawn.players[k].x, world.spawn.players[k].z]);
-      expect(p.inv).toEqual({ flashlight: 1, matches: 6 });
+      expect(p.inv).toEqual({ flashlight: 1, matches: 4 });
       expect(p.held).toBe('hands');
       expect(p.life).toBe('alive');
     });

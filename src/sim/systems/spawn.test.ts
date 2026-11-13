@@ -21,11 +21,11 @@ function loot(sim: Sim): Inventory {
 }
 
 describe('co-op scaling', () => {
-  it('scales consumables with the expected group; tools, parts and wood stay as placed', () => {
+  it('scales consumables with the expected group; fire makings, tools, parts and wood stay as placed', () => {
     const one = loot(new Sim(world, { seed: 3, players: 1 }));
     const two = loot(new Sim(world, { seed: 3, players: 2 }));
     const four = loot(new Sim(world, { seed: 3, players: 4 }));
-    for (const item of ['matches', 'ration', 'bandage'] as ItemId[]) {
+    for (const item of ['ration', 'bandage'] as ItemId[]) {
       const base = one[item]!;
       expect(base).toBeGreaterThan(0);
       for (const [n, got] of [[2, two[item]!], [4, four[item]!]] as const) {
@@ -33,9 +33,14 @@ describe('co-op scaling', () => {
         // each stack rounds its fraction up or down: within one per stack of the exact share
         expect(got).toBeGreaterThanOrEqual(Math.floor(want) - 1);
         expect(got).toBeLessThanOrEqual(Math.ceil(want) + 1);
-        expect(got).toBeGreaterThan(base);
+        // (a stack of two for two players is 2.7: it may round down; four players always get more)
+        if (n === 4) expect(got).toBeGreaterThan(base);
+        else expect(got).toBeGreaterThanOrEqual(base);
       }
     }
+    // a fire warms the whole group: one match lights it for everyone (RELEASE balance)
+    expect(one.matches).toBeGreaterThan(0);
+    expect(four.matches).toBe(one.matches);
     expect(four.stick).toBe(one.stick);
     expect(four.axe).toBe(one.axe);
   });

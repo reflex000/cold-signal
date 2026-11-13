@@ -14,11 +14,11 @@
 //            ration resets it; the thermos and a ration warm for a while after (items.ts sets them).
 // In deg C per minute, calibrated by thermal.test.ts against DESIGN section 1 (exposed in a full
 // storm 37 -> 33 in 4 to 5 minutes, wet in a whiteout about 90 s, a good fire 33 -> 37 in about two):
-//   loss = (KT (Tn - T) + KW wind g(T)) * (1 + 2 wet) * (1 + 0.2 hunger) * (1 - 0.6 fire) * (1 - 0.35 huddle)
+//   loss = (KT (Tn - T) + KW wind g(T)) * (1 + 2.3 wet) * (1 + 0.2 hunger) * (1 - 0.6 fire) * (1 - 0.35 huddle)
 //   gain = (4.5 fire + 0.35 huddle + thermos + ration) * (1 - 0.4 hunger)
 // T is the air at the body, wind the felt speed, g(T) = 1 + (colder than -10) / 40, Tn the air the
-// body balances at for what it is doing (BALANCE). Measured (thermal.test.ts, dusk): full storm
-// walking 253 s, standing 222 s; soaked 95 s; moderate storm 37 -> 35 in 5.4 min; clear night the
+// body balances at for what it is doing (BALANCE). Measured (thermal.test.ts, dusk; RELEASE retune): full storm
+// walking 269 s, standing 237 s; soaked 95 s; moderate storm 37 -> 35 in 5.8 min; clear night the
 // same; clear day never; open fire across a 10 m/s wind 33 -> 37 in 122 s (upwind 163, downwind 97).
 // Fills core, wet, hunger and what the body feels for the HUD, frost and audio: feels (a wind chill
 // temperature, plus the fire and the huddle), shelter, fireHeat, huddle, trend (deg C per minute,
@@ -38,8 +38,8 @@ export const CORE_MIN = 24;
 /** Degrees warmer indoors than out (walls and a roof, no fire). */
 export const INDOOR_BONUS = 10;
 
-const KT = 0.022; // deg C / min per degree of air below the balance point
-const KW = 0.030; // deg C / min per m/s of felt wind
+const KT = 0.020; // deg C / min per degree of air below the balance point (RELEASE balance: was 0.022)
+const KW = 0.0275; // deg C / min per m/s of felt wind (RELEASE balance: was 0.030)
 /** Air temperature (deg C) the body balances at, by what it is doing. */
 export const BALANCE = { still: -4.8, walk: -10.8, sprint: -22.8, work: -16.8, down: -2.8 } as const;
 const SELF_WARM_MAX = 0.5; // deg C / min a working body gains in mild air
@@ -50,7 +50,7 @@ export const HUDDLE_RANGE = 2.5;
 const HUDDLE_GAIN = 0.35;
 const HUDDLE_CUT = 0.35;
 const HUDDLE_FEEL = 5;
-const WET_LOSS = 2; // fully wet: three times the loss
+const WET_LOSS = 2.3; // fully wet: 3.3 times the loss (RELEASE: was 2, raised with KT / KW lowered so a soaking stays about 90 s)
 // Wet per second in full snowfall, exposed: slow (an eighth wet after four minutes of whiteout), so
 // a whiteout alone takes 4 to 5 minutes and a soaking (the lake) is what makes it 90 seconds.
 const SOAK = 0.0005;

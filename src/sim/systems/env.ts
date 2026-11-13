@@ -38,7 +38,7 @@ const V_THUNDER = 'env.thunderAt';
 // ---------------------------------------------------------------------------------------------
 // The storm curve
 // ---------------------------------------------------------------------------------------------
-const RAMP = 70; // seconds for a whiteout to build or pass
+const RAMP = 60; // seconds for a whiteout to build or pass (RELEASE balance: was 70)
 const LATE_START = 3480; // first of the repeating whiteouts (58 min)
 const LATE_PERIOD = 780;
 
@@ -49,7 +49,7 @@ function beat(t: number, t0: number, t1: number, ramp: number): number {
 
 /** Start and length of the k-th whiteout (k = 0, 1, 2 are the scripted ones of the first 50 minutes). */
 export function whiteoutWindow(seed: number, k: number): { t0: number; t1: number } {
-  const len = 125 + 50 * hash01(seed, 7411, k);
+  const len = 100 + 40 * hash01(seed, 7411, k); // (RELEASE balance: was 125 + 50: a sat-out whiteout pinned a group for 4 to 5 minutes)
   const j = hash01(seed, 7412, k);
   let t0: number;
   if (k === 0) t0 = 990 + 150 * j; // 16.5 .. 19 min: the first full day

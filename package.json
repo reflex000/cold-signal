@@ -2,6 +2,7 @@
   "name": "cold-signal",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "Cold Signal: a first-person co-op mountain survival game. WebGPU with WebGL2 fallback, fully procedural, plays in the browser.",
   "scripts": {

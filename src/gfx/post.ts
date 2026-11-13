@@ -891,8 +891,9 @@ export class Post implements PostApi {
 
     // ---- tone mapping, grade, transfer ----
     const tone = this.tone;
-    // AgX leaves a milky toe that needs a larger black lift than ACES.
-    const blackLift = tone === 'agx' ? 0.0035 : 0.0012;
+    // AgX leaves a milky toe that needs a larger black lift than ACES. (POLISH: 0.0012 under ACES's
+    // own toe crushed every shade below ~1/60 of white to black: shaded spruce drew (2, 2, 4).)
+    const blackLift = tone === 'agx' ? 0.0035 : 0.0004;
     const display = Fn(([x]: N[]) => {
       const hdrIn = max(x, vec3(0));
       const mapped = tone === 'agx' ? agxToneMapping(hdrIn, float(1)) : acesFilmicToneMapping(hdrIn, float(1));
@@ -912,6 +913,12 @@ export class Post implements PostApi {
       const p = sqrt(clamp(g, 0, 1)).toVar();
       const sCurve = p.mul(p).mul(float(3).sub(p.mul(2)));
       p.assign(mix(p, sCurve, u.contrast.sub(1).mul(2.5)));
+      // A film toe: the deepest shades open up (about +0.6 stop at 1/400 of white, +10% at 1/10,
+      // nothing above mid grey) so dark needles, bark and rock keep their form beside sunlit snow,
+      // the way a print holds detail a video black would clip. Black stays black.
+      const q = float(1).sub(p);
+      const q2 = q.mul(q);
+      p.addAssign(p.mul(q2.mul(q2).mul(q2)).mul(0.35));
       g.assign(p.mul(p));
       // Clean blacks.
       g.assign(max(g.sub(blackLift), 0).div(1 - blackLift));

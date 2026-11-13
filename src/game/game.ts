@@ -29,6 +29,7 @@ import { Sim } from '../sim/sim';
 import { DT, type Action, type InputCmd, type SimEvent, type ToolId } from '../sim/types';
 import { TOOL_ORDER } from '../ui/text';
 import { createUI } from '../ui/index';
+import { OPENING_FADE, OPENING_SECONDS, OPENING_SKIP_AFTER } from '../ui/opening';
 import type { UiApi, UiGame } from '../ui/api';
 import { createWorldAsync, type WorldEx } from '../world/index';
 import type { World } from '../world/types';
@@ -134,7 +135,8 @@ export class Game {
       touch: this.touch,
       dev: params.dev,
       uiOwns: () => (this.ui ? this.ui.wantsPointer() : true),
-      mode: () => this.mode,
+      // the opening of a new game holds every control (no look, no keys, no buttons) until it is done
+      mode: () => (this.opening > 0 ? 'opening' : this.mode),
       act: (a) => this.actions.act(a),
       equip: (t) => this.actions.equip(t),
       cycleTool: (d) => this.cycleTool(d),
@@ -284,6 +286,11 @@ export class Game {
       }
     });
     window.addEventListener('pagehide', () => this.saveNow());
+    // the opening of a new game: any key, click or tap skips to the fade
+    const skip = (): void => {
+      if (this.opening > 0 && this.mode === 'play') this.skipOpening();
+    };
+    for (const ev of ['keydown', 'pointerdown'] as const) window.addEventListener(ev, skip, { capture: true, passive: true });
     document.addEventListener('pointerlockchange', () => {
       // Esc in pointer lock is eaten by the browser: losing the lock while playing is the pause key
       if (!this.input.locked && this.mode === 'play' && !this.touch && !still && this.lockedOnce) this.actions.pause();
@@ -382,6 +389,8 @@ export class Game {
       quitToTitle: () => {
         if (IN_GAME.includes(this.mode) && !this.fresh) this.saveNow();
         this.bots.set(0);
+        this.opening = 0;
+        this.view.opening = 0;
         this.setMode('title');
         this.cam.reset();
       },
@@ -415,7 +424,11 @@ export class Game {
     };
   }
 
-  newGame(seed: number | undefined, gesture: boolean): void {
+  /**
+   * `opening`: play the opening of a new game first (black, the lines, the fade). On by default when a
+   * person starts the game (a gesture); the tools' ?still runs ask for it explicitly.
+   */
+  newGame(seed: number | undefined, gesture: boolean, opening = gesture && !this.params.still): void {
     if (seed !== undefined && Number.isFinite(seed) && seed !== this.params.seed) {
       // a different mountain needs a new world: reload with the seed (keeps one code path)
       const u = new URL(location.href);
@@ -431,10 +444,40 @@ export class Game {
     this.save.clear();
     this.cam.reset();
     this.hud.reset();
+    // From the title, a new game opens on black: the wind, two lines about the flight, then the fade into
+    // the fuselage (ui/opening.ts). The world waits. Tools (?skipTitle, ?still) go straight in unless asked.
+    this.opening = opening ? OPENING_SECONDS : 0;
+    this.view.opening = this.opening;
     this.setMode('play');
     if (this.session?.me) this.onJoined();
     if (gesture) this.input.requestLock();
   }
+
+  /** Seconds left of the opening of a new game (0 when none). */
+  private opening = 0;
+
+  /** A key, click, tap or pad button during the opening: straight to the fade. */
+  private skipOpening(): void {
+    if (this.opening > OPENING_FADE && OPENING_SECONDS - this.opening >= OPENING_SKIP_AFTER) {
+      this.opening = OPENING_FADE;
+      this.view.opening = this.opening;
+    }
+  }
+
+  /** Any pad button pressed since the last frame (the opening's skip). */
+  private padPressed(): boolean {
+    if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') return false;
+    let any = false;
+    try {
+      for (const p of navigator.getGamepads()) if (p && p.connected && p.buttons.some((b) => b.pressed)) any = true;
+    } catch {
+      return false;
+    }
+    const edge = any && !this.padHeld;
+    this.padHeld = any;
+    return edge;
+  }
+  private padHeld = true;
 
   continueGame(gesture: boolean): void {
     const raw = this.save.read();
@@ -452,6 +495,8 @@ export class Game {
     }
     this.fresh = false;
     this.cam.reset();
+    this.opening = 0;
+    this.view.opening = 0;
     this.setMode('play');
     if (this.session?.me) this.onJoined();
     if (gesture) this.input.requestLock();
@@ -568,7 +613,14 @@ export class Game {
     if (this.params.still) this.netClock += dt * 1000;
     this.pump();
 
-    if (session && session.ready && RUNNING.includes(mode)) {
+    // the opening runs in play mode but holds the world: it counts down only while nothing else is up
+    if (this.opening > 0 && mode === 'play') {
+      if (this.padPressed()) this.skipOpening();
+      this.opening = Math.max(0, this.opening - dt);
+      this.view.opening = this.opening;
+      if (this.opening === 0) this.padHeld = true;
+    }
+    if (session && session.ready && RUNNING.includes(mode) && this.opening <= 0) {
       this.acc += dt;
       let n = 0;
       while (this.acc >= DT - 1e-7 && n < MAX_CATCHUP) {
@@ -592,6 +644,7 @@ export class Game {
     this.checkMode();
 
     const title = this.mode === 'title' || this.mode === 'boot';
+    if (this.opening > 0 && this.session?.me) this.input.setLook(this.session.me.yaw, this.session.me.pitch);
     this.placeCamera(dt, title);
     const playing = this.mode === 'play';
     const keyLabel = this.touch ? '' : 'E';

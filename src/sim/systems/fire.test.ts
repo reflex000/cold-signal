@@ -182,19 +182,24 @@ describe('fire: lighting', () => {
 });
 
 describe('fire: feeding and burning', () => {
-  it('a stick adds 40 s, tinder 15 s, a split log 3 minutes; USE prefers sticks', () => {
+  it('a stick adds 40 s, tinder 15 s, a split log 3 minutes; USE gives a young fire a stick, one that has caught a split log', () => {
     const { sim, p } = setup();
     const f = lay(sim, p, 100, { lit: true });
-    p.inv.stick = 1;
+    p.inv.stick = 2;
     p.inv.log = 1;
     p.inv.tinder = 1;
     const w0 = woodOf(sim.ctx, f);
     sim.act(p.id, { t: 'feed', fire: f.id, item: 'tinder' });
     expect(woodOf(sim.ctx, f) - w0).toBe(BURN.tinder);
+    f.heat = 0.2; // just lit: sticks
     let evs = use(sim, p, f.id);
     expect(evs).toContainEqual({ t: 'fireFed', id: f.id, by: p.id, item: 'stick' });
+    f.heat = 0.9; // caught: the split log, and the last stick stays for the next fire
     evs = use(sim, p, f.id);
     expect(evs).toContainEqual({ t: 'fireFed', id: f.id, by: p.id, item: 'log' });
+    expect(p.inv.stick).toBe(1);
+    evs = use(sim, p, f.id);
+    expect(evs).toContainEqual({ t: 'fireFed', id: f.id, by: p.id, item: 'stick' });
     expect(p.inv).toEqual(expect.not.objectContaining({ stick: expect.anything(), log: expect.anything(), tinder: expect.anything() }));
     expect(BURN).toEqual({ stick: 40, log: 180, tinder: 15 });
     evs = use(sim, p, f.id);

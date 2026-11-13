@@ -106,7 +106,7 @@ export class BreathFx {
     const s = ctx.puffs.spec();
     // out of the scarf just under the eye: it rises into the lower part of the view as it leaves
     s.x = cam.x + _fwd.x * 0.2 + R.sym(0.015);
-    s.y = cam.y - 0.1 + _fwd.y * 0.12;
+    s.y = cam.y - 0.17 + _fwd.y * 0.12;
     s.z = cam.z + _fwd.z * 0.2 + R.sym(0.015);
     // a breath leaves the mouth fast and stops within a hand or two, then hangs and fades
     const sp = 0.9 + 0.7 * ex + R.next() * 0.3;
@@ -114,9 +114,10 @@ export class BreathFx {
     s.vy = _fwd.y * sp * 0.6 + 0.02 + R.sym(0.04);
     s.vz = p.vz + _fwd.z * sp + R.sym(0.06);
     this.vapour(s, cold, ex, p.y);
-    // close to the eye a cloud covers a lot of the picture: keep it faint
-    s.op *= 0.7;
-    s.s1 *= 0.85;
+    // close to the eye a cloud covers a lot of the picture: keep it faint (POLISH: at 0.7 a breath
+    // toward a low sun drew a glowing white ball in the middle of the view)
+    s.op *= 0.38;
+    s.s1 *= 0.7;
     s.drag = 3.2;
     s.shear = 0.6;
     ctx.puffs.emit(s);

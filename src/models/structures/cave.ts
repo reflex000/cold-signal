@@ -156,8 +156,9 @@ register(
     const outer = (z: number, s: number): V3 => {
       const t = s < 0.5 ? s * 2 : (1 - s) * 2; // 0 at the foot .. 1 on top
       const side = s < 0.5 ? -1 : 1;
-      // a broken top: blocks and a ragged skyline, not a dome
-      const top = crown(Math.min(z, ZM)) + 1.25 + 0.6 * fbm3(S + 12, z * 0.3, s * 2, 1, 2) + 0.5 * Math.max(0, noise3(S + 16, z * 0.45, s * 4, 2));
+      // a broken top: blocks and a ragged skyline, not a dome; it climbs toward the back into the
+      // cliff band, so the mass reads as the foot of the cliff and not as a bunker set before it (POLISH)
+      const top = crown(Math.min(z, ZM)) + 1.25 + 0.9 * fbm3(S + 12, z * 0.3, s * 2, 1, 2) + 0.9 * Math.max(0, noise3(S + 16, z * 0.45, s * 4, 2)) + 5.5 * sat((-z - 1.5) / 7) ** 1.3;
       // the front ring stands on the flank boxes' front face (z 0.40): look the outline up just behind it
       const wl = outerHalf(Math.min(z, 0.38));
       let x: number, y: number;

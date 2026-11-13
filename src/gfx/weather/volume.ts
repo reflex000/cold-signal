@@ -14,12 +14,13 @@ import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
 import type { HdrStageInput } from '../post';
 import { U } from '../shared';
-import { AIR, fogColor, fogDepth, type N } from '../sky/common';
+import { AIR, fogColor, fogDepth, hgPhase, type N } from '../sky/common';
 import { getNoise2D, getNoise3D } from '../sky/textures';
+import { PARTICLE_LIGHTS, PARTICLE_LIGHT_COUNT } from '../fx/lights';
 
 const {
   Fn, If, Loop, uniform, texture, texture3D, passTexture, context, uv, vec2, vec3, vec4, float, abs, clamp, max, min, dot, exp, mix, smoothstep,
-  length, normalize, interleavedGradientNoise, screenCoordinate, NodeUpdateType, reference, perspectiveDepthToViewZ,
+  length, normalize, interleavedGradientNoise, screenCoordinate, NodeUpdateType, reference, perspectiveDepthToViewZ, atan, sqrt, select,
 } = TSL as any;
 
 /** Dev: 1 shows the volume transmittance, 2 its in-scattered light (set before the graph builds). */
@@ -242,6 +243,96 @@ export function compositeVolume(i: HdrStageInput, vol: StormVolumeNode, scale: n
   if (i.alpha === undefined) return fogged;
   const cover = clamp(float(1).sub(i.alpha), 0, 1);
   return mix(fogged, i.color, cover.mul(0.9));
+}
+
+/** Driven by the weather system: whether the local lights glow in the air this frame, and how much. */
+export const AIRLIGHT = {
+  /** 1 when the air is thick enough (and a light is on) for the glow to show: a uniform branch. */
+  on: uniform(0),
+  /** Strength (1 = single scattering by snow crystals, albedo 0.95; more stands in for the rest). */
+  k: uniform(2),
+};
+
+/**
+ * Light of the fires, flares and torches scattered toward the eye by the snow-laden air between the
+ * eye and the surface: the halo round a fire in a storm, the glow of a flare through the whiteout,
+ * the beam of a torch in falling snow. FX's eight particle lights (PARTICLE_LIGHTS). Points use the
+ * closed form of the in-scatter of an isotropic point light along a ray in a homogeneous medium
+ * (1/h * [atan((L - t0) / h) + atan(t0 / h)], h the light's distance from the ray, t0 the foot of
+ * the perpendicular), weighted by the crystals' forward phase at the closest point and the fog's
+ * transmittance to it. Spots (the first two slots, where the local torch sits: it has the highest
+ * priority in the pool) are marched in a few jittered steps, so the beam reads as a cone; the cheap
+ * path (phones, low) has no march and four slots. Zero cost in clear air: one uniform branch.
+ */
+export function localAirlight(i: HdrStageInput, cheap: boolean): N {
+  return Fn(() => {
+    const acc = vec3(0).toVar();
+    If(AIRLIGHT.on.greaterThan(0.5), () => {
+      const cam = U.camPos;
+      const v = i.worldPos.sub(cam);
+      const len = length(v);
+      const d = v.div(max(len, 1e-4));
+      // the sky reads as the far plane: the glow is spent long before 300 m in any air thick enough
+      const dist = min(len, 300);
+      const sigma = U.fogDensity;
+      const back = d.negate();
+      const n = cheap ? 4 : PARTICLE_LIGHT_COUNT;
+      const marched = cheap ? 0 : 2;
+      const S = 6;
+      const jit = cheap ? float(0.5) : interleavedGradientNoise(screenCoordinate.xy).add(VOLU.frame.mul(0.618034)).fract();
+      for (let k = 0; k < n; k++) {
+        const P = PARTICLE_LIGHTS.pos.element(k);
+        const C = PARTICLE_LIGHTS.col.element(k);
+        const rel = P.xyz.sub(cam);
+        const t0 = dot(rel, d);
+        const h2 = max(dot(rel, rel).sub(t0.mul(t0)), 0.04);
+        const h = sqrt(h2);
+        const ang = atan(dist.sub(t0).div(h)).add(atan(t0.div(h)));
+        const tc = clamp(t0, 0, dist);
+        const dl2 = h2.add(t0.sub(tc).mul(t0.sub(tc)));
+        const dl = sqrt(dl2);
+        const x = clamp(dl.div(P.w), 0, 1);
+        const x2 = x.mul(x);
+        const win = clamp(float(1).sub(x2.mul(x2)), 0, 1);
+        const q = cam.add(d.mul(tc));
+        const lq = q.sub(P.xyz).div(max(dl, 1e-3));
+        // (half the extinction: in air this thick most of the glow has scattered more than once,
+        // which spreads it instead of losing it; single scattering alone left a fire at 11 m in a
+        // whiteout a pin-prick)
+        const pointL = C.xyz.mul(ang.div(h)).mul(exp(sigma.mul(tc.add(dl)).mul(-0.55))).mul(win.mul(win)).mul(hgPhase(dot(lq, back), float(0.45)));
+        if (k < marched) {
+          const D = PARTICLE_LIGHTS.dir.element(k);
+          const tMax = min(dist, P.w.mul(1.2));
+          const tMin = float(0.2);
+          let sp: N = float(0);
+          let tPrev: N = tMin;
+          for (let s = 0; s < S; s++) {
+            const u = float(s).add(jit).div(S);
+            const t = tMin.add(tMax.sub(tMin).mul(u.mul(u)));
+            const dt = t.sub(tPrev);
+            tPrev = t;
+            const L = cam.add(d.mul(t)).sub(P.xyz);
+            const sl2 = max(dot(L, L), 0.04);
+            const sl = sqrt(sl2);
+            const toS = L.div(sl);
+            const cone = smoothstep(C.w, D.w, dot(toS, D.xyz));
+            const sx = clamp(sl.div(P.w), 0, 1);
+            const sx2 = sx.mul(sx);
+            const swin = clamp(float(1).sub(sx2.mul(sx2)), 0, 1);
+            sp = sp.add(cone.mul(hgPhase(dot(toS, back), float(0.45))).mul(exp(sigma.mul(t.add(sl)).mul(-0.55))).mul(swin.mul(swin)).div(sl2).mul(dt));
+          }
+          acc.addAssign(select(C.w.lessThan(-1.5), pointL, C.xyz.mul(sp)));
+        } else {
+          // past the marched slots a spot glows only where the ray passes through its cone
+          const D = PARTICLE_LIGHTS.dir.element(k);
+          const cone = select(C.w.lessThan(-1.5), float(1), smoothstep(C.w, D.w, dot(lq, D.xyz)));
+          acc.addAssign(pointL.mul(cone));
+        }
+      }
+      acc.mulAssign(sigma.mul(0.95).mul(AIRLIGHT.k));
+    });
+    return acc;
+  })();
 }
 
 /**

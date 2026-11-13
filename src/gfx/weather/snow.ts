@@ -30,7 +30,7 @@ const {
  * or a beam within range lights it with a glint (a crystal is a tiny mirror: much brighter than a
  * matte surface would be, strongest toward the light).
  */
-function crystalLight(p: N, d: N, bright: N): N {
+function crystalLight(p: N, d: N, bright: N, sparkle: N = float(1)): N {
   const amb = vec3(U.skyAmbient).mul(0.62).add(vec3(U.groundAmbient).mul(0.38)).mul(1 / Math.PI);
   const sunPh = hgPhase(dot(d, U.sunDir), float(0.55)).mul(4 * Math.PI).mul(0.45).add(0.35);
   const moonPh = hgPhase(dot(d, U.moonDir), float(0.55)).mul(4 * Math.PI).mul(0.45).add(0.35);
@@ -45,17 +45,22 @@ function crystalLight(p: N, d: N, bright: N): N {
     // a flake nearer than ~40 cm to a flame no longer brightens like 1/d^2
     const d2 = max(dot(L, L), 0.16);
     const dist = sqrt(d2);
-    const x = clamp(dist.div(P.w), 0, 1);
+    // (POLISH: lit over the light's whole range, at 4.5x a matte surface's share sideways and 34x
+    // toward it, every streak round a campfire glowed: a rain of brown sticks. Now the glints stay
+    // within ~60% of the range and sit nearer a matte flake, still far brighter toward the light.)
+    const x = clamp(dist.div(P.w.mul(0.6)), 0, 1);
     const x2 = x.mul(x);
     const win = clamp(float(1).sub(x2.mul(x2)), 0, 1);
     const toL = L.div(dist);
     const cone = select(C.w.lessThan(-1.5), float(1), smoothstep(C.w, D.w, dot(toL.negate(), D.xyz)));
-    // facets flash: several times a matte surface's share from any side, far more toward the light
-    const glint = hgPhase(dot(toL, d), float(0.6)).mul(4 * Math.PI).mul(3).add(4.5);
+    // facets flash: a little over a matte surface's share from any side, far more toward the light
+    const glint = hgPhase(dot(toL, d), float(0.6)).mul(4 * Math.PI).mul(1.5).add(1.5);
     acc = acc.add(C.xyz.mul(win.mul(win).mul(cone).mul(glint).div(d2)));
   }
   // a flake a hand's width from the torch would be hundreds of times too bright: cap it (keeps the hue)
-  const loc = acc.mul(1 / Math.PI);
+  // `sparkle`: per flake, most crystals turn a dull face to a lamp and a few flash (a uniform
+  // glow on every streak read as a rain of lit sticks)
+  const loc = acc.mul(sparkle).mul(1 / Math.PI);
   return sky.add(loc.mul(float(2.5).div(max(max(loc.x, max(loc.y, loc.z)), 2.5))));
 }
 
@@ -220,13 +225,15 @@ export class SnowLayer {
       // Ice scatters forward: flakes against the sun, a fire or a beam light up (FX's particle
       // light: sun, moon, ambient and the eight best point / spot lights). Crystals read brighter
       // than the haze (SNOWU.bright), so they show against dark trees and rock and against the grey.
-      const lit = crystalLight(pos, d, SNOWU.bright);
+      // (mean ~0.45: one flake in ~6 flashes at full glint, the rest glow dimly)
+      const sp4 = seed.z.mul(seed.z).mul(seed.z.mul(seed.z));
+      const lit = crystalLight(pos, d, SNOWU.bright, sp4.mul(2.2).add(0.12));
       const fa = fogAmount(dist, d);
       vcol.assign(mix(lit, fogColor(d), fa));
       vfog.assign(fa.oneMinus().mul(0.85).add(0.15));
       vstretch.assign(half.div(r));
       // Sub-pixel flakes keep a pixel of size and lose opacity instead; the box edges fade.
-      const area = size.div(r).pow(2).mul(r.div(half).add(0.15).min(1));
+      const area = size.div(r).pow(2).mul(r.div(half).add(0.2).min(1));
       const dc = pos.sub(U.camPos);
       const edge = smoothstep(float(o.half), float(o.half * 0.7), max(abs(dc.x), abs(dc.z)))
         .mul(smoothstep(float(-o.below), float(-o.below * 0.7), dc.y))

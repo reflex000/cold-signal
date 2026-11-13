@@ -9,3 +9,5 @@ import './log_heavy';
 import './trail_marker';
 import './jerrycan';
 import './toolbox';
+import './pickups'; // POLISH: the pickups the markers used to draw as boxes
+import './deadwood'; // POLISH: snags, deadfall, stumps, the branch pile

@@ -431,10 +431,10 @@ export function createActorsSystem(engine: CsEngine, world: World | null): Actor
           const dim = charge < 0.25 ? 0.35 + 0.65 * (charge / 0.25) : 1;
           const focus = e.aim;
           L.color.setRGB(1, 0.93, 0.8);
-          L.intensity = (55 + 30 * focus) * dim;
+          L.intensity = (10 + 8 * focus) * dim;
           L.range = 34 + 12 * focus;
           L.angle = 0.42 - 0.14 * focus;
-          L.penumbra = 0.55;
+          L.penumbra = 0.85;
         }
       }
       return;
@@ -444,7 +444,7 @@ export function createActorsSystem(engine: CsEngine, world: World | null): Actor
       lampPose(fig, ownSpot.position, _v2);
       ownSpot.target.position.copy(ownSpot.position).add(_v2);
       ownSpot.target.updateMatrixWorld();
-      ownSpot.intensity = 55 + 30 * e.aim;
+      ownSpot.intensity = 10 + 8 * e.aim;
       ownSpot.angle = 0.42 - 0.14 * e.aim;
       ownUsed = true;
     }
@@ -478,15 +478,15 @@ export function createActorsSystem(engine: CsEngine, world: World | null): Actor
       L.position.set(px, py, pz);
       L.direction.copy(localDir);
       L.color.setRGB(1, 0.93, 0.8);
-      L.intensity = (55 + 30 * focus) * dim;
+      L.intensity = (10 + 8 * focus) * dim;
       L.range = 34 + 12 * focus;
       L.angle = 0.42 - 0.14 * focus;
-      L.penumbra = 0.55;
+      L.penumbra = 0.85;
     } else if (ownSpot && !ownUsed) {
       ownSpot.position.set(px, py, pz);
       ownSpot.target.position.set(px + localDir.x, py + localDir.y, pz + localDir.z);
       ownSpot.target.updateMatrixWorld();
-      ownSpot.intensity = (55 + 30 * focus) * dim;
+      ownSpot.intensity = (10 + 8 * focus) * dim;
       ownSpot.angle = 0.42 - 0.14 * focus;
       ownUsed = true;
     }
@@ -541,7 +541,7 @@ export function createActorsSystem(engine: CsEngine, world: World | null): Actor
         }
       }
       // radiance of the tapetum: a strong retroreflector; capped so a beam in the face blooms, not explodes
-      const target = Math.min(40, shine * 260 * facing * facing);
+      const target = Math.min(40, shine * 1000 * facing * facing); // (x1000: torches dimmed to ~1/5 by POLISH)
       fig.shine += (target - fig.shine) * Math.min(1, ctx.dt * 20 + 0.05);
       bones.setData(fig.row, fig.shine);
     }

@@ -96,6 +96,12 @@ export interface View {
   hud: Hud;
   /** Local-only feel values for the first-person rig: 0..1 walk cycle phase, sway, recoil. */
   rig: { bob: number; stride: number; speed: number; recoil: number; sway: number; breath: number; shiver: number; landing: number };
+  /**
+   * Seconds left of the opening of a new game (black, wind, the lines about Flight 417, the fade into
+   * the fuselage; ui/opening.ts draws it), 0 or absent otherwise. The player has no controls and the
+   * world does not move on while it runs. (Optional member added by RELEASE.)
+   */
+  opening?: number;
 }
 
 /**

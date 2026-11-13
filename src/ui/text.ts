@@ -82,9 +82,12 @@ export const CONTROLS: { kbm: ControlLine[]; pad: ControlLine[]; touch: ControlL
     { k: 'Right button', a: 'Aim, raise the light' },
     { k: 'R', a: 'Reload' },
     { k: 'F', a: 'Flashlight on / off' },
+    { k: 'B', a: 'Lay a fire from three sticks' },
+    { k: 'G', a: 'Drop what is in hand, put a log down' },
     { k: '1 – 5', a: 'Axe, flashlight, flare gun, rifle, radio' },
+    { k: 'Q / wheel', a: 'Empty hands / next tool' },
     { k: 'Tab', a: 'Pack' },
-    { k: 'Esc', a: 'Pause' },
+    { k: 'Esc / M', a: 'Pause' },
   ],
   pad: [
     { k: 'Left stick', a: 'Move. Press to sprint' },
@@ -97,7 +100,7 @@ export const CONTROLS: { kbm: ControlLine[]; pad: ControlLine[]; touch: ControlL
     { k: 'LT', a: 'Aim, raise the light' },
     { k: 'LB / RB', a: 'Previous / next tool' },
     { k: 'D-pad up', a: 'Flashlight on / off' },
-    { k: 'View', a: 'Pack' },
+    { k: 'View', a: 'Pack. Lay a fire from it' },
     { k: 'Menu', a: 'Pause' },
   ],
   touch: [
@@ -108,7 +111,9 @@ export const CONTROLS: { kbm: ControlLine[]; pad: ControlLine[]; touch: ControlL
     { k: 'Hand', a: 'Use what you are looking at. Hold for long actions' },
     { k: 'Arrows', a: 'Jump, crouch, sprint lock' },
     { k: 'Tool ring', a: 'Hold and slide to a tool, or tap and choose' },
-    { k: 'Pack', a: 'Open the pack' },
+    { k: 'Reload / light', a: 'Reload the rifle or flare gun, or switch the flashlight' },
+    { k: 'Pack', a: 'Open the pack. Lay a fire from it' },
+    { k: 'Pause', a: 'Pause' },
   ],
 };
 
@@ -119,13 +124,14 @@ export const HOWTO: { h: string; p: string }[] = [
   { h: 'Wolves', p: 'They howl before they come. They circle at the edge of sight and take whoever is alone, weak or down. They will not enter the light of a strong fire or a burning flare, and a rifle shot scatters them for a while.' },
   { h: 'The radio', p: 'Five parts of the transmitter are scattered over the mountain. Crank the hand radio, hold it up and turn: the static clears as you face the nearest one. Carry them to the signal tower on the north ridge, install them, charge the generator and send the call.' },
   { h: 'Weather', p: 'The storm rises and falls. In a whiteout you see a few metres and fires struggle. Travel in the clear spells and be near warmth when it closes in.' },
+  { h: 'Coming back', p: 'Rest warm and still beside a fire and the place is kept. If you die you wake there with the fire burning, and with at least the matches, tinder and rounds you had then. Alone, a bandage gets you back on your feet once when you go down.' },
   { h: 'Together', p: 'Warmth is shared: by a fire, and by standing close. A downed friend bleeds out in a minute and a half and can be revived by holding on for five seconds. Stay within sight of each other.' },
 ];
 
 export const CREDIT_LINE = 'Every mesh, texture and sound is made in code at load. Best with headphones.';
 export const CREDITS: { h: string; p: string }[] = [
   { h: 'Cold Signal', p: 'A mountain, a storm and a dead radio.' },
-  { h: 'Made with', p: 'three.js, WebGPU and WebGL 2, the Web Audio API, TypeScript and Vite.' },
+  { h: 'Made with', p: 'three.js (MIT licence), WebGPU and WebGL 2, the Web Audio API, TypeScript and Vite.' },
   { h: 'No files', p: 'There are no art or audio files in this game. Every mesh, texture, sound and note is generated in code when it loads.' },
   { h: 'Thank you', p: 'For walking out.' },
 ];

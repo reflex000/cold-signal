@@ -287,7 +287,8 @@ export class Overlays {
           }
           const rim = smoothstep(0.55, 0.98, d);
           const spec = pow(max(dot(n.div(max(length(n), 1e-4)), vec2(-0.6, -0.75)), 0), 5).mul(smoothstep(0.35, 0.85, d));
-          const drop = seen.mul(float(1.02).sub(rim.mul(0.4))).add(vec3(spec.mul(0.22)));
+          // (a 40% dark rim drew grey discs like dirt on the lens against the even grey of a storm)
+          const drop = seen.mul(float(1.03).sub(rim.mul(0.16))).add(vec3(spec.mul(0.2)));
           out.assign(mix(out, drop, inside));
         }
         // ---- small droplets: a darker, clearer speckle ----
@@ -304,7 +305,7 @@ export class Overlays {
           const d = length(q).div(r);
           const inside = float(1).sub(smoothstep(0.7, 1.0, d)).mul(exist);
           const rim = smoothstep(0.45, 1.0, d);
-          out.assign(mix(out, out.mul(float(1.03).sub(rim.mul(0.18))), inside.mul(0.8)));
+          out.assign(mix(out, out.mul(float(1.03).sub(rim.mul(0.08))), inside.mul(0.8)));
         }
         // ---- flakes that hit the lens and melt ----
         {
@@ -323,11 +324,12 @@ export class Overlays {
           const r = mix(float(0.1), float(0.25), h4).mul(float(1).sub(smoothstep(0.4, 3.5, age).mul(0.45)));
           const q = f.sub(vec2(h2.sub(0.5), h3.sub(0.5)).mul(0.55));
           const ang = atan(q.y, q.x);
-          // an out-of-focus clump: a soft blob with a ragged rim, not a drawn crystal
-          const rag = sin(ang.mul(5).add(h1.mul(20))).mul(0.1).add(sin(ang.mul(9).sub(h2.mul(31))).mul(0.06));
+          // an out-of-focus clump: a soft blob with an uneven rim, not a drawn crystal (five even
+          // lobes of 10% read as clip-art stars against the flat grey of a whiteout)
+          const rag = sin(ang.mul(2).add(h1.mul(20))).mul(0.07).add(sin(ang.mul(3).sub(h2.mul(31))).mul(0.05)).add(sin(ang.mul(7).add(h3.mul(17))).mul(0.015));
           const d = length(q).div(r).mul(float(1).add(rag));
           const melt = smoothstep(0.3, 2.4, age);
-          const flake = float(1).sub(smoothstep(0.15, 1.0, d)).mul(float(1).sub(melt)).mul(exist);
+          const flake = float(1).sub(smoothstep(0.0, 1.0, d)).pow(1.6).mul(float(1).sub(melt)).mul(exist);
           const dropK = float(1).sub(smoothstep(0.7, 1.0, d)).mul(smoothstep(0.9, 2.4, age)).mul(float(1).sub(smoothstep(3.2, 4.2, age))).mul(exist);
           const lum = luminance(out);
           // ice scatters the light coming through it: a little brighter than what is behind

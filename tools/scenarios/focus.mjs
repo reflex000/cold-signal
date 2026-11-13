@@ -15,7 +15,10 @@ export default async function ({ ev, step, shot, log, check }) {
         for (let k = 0; k < 8; k++) {
           const a = (k / 8) * Math.PI * 2;
           const sx = e.x + Math.sin(a) * 1.6, sz = e.z + Math.cos(a) * 1.6;
-          if (d < bd && w.walkable(sx, sz) && Math.abs(w.groundAt(sx, sz, e.y + 1).y - e.y) < 0.6) {
+          // (and in sight of it: a new game opens inside the fuselage, whose hull stands between some
+          // of the nearest things and the open snow beside them)
+          const gy = w.groundAt(sx, sz, e.y + 1).y;
+          if (d < bd && w.walkable(sx, sz) && Math.abs(gy - e.y) < 0.6 && w.lineClear(sx, gy + 1.6, sz, e.x, e.y + 0.3, e.z)) {
             bd = d;
             best = { id: e.id, kind, x: e.x, y: e.y, z: e.z, sx, sz };
             break;

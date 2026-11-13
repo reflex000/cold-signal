@@ -215,7 +215,8 @@ function surface(kind: GeoKind, I: SurfaceIn): Surface {
   const isSnow: N = float(0).toVar();
 
   If(part.equal(PART.FOLIAGE), () => {
-    albedo.assign(tex.rgb.mul(I.tint).mul(nz.z.mul(0.3).add(0.85)));
+    // (x1.3, POLISH: spruce needles reflect ~5% of visible light; the atlas alone drew ~3%)
+    albedo.assign(tex.rgb.mul(I.tint).mul(nz.z.mul(0.39).add(1.1)));
     alpha.assign(aSharp);
     // snow catches on the up-facing side of the sprays, more where they are dense
     const up: N = smoothstep(0.08, 0.6, faceUp);

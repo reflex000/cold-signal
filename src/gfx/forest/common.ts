@@ -5,12 +5,16 @@
 // Everything here is TSL and runs on the WebGPU and the WebGL2 backends alike.
 import * as THREE from 'three/webgpu';
 import {
-  Fn, cameraProjectionMatrix, cameraWorldMatrix, cos, dot, float, fract, mix, normalView, normalWorld, pmremTexture, positionViewDirection,
+  Fn, cameraProjectionMatrix, cameraWorldMatrix, cos, dot, float, fract, max, mix, normalView, normalWorld, pmremTexture, positionViewDirection,
   pow, roughness, screenCoordinate, sin, smoothstep, texture, vec2, vec3, vec4,
 } from 'three/tsl';
 import { HorizonPhongLighting, HorizonPhysicalLighting, U } from '../shared';
 
 export type N = any;
+
+/** Share of the light on sunlit snow that reaches the crowns from below (trees, rock and their own
+ *  shadow take the rest). */
+const SNOW_BOUNCE = 0.88 * 0.35;
 
 // ------------------------------------------------------------------------------------------
 // Hashes (no sin: precision of sin on large arguments differs between GPUs)
@@ -202,7 +206,12 @@ class ForestEnvIrradiance extends THREE.LightingNode {
   setup(builder: any): any {
     this.pmrem ??= pmremTexture(this.envNode.value);
     const irr: N = this.pmrem.context({ getUV: () => normalWorld, getTextureLevel: () => float(1) }).mul(Math.PI);
-    builder.context.irradiance.addAssign(irr);
+    // Sunlit (moonlit) snow lights the crowns from below: the sky's ground term carries only a
+    // little of it (more would wash the blue out of the shadows on the snow itself), and without
+    // it the shaded side of a spruce beside a bright snowfield drew black. (POLISH)
+    const lit: N = vec3(U.sunColor).mul(max(U.sunDir.y, 0)).add(vec3(U.moonColor).mul(max(U.moonDir.y, 0)));
+    const below: N = float(0.5).sub(normalWorld.y.mul(0.5));
+    builder.context.irradiance.addAssign(irr.add(lit.mul(below).mul(SNOW_BOUNCE)));
     return null;
   }
   updateBefore(frame: any): boolean | undefined {

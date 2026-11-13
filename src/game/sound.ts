@@ -230,13 +230,16 @@ export class SoundDirector {
     }
     const x = me ? me.x : cam.x, y = me ? me.y : cam.y, z = me ? me.z : cam.z;
     const night = nightAt(env.clock);
+    // the opening of a new game is black and the wind (RELEASE): the walls give back their shelter only
+    // as the fuselage comes up out of the dark
+    const open = sat(((view.opening ?? 0) - 1) / 2.5);
     a.setAmbience({
       wind: sat(ws / 22),
       gust: env.gust,
       storm: env.storm,
       snowfall: env.snowfall,
-      shelter: this.shelter,
-      indoor: this.indoor,
+      shelter: this.shelter * (1 - 0.75 * open),
+      indoor: open > 0.5 ? 0 : this.indoor,
       forest: this.forest,
       height: Math.max(0, y - this.wreckY),
       night,
@@ -302,6 +305,7 @@ export class SoundDirector {
     if (mode === 'title') return ['title', { intensity: 0.5 }];
     if (mode === 'dead') return ['death', { intensity: 0.7 }];
     if (mode === 'won') return ['rescue', { intensity: 1 }];
+    if ((view.opening ?? 0) > 0) return ['none', { intensity: 0 }]; // only the wind under the opening
     const o = view.objective;
     const me = view.me;
     if (o.stage === 'holdout') return ['holdout', { intensity: 0.6 + 0.4 * sat(1 - o.eta / 180) }];

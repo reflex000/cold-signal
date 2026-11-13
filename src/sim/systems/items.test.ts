@@ -165,7 +165,7 @@ describe('items: using, dropping and giving', () => {
     // nonsense is ignored
     sim.act(p.id, { t: 'drop', item: 'gold' as never, n: 1 });
     sim.act(p.id, { t: 'drop', item: 'matches', n: -3 });
-    expect(p.inv.matches).toBe(6);
+    expect(p.inv.matches).toBe(4);
   });
 
   it('gives to a player within 3 m, up to what their pack holds', () => {
@@ -175,13 +175,13 @@ describe('items: using, dropping and giving', () => {
     sim.act(q.id, { t: 'debug', cmd: 'tp', args: [32, 60] });
     sim.act(p.id, { t: 'give', to: q.id, item: 'matches', n: 2 });
     const evs = sim.step();
-    expect(p.inv.matches).toBe(4);
-    expect(q.inv.matches).toBe(8);
+    expect(p.inv.matches).toBe(2);
+    expect(q.inv.matches).toBe(6);
     expect(evs).toContainEqual({ t: 'pickup', by: q.id, item: 'matches', n: 2 });
     sim.act(q.id, { t: 'debug', cmd: 'tp', args: [30 + GIVE_RANGE + 1, 60] });
     sim.act(p.id, { t: 'give', to: q.id, item: 'matches', n: 1 });
     expect(toasts(sim.step())).toEqual(['P1 is too far away.']);
-    expect(p.inv.matches).toBe(4);
+    expect(p.inv.matches).toBe(2);
     sim.act(q.id, { t: 'debug', cmd: 'tp', args: [31, 60] });
     q.inv.stick = 11;
     p.inv.stick = 3;

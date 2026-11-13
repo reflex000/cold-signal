@@ -484,7 +484,16 @@ export default async function ({ ev, step, shot, log, check }) {
   await ev((fid) => {
     const f = window.CS.sim.ctx.get(fid);
     window.SV.botTo(f.x + 1.3, f.z);
-    window.CS.sim.ctx.get(fid) && window.CS.sim.ctx.setV('fire.wood.' + fid, 1200);
+    if (f) {
+      window.CS.sim.ctx.setV('fire.wood.' + fid, 1200);
+      // the three sticks fed in step 4 can burn down during the chopping and the carry (by seconds either
+      // way, with the cold's pace): the companion keeps the fire going while the player is out
+      if (!f.lit) {
+        f.lit = true;
+        f.embers = 0;
+        f.heat = Math.max(f.heat, 0.5);
+      }
+    }
   }, fid);
   await ev(() => window.CS.env({ storm: 1, clock: 1.5, lock: true }));
   await ev((o) => window.CS.go(o.x, o.z, o.yaw, 0), out);

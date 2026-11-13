@@ -239,8 +239,9 @@ class ParticleSim {
 export function particleLight(p: N, d: N, forward = 0.45): N {
   const amb = vec3(U.skyAmbient).mul(0.62).add(vec3(U.groundAmbient).mul(0.38)).mul(1 / Math.PI);
   const g = float(forward);
-  const sunPh = hgPhase(dot(d, U.sunDir), g).mul(4 * Math.PI).mul(0.65).add(0.35);
-  const moonPh = hgPhase(dot(d, U.moonDir), g).mul(4 * Math.PI).mul(0.65).add(0.35);
+  // (forward lobe 0.45, was 0.65: a wisp 30 degrees off the sun came out ~7x the sunlit snow)
+  const sunPh = hgPhase(dot(d, U.sunDir), g).mul(4 * Math.PI).mul(0.45).add(0.35);
+  const moonPh = hgPhase(dot(d, U.moonDir), g).mul(4 * Math.PI).mul(0.45).add(0.35);
   const sunVis = horizonLit(p.xz, asin(clamp(U.sunDir.y, -1, 1)));
   const sun = vec3(U.sunColor).mul(sunPh).mul(sunVis);
   const moon = vec3(U.moonColor).mul(moonPh);

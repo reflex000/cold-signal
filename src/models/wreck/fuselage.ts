@@ -100,14 +100,25 @@ register(
     const skin = (z: number, a: number, r0 = 0): V3 => hullAt(z, a, r0 - dent(z, a));
     // rear band: z from the torn edge (u = 0) to ZS (u = 1); petals peel outward near the edge
     const petal = (a: number) => Math.max(0, fbm3(S + 21, Math.cos(a) * 2.2, Math.sin(a) * 2.2, 3, 2) * 1.6 + 0.15);
+    // End-on from 20 m the break read as a perfect round tube (POLISH): over the crown and the
+    // belly the skin peels back in big ragged petals and the crown is crushed flat toward the
+    // edge, so the opening is torn and lopsided. On the walls at body height (|a| 1.2 .. 2.05, the
+    // hull colliders) it stays as it was.
+    const wild = (a: number) => {
+      const A2 = Math.abs(a);
+      return A2 < 1.2 ? 1 : A2 > 2.05 ? 0.8 : 0.15;
+    };
     const rear = (u: number, a: number, r0 = 0): V3 => {
       const z0 = zEnd(a);
       const z = z0 + (ZS - z0) * u;
       const k = Math.max(0, 1 - u / 0.5);
       const curl = petal(a) * k * k;
-      const p = hullAt(z, a, r0 - dent(z, a) - curl * 0.13 - 0.045 * k * fbm3(S + 5, a * 8, u * 6, 0, 2));
+      const wl = wild(a);
+      // crown crushed down toward the torn edge (a lopsided, flattened mouth)
+      const crush = wl * k * (0.35 + 0.2 * fbm3(S + 31, a * 1.5, 0, 0, 2)) * Math.max(0, Math.cos(a - 0.25)) ** 2;
+      const p = hullAt(z, a, r0 - dent(z, a) - curl * (0.13 + 0.42 * wl) - 0.045 * k * fbm3(S + 5, a * 8, u * 6, 0, 2));
       // the petal also bends back on itself
-      return [p[0], p[1], p[2] - curl * 0.05];
+      return [p[0], p[1] - crush, p[2] - curl * (0.05 + 0.3 * wl)];
     };
 
     // ======================================================================================

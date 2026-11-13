@@ -398,6 +398,7 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
     const cliffZone: N = smoothstep(0.16, 0.3, slopeC).mul(w).toVar();
     const faceNoise: N = float(0.5).toVar();
     const facet: N = vec3(0).toVar(); // large-scale bump in the plane of a cliff face (view: world)
+    const stain: N = float(0).toVar(); // -0.5..0.5 long vertical streaks down a face (water, lichen)
     If(cliffZone.greaterThan(0.01), () => {
       const ax: N = smoothstep(0.3, 0.7, abs(nM.x).div(abs(nM.x).add(abs(nM.z)).max(1e-3)));
       const TF = 60;
@@ -408,6 +409,20 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
       // concrete from afar, a faceted one catches the light slab by slab (no extra taps).
       const ga: N = grad(fa), gb: N = grad(fb);
       facet.assign(mix(vec3(gb.x, gb.y, 0), vec3(0, ga.y, ga.x), ax).mul(cliffZone).mul(3 / TF));
+      // Buttresses and gullies (POLISH): ribs ~40 m across and twice as tall, ~12 m of relief, so
+      // a big wall seen from the valley catches the low sun rib by rib instead of shading as one
+      // smooth sheet of concrete; their other channel stains the face in long vertical streaks.
+      const TB = 320, SY = 2.4;
+      const ba: N = (texture(detTex, vec2(p.z.div(TB), p.y.div(TB * SY)).add(0.43)) as N).grad(vec2(dpx.z.div(TB), dpx.y.div(TB * SY)), vec2(dpy.z.div(TB), dpy.y.div(TB * SY)));
+      const bb: N = (texture(detTex, vec2(p.x.div(TB), p.y.div(TB * SY)).add(0.09)) as N).grad(vec2(dpx.x.div(TB), dpx.y.div(TB * SY)), vec2(dpy.x.div(TB), dpy.y.div(TB * SY)));
+      const gba: N = grad(ba), gbb: N = grad(bb);
+      facet.addAssign(mix(vec3(gbb.x.div(TB), gbb.y.div(TB * SY), 0), vec3(0, gba.y.div(TB * SY), gba.x.div(TB)), ax).mul(cliffZone).mul(12));
+      // (explicit gradients: this branch is not uniform control flow)
+      const st: N = (texture(detTex, mix(vec2(p.x.div(70), p.y.div(700)), vec2(p.z.div(70), p.y.div(700)), ax).add(0.77)) as N).grad(
+        mix(vec2(dpx.x.div(70), dpx.y.div(700)), vec2(dpx.z.div(70), dpx.y.div(700)), ax),
+        mix(vec2(dpy.x.div(70), dpy.y.div(700)), vec2(dpy.z.div(70), dpy.y.div(700)), ax),
+      ).y;
+      stain.assign(st.sub(0.5).mul(mix(bb.w, ba.w, ax).mul(0.6).add(0.7)).mul(cliffZone));
     });
     const benchRock: N = cliffZone.mul(smoothstep(0.52, 0.66, faceNoise));
     // the face noise also roughens where rock gives way to snow, so gullies do not end in straight edges
@@ -478,18 +493,25 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
       // smears down the wall above the cave. (SNOW, per the look brief.)
       const sheer: N = smoothstep(0.26, 0.42, nM.y).oneMinus().mul(cliffZone);
       const onLedge: N = smoothstep(0.5, 0.72, nRock.y);
-      rock.assign(rockArea.mul(mix(snowOnRock, snowOnRock.mul(onLedge), sheer).oneMinus()));
+      // Seen from afar the 2.3 m ledges are under a pixel and a wall went one even grey (POLISH):
+      // there, a few of the 19 m benches keep a broken line of snow along their top edge.
+      const farLedge: N = smoothstep(0.86, 0.95, fract(s2)).mul(smoothstep(0.97, 0.995, fract(s2)).oneMinus())
+        .mul(step(0.42, h2)).mul(smoothstep(0.42, 0.62, faceNoise.add(stain.mul(0.8)).add(hold.mul(0.3))))
+        .mul(resBand(19)).mul(resBand(2.3).oneMinus()).mul(max(cliffZone, smoothstep(0.22, 0.36, slope).mul(farW)));
+      rock.assign(rockArea.mul(mix(snowOnRock, snowOnRock.mul(onLedge), sheer).oneMinus()).mul(farLedge.mul(0.9).oneMinus()));
       // Near-black. Bedding shows only in places (a whole face of even stripes reads as concrete);
       // vertical joints (~1 m apart, ~5 m long, in the plane of the face) and broad tone patches
       // break the face up the way frost-shattered rock does.
       const v1: N = fract(floor(s1).mul(0.6180339)).sub(0.5).mul(0.3).mul(resBand(2.3)).mul(smoothstep(0.42, 0.68, broadN));
       const v2: N = h2.sub(0.5).mul(0.35).mul(resBand(19));
       const axJ: N = smoothstep(0.3, 0.7, abs(nM.x).div(abs(nM.x).add(abs(nM.z)).max(1e-3)));
+      // (POLISH: stretched 5x the 0.5 isoline of the noise meandered into crayon scribbles over the
+      // cave's face; 12x stretched, thinner and fainter it reads as straight, broken joints)
       const J = (a: N, b: N, ga: N, gb: N, gc: N, gd: N, o2: number): N =>
-        (texture(detTex, vec2(a.div(9), b.div(45)).add(o2)) as N).grad(vec2(ga.div(9), gb.div(45)), vec2(gc.div(9), gd.div(45))).x;
+        (texture(detTex, vec2(a.div(7), b.div(84)).add(o2)) as N).grad(vec2(ga.div(7), gb.div(84)), vec2(gc.div(7), gd.div(84))).x;
       const jn: N = mix(J(p.x, p.y, dpx.x, dpx.y, dpy.x, dpy.y, 0.71), J(p.z, p.y, dpx.z, dpx.y, dpy.z, dpy.y, 0.13), axJ);
-      const joint: N = smoothstep(0.045, 0.0, abs(jn.sub(0.5))).mul(res(9 / 8)).mul(vert.oneMinus()).mul(0.55);
-      const tone: N = broadN.sub(0.5).mul(0.6).add(faceNoise.sub(0.5).mul(0.5).mul(cliffZone));
+      const joint: N = smoothstep(0.03, 0.0, abs(jn.sub(0.5))).mul(res(7 / 8)).mul(vert.oneMinus()).mul(0.32);
+      const tone: N = broadN.sub(0.5).mul(0.6).add(faceNoise.sub(0.5).mul(0.5).mul(cliffZone)).add(stain.mul(0.9));
       rockAlb.assign(vec3(0.03, 0.025, 0.02).mul(v1.add(v2).add(tone).add(1)).mul(lowVar.mul(0.6).mul(vert).add(1)).mul(rockTex.mul(0.9).add(1)).mul(joint.oneMinus()));
       ledgeAO.mulAssign(joint.mul(0.4).oneMinus());
     });
@@ -509,8 +531,12 @@ export function createTerrainMaterial(data: TerrainData, h: HeightFns, hz: Horiz
       // drifts blown over the ice, streaked along the wind, thicker near the shores
       const D = lin(wx, wz, -wz, wx, 1);
       const driftN: N = tap(detTex, (v: N): N => D(v).div(vec2(200, 44)), 0.33, 0.33).x;
-      // most of a mountain lake in winter is under drifted snow; the wind keeps lanes of ice bare
-      drift.assign(smoothstep(0.4, 0.56, driftN.add(mk.z.oneMinus().mul(0.9)).add(lowVar.mul(0.2))).mul(ice));
+      // most of a mountain lake in winter is under drifted snow; the wind keeps lanes of ice bare.
+      // (POLISH: the 200 x 44 m streak noise alone gave the lanes long straight edges, pale blue
+      // parallelograms laid on the snow; a 23 m and a 6 m noise scallop them like scoured patches.)
+      const breakN: N = tap(detTex, lin(0.8, 0.6, -0.6, 0.8, 23), 0.52, 0.18).x.sub(0.5).mul(0.17)
+        .add(tap(detTex, lin(1, 0, 0, 1, 6), 0.27, 0.61).y.sub(0.5).mul(0.08).mul(res(6 / 8)));
+      drift.assign(smoothstep(0.39, 0.58, driftN.add(mk.z.oneMinus().mul(0.9)).add(lowVar.mul(0.2)).add(breakN)).mul(ice));
       // Fractures on the edges of warped Voronoi cells (the cell texture holds 10 cells per tile;
       // r = (F2 - F1) / 0.6 in cell units): long main cracks across 30 m plates, and a finer network
       // only in the zones where the ice has worked. Warping bends the edges; a slow noise decides

@@ -143,7 +143,8 @@ export function fogColor(d: N): N {
   // Toward a low sun the horizon haze is yellow (r ~ g > b); laid over near-black rock lit blue by
   // the sky it read olive-khaki. Where the haze is warm its green is eased toward gold. (SNOW)
   const warm = smoothstep(0.15, 0.5, raw.x.sub(raw.z).div(max(raw.x, 1e-4)));
-  const haze = vec3(raw.x, raw.y.mul(float(1).sub(warm.mul(0.09))), raw.z);
+  // (POLISH: 9% still left far rock olive at golden hour: 18%, and a touch more red)
+  const haze = vec3(raw.x.mul(float(1).add(warm.mul(0.04))), raw.y.mul(float(1).sub(warm.mul(0.18))), raw.z);
   const g: N = AIR.glowG;
   const storm = vec3(U.fogColor)
     .add(vec3(U.sunColor).mul(hgPhase(dot(d, U.sunDir), g)).mul(AIR.glow))

@@ -766,7 +766,11 @@ export class FpAnimator {
   /** Flare gun reload, s = 0..1: in to the middle, barrel drops open, cartridge in, flick shut. */
   private flareReload(s: number, base: P6, g: Grips, a: ActGrip, dt: number): void {
     track(this.tmp, FLARE_LOAD, s);
-    mix6(base, base, this.tmp, sstep(0, 0.12, s) * (1 - sstep(0.9, 1, s)));
+    const inK = sstep(0, 0.12, s) * (1 - sstep(0.9, 1, s));
+    mix6(base, base, this.tmp, inK);
+    // (POLISH: lower and further out while it is loaded, so the loading arm does not cross the eye)
+    base[1] -= inK * 0.05;
+    base[2] -= inK * 0.1;
     const open = sstep(0.16, 0.3, s) * (1 - sstep(0.8, 0.86, s));
     this.out.barrel = open;
     // the open chamber in model space
@@ -816,8 +820,9 @@ export class FpAnimator {
       base[5] += toKnob * 0.32;
       base[3] += toKnob * 0.08;
       base[0] -= toKnob * 0.015;
-      base[1] -= toKnob * 0.02;
-      base[2] -= toKnob * 0.07;
+      // (POLISH: further out and lower, the working mitt's cuff came up to the eye)
+      base[1] -= toKnob * 0.05;
+      base[2] -= toKnob * 0.14;
       if (!this.boltEjected && t > 0.54) {
         this.boltEjected = true;
         this.wantEject = true;

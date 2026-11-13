@@ -297,7 +297,10 @@ export function createSkySystem(engine: Engine, world: World | null = null): Sky
       eClear.y + sunTop.y * sinS + moonDirect.y * sinM,
       eClear.z + sunTop.z * sinS + moonDirect.z * sinM,
     );
-    const ovcT = 0.36 - 0.16 * storm;
+    // Light trapped between a snowfield and a low deck bounces back and forth (snow albedo ~0.9,
+    // cloud base ~0.6): an overcast snowy night is far less black than a clear moonless one, and
+    // a storm by day is bright and shadowless. (POLISH: storm nights were drawn at ~1/250 of white.)
+    const ovcT = (0.36 - 0.16 * storm) / (1 - 0.5 * coverBlend);
     const aLum = lum(above.x, above.y, above.z);
     eOvc.set(
       (aLum * 0.7 + above.x * 0.3) * ovcT,
@@ -316,7 +319,9 @@ export function createSkySystem(engine: Engine, world: World | null = null): Sky
     eSky.y += 0.011 * auroraOn;
     eSky.z += 0.005 * auroraOn;
 
-    // Bounce from the snow: 0.6 to 0.8 of the sky ambient, warmed by the sun on it.
+    // Bounce from the snow: 0.6 to 0.8 of the sky ambient, warmed by the sun on it. (The env's
+    // roughest level blurs this into up-facing snow too: more washes out the blue of the shadows;
+    // the forest adds its own bounce from below, forest/common.ts.)
     eGround.copy(eSky).multiplyScalar(0.62);
     eGround.x += 0.11 * (sunDirect.x * sinS + moonDirect.x * sinM);
     eGround.y += 0.11 * (sunDirect.y * sinS + moonDirect.y * sinM);
@@ -452,7 +457,8 @@ export function createSkySystem(engine: Engine, world: World | null = null): Sky
     const DAY = Math.log10(0.6), DUSK = Math.log10(0.08);
     const adapt = lk >= DAY ? 0 : lk >= DUSK ? 0.55 * (lk - DAY) : 0.55 * (DUSK - DAY) + 0.95 * (lk - DUSK);
     const target = 0.86 * Math.pow(10, adapt);
-    const expT = Math.min(3.0, Math.max(0.25, target / Math.max(1e-6, keyLum)));
+    // (cap 4.5: at 3 every twilight and night was pinned to the cap, below the curve's own target)
+    const expT = Math.min(4.5, Math.max(0.25, target / Math.max(1e-6, keyLum)));
     if (force) expLog = Math.log(expT);
     else expLog += (Math.log(expT) - expLog) * (1 - Math.exp(-dt * 1.4));
     U.exposure.value = Math.exp(expLog) * Math.pow(2, sys.exposureBias);

@@ -18,7 +18,8 @@ import { ATMOS, U } from '../shared';
 import { AIR, fogAmount, fogColor } from '../sky/common';
 import { SNOWU, SNOW_PERIOD, SnowLayer } from './snow';
 import { DRIFTU, Spindrift } from './spindrift';
-import { StormVolumeNode, VOLU, compositeVolume, screenStreaks } from './volume';
+import { AIRLIGHT, StormVolumeNode, VOLU, compositeVolume, localAirlight, screenStreaks } from './volume';
+import { PARTICLE_LIGHTS } from '../fx/lights';
 
 const { fog, uniform, vec3, mix, max, length, luminance, positionWorld, cameraPosition } = TSL as any;
 
@@ -30,6 +31,14 @@ export interface WeatherSystem extends GfxSystem {
 }
 
 const VOL_SCALE = 0.5;
+/**
+ * The picture's visibility never drops below about this many metres (POLISH). The simulation's
+ * whiteout is 6 m (wolves, hints and sound use it), and Koschmieder's 3.9 / 6 m drew a flat grey
+ * screen: not the ground at the boots, not a fire at 20 m. sqrt(v^2 + F^2) leaves every storm above
+ * ~40 m as it was and keeps the near field of a whiteout: boots and snow at a few metres, people and
+ * posts as ghosts out to ~12 m, a fire as a glow.
+ */
+const VIS_FLOOR = 22;
 const smooth = (a: number, b: number, x: number): number => {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
@@ -63,28 +72,31 @@ export function createWeatherSystem(engine: Engine, world: World | null = null):
   const steps = (q: Quality): number => q.volumetricSteps;
   const canVolume = (q: Quality): boolean => q.volumetricSteps > 0 && engine.backend === 'webgpu' && hdr;
   post?.addHdrStage('storm', 100, (i) => {
+    // the fires', flares' and torches' glow in the air rides on whichever path draws the storm
+    const cheap = i.quality.name === 'mobile' || i.quality.name === 'low';
     if (canVolume(i.quality)) {
       volume.bind(i, steps(i.quality), VOL_SCALE);
-      return compositeVolume(i, volume, VOL_SCALE);
+      return compositeVolume(i, volume, VOL_SCALE).add(localAirlight(i, cheap));
     }
-    return screenStreaks(i, volume.camWorld);
+    return screenStreaks(i, volume.camWorld).add(localAirlight(i, cheap));
   });
 
   // ---- whiteout wash ----
   const uWo = uniform(0);
   const uWoCol = uniform(new THREE.Color(0.85, 0.87, 0.9));
   post?.addOverlay('whiteout', 100, (color) => {
-    // Contrast drains out and everything sinks into one luminous grey.
+    // Contrast drains out and everything sinks into one luminous grey. Gentle: the fog has already
+    // taken the distance, and a strong wash flattened the boots and the snow at arm's length too.
     const l = luminance(color);
-    const flat = mix(color, vec3(l), uWo.mul(0.7));
-    return mix(flat, vec3(uWoCol), uWo.mul(0.5));
+    const flat = mix(color, vec3(l), uWo.mul(0.4));
+    return mix(flat, vec3(uWoCol), uWo.mul(0.22));
   });
 
   // ---- snow ----
   // (flakes and clumps of a wind-driven snowfall a little larger than single crystals, so that a
   // storm reads as falling snow in a frame and not only as fog)
   // close: big soft streaks crossing right in front of the eye, the depth cue of a blizzard (SNOW)
-  const close = new SnowLayer({ name: 'snow.close', max: 9000, half: 3.6, below: 1.8, above: 3.2, size: [0.012, 0.03], shutter: 1 / 30, opacity: 0.75, seed: 3, sheets: 0.5 });
+  const close = new SnowLayer({ name: 'snow.close', max: 9000, half: 3.6, below: 1.8, above: 3.2, size: [0.012, 0.03], shutter: 1 / 50, opacity: 0.75, seed: 3, sheets: 0.5 });
   const near = new SnowLayer({ name: 'snow.near', max: 24000, half: 11, below: 4, above: 9, size: [0.009, 0.022], shutter: 1 / 40, opacity: 0.95, seed: 1, sheets: 0.8 });
   const mid = new SnowLayer({ name: 'snow.mid', max: 9000, half: 26, below: 8, above: 18, size: [0.016, 0.04], shutter: 1 / 20, opacity: 0.6, seed: 2, sheets: 1 });
   scene.add(close.mesh, near.mesh, mid.mesh);
@@ -115,6 +127,7 @@ export function createWeatherSystem(engine: Engine, world: World | null = null):
     const storm = Math.max(0, Math.min(1, env.storm));
     const snowfall = Math.max(0, Math.min(1, env.snowfall));
     visibility = Math.max(1, env.visibility);
+    const visDrawn = Math.sqrt(visibility * visibility + VIS_FLOOR * VIS_FLOOR);
     const wl = Math.hypot(env.windX, env.windZ);
     const wdx = wl > 1e-4 ? env.windX / wl : 1, wdz = wl > 1e-4 ? env.windZ / wl : 0;
     const gust = Math.max(0, Math.min(1, env.gust));
@@ -132,7 +145,10 @@ export function createWeatherSystem(engine: Engine, world: World | null = null):
 
     // Fog: Koschmieder (3.9 / visibility) in snow; clear air keeps distant ridges readable.
     const haze = 0.085 + 0.915 * smooth(0.0, 0.32, storm);
-    U.fogDensity.value = (3.9 / visibility) * haze;
+    U.fogDensity.value = (3.9 / visDrawn) * haze;
+    // Local lights glow in the air once it holds enough snow to show it (and one is lit).
+    const C0 = (PARTICLE_LIGHTS.col.array as THREE.Vector4[])[0];
+    AIRLIGHT.on.value = U.fogDensity.value > 0.0025 && C0.x + C0.y + C0.z > 1e-4 ? 1 : 0;
     U.fogHeight.value = 1 / (650 + 2600 * smooth(0.05, 0.5, storm));
     const sa = U.skyAmbient.value, ga = U.groundAmbient.value;
     // Snow-laden air: single-scattering albedo ~0.95, lit by the sky from above and the snow below.

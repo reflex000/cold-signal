@@ -12,6 +12,7 @@ import { icon } from './icons';
 import { createInventory } from './inventory';
 import { createMenu } from './menu';
 import { createNav } from './nav';
+import { createOpening } from './opening';
 import { createLoading, createTitle } from './title';
 import { createTouch } from './touch';
 
@@ -52,12 +53,13 @@ export function createUI(game: UiGame): UiApi {
   const inv = createInventory(ctx, nav);
   const end = createEnd(ctx, nav);
   const loading = createLoading(ctx);
+  const opening = createOpening(ctx);
   const rot = h('div', 'rot', root);
   icon('rotate', '', rot);
   h('b', '', rot, 'Rotate your phone');
   h('span', '', rot, 'Cold Signal is played in landscape.');
   // paint order, bottom to top
-  for (const e of [hud.el, touch?.el, title.el, menu.el, inv.el, end.el, loading.el, rot]) if (e) root.appendChild(e);
+  for (const e of [hud.el, touch?.el, title.el, opening.el, menu.el, inv.el, end.el, loading.el, rot]) if (e) root.appendChild(e);
 
   // ---------------------------------------------------------------- modes
   let mode: Mode | '' = '';
@@ -85,8 +87,8 @@ export function createUI(game: UiGame): UiApi {
     modeAt = performance.now();
     if (m === 'play' || m === 'boot' || m === 'photo') nav.open(null);
     loading.show(m === 'boot');
-    hud.show(m === 'play');
-    touch?.show(m === 'play');
+    hud.show(m === 'play' && !opening.active());
+    touch?.show(m === 'play' && !opening.active());
     inv.show(m === 'inventory');
     end.show(endKind(m), causeOfDeath());
     title.show(m === 'title');
@@ -148,6 +150,13 @@ export function createUI(game: UiGame): UiApi {
   return {
     update(dt) {
       if (view.mode !== mode) applyMode(view.mode);
+      // the opening of a new game covers the screen; the HUD and the touch controls come up after it
+      const wasOpening = opening.active();
+      opening.update();
+      if (wasOpening !== opening.active() && mode === 'play') {
+        hud.show(!opening.active());
+        touch?.show(!opening.active());
+      }
       // the game can be lost while the death card is up (the last teammate dies): swap the card
       if (mode === 'dead') end.show(endKind(mode), causeOfDeath());
       nav.update(dt);

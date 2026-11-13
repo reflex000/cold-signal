@@ -4,8 +4,9 @@
 // Co-op scaling of the loot: the world places supplies for one player. With n players expected
 // (SimOptions.players, kept in state.vars['sim.players']; companion bots count) every stack of a
 // consumable in a crate or on the ground holds LOOT_PER_PLAYER more per extra player, the fraction
-// rounded up or down by the simulation's random stream. Tools, radio parts and wood never scale:
-// one of each tool is enough for a group, and more hands gather more wood. (The wolves scale in
+// rounded up or down by the simulation's random stream. Tools, radio parts, wood and the makings of a
+// fire (matches, tinder) never scale: one of each tool is enough for a group, more hands gather more
+// wood, and one match lights a fire that warms everyone (each player also brings a few matches). (The wolves scale in
 // wolves.ts packSize: one more per pack for two players, two more for three or four.)
 // Owner: SIM (co-op scaling: TOGETHER).
 import type { SimCtx, System } from '../api';
@@ -13,10 +14,10 @@ import { CARRY_LIMIT, makeFromSpawn } from '../entities';
 import type { ItemId } from '../types';
 
 /** Extra share of each consumable stack per player beyond the first. */
-export const LOOT_PER_PLAYER = 0.5;
+export const LOOT_PER_PLAYER = 0.35; // (RELEASE balance: was 0.5, matches and tinder included; a pair ended the hour with 25 matches spare)
 
 /** Supplies that run out and so scale with the group. */
-export const SCALED_LOOT: ReadonlySet<ItemId> = new Set<ItemId>(['matches', 'tinder', 'flare', 'ammo', 'cell', 'bandage', 'ration', 'thermos']);
+export const SCALED_LOOT: ReadonlySet<ItemId> = new Set<ItemId>(['flare', 'ammo', 'cell', 'bandage', 'ration', 'thermos']);
 
 /** How many of `item` a stack of `n` placed for one player holds for the expected group. */
 export function scaledCount(ctx: SimCtx, item: ItemId, n: number): number {

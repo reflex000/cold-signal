@@ -426,7 +426,9 @@ export function createViewmodelSystem(engine: CsEngine, world: World | null): Vi
         // just in front of the lens, so the cone does not light the torch itself
         _v.addScaledVector(_v2, 0.02);
       }
-      const intensity = (45 + 25 * focus) * out.beam.k;
+      // (POLISH: 45..70 cd drew a clipped white ellipse with a hard edge at the night exposure; a
+      // torch lights the snow a few metres out to about the white point and still reaches ~30 m)
+      const intensity = (10 + 8 * focus) * out.beam.k;
       // the snow the beam lights throws a little of it back onto the hands
       const bounce = beamOn ? 0.05 * out.beam.k : 0;
       (FP_U.fill.value as THREE.Color).setRGB(bounce, bounce * (0.93 - 0.25 * warm), bounce * (0.8 - 0.42 * warm));
@@ -442,7 +444,7 @@ export function createViewmodelSystem(engine: CsEngine, world: World | null): Vi
             beam.intensity = intensity;
             beam.range = 34 + 12 * focus;
             beam.angle = 0.42 - 0.14 * focus;
-            beam.penumbra = 0.72;
+            beam.penumbra = 0.9;
           }
         }
         const mOn = visible && out.flame.on;

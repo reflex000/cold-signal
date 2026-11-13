@@ -125,12 +125,22 @@ function feed(ctx: SimCtx, p: PlayerEnt, f: FireEnt, item: 'stick' | 'log' | 'ti
   return true;
 }
 
-/** USE on a fire that wants wood: a stick if there is one, else a split log. Tinder is kept for lighting. */
+/**
+ * USE on a fire that wants wood. A fire that has caught takes a split log (it burns longest, and the
+ * sticks stay in the pack to lay the next fire); a young or weak one, or one with no room for a log,
+ * takes a stick. Tinder is kept for lighting. (RELEASE: was always a stick first, which left players
+ * who fed their fires with nothing to lay the next one.)
+ */
 function feedBest(ctx: SimCtx, p: PlayerEnt, f: FireEnt): void {
-  if ((p.inv.stick ?? 0) > 0) feed(ctx, p, f, 'stick');
-  else if ((p.inv.log ?? 0) > 0) feed(ctx, p, f, 'log');
+  const sticks = p.inv.stick ?? 0, logs = p.inv.log ?? 0;
+  const logFits = woodOf(ctx, f) + BURN.log <= MAX_WOOD[f.type];
+  if (logs > 0 && (sticks === 0 || (f.lit && f.heat >= LOG_HEAT && logFits))) feed(ctx, p, f, 'log');
+  else if (sticks > 0) feed(ctx, p, f, 'stick');
   else toast(ctx, p, 'info', 'You have no wood.');
 }
+
+/** Heat from which a lit fire takes a split log first. */
+export const LOG_HEAT = 0.45;
 
 /** Chance that a struck match lights this fire for this player, and what most stands against it. */
 export function igniteOdds(ctx: SimCtx, f: FireEnt, p: PlayerEnt, tinder: boolean): { chance: number; why: 'wind' | 'wet' | 'luck' } {

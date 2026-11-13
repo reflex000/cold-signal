@@ -296,7 +296,11 @@ export function createForestSystem(engine: Engine, world: World): ForestSystem {
   for (let i = 0; i < nR; i++) {
     const r = rocks[i];
     const sd = world.snowDepthAt(r.x, r.z);
-    const sink = (0.24 + 0.12 * hash01(i, 0x6b1)) * r.sy + 0.35 * sd;
+    // On a steep face the ground under a broad rock's downhill edge is metres lower than under its
+    // centre: outcrops on the cliffs above the cave hung in the air (POLISH). Bed them into the slope.
+    const tanS = Math.tan(Math.min(1.25, world.slopeAt(r.x, r.z) * (Math.PI / 2)));
+    const lean = Math.min(1.2 * Math.max(r.sx, r.sz), 0.55 * tanS * Math.max(r.sx, r.sz));
+    const sink = (0.24 + 0.12 * hash01(i, 0x6b1)) * r.sy + 0.35 * sd + lean;
     rA.set([r.x, r.y - sink, r.z, hash01(i, 0x19f)], i * 4);
     rB.set([r.yaw, r.tilt, r.variant & 7, 0], i * 4);
     rC.set([r.sx, r.sy, r.sz, 0], i * 4);

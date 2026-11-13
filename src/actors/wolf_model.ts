@@ -207,12 +207,16 @@ interface Coat { flank: RGB; saddle: RGB; belly: RGB; legs: RGB; face: RGB; mask
 const coat = (flank: number, saddle: number, belly: number, legs: number, face: number, mask: number, dark: number): Coat => ({
   flank: hex(flank), saddle: hex(saddle), belly: hex(belly), legs: hex(legs), face: hex(face), mask: hex(mask), dark: hex(dark),
 });
-/** Grey (most), dark, pale, brown-grey. */
+/**
+ * Grey (most), dark, pale, brown-grey. (POLISH: the warm greys and tan legs read as a coyote in a
+ * low sun; timber wolves are grizzled, nearly neutral grey with a dark saddle, only the legs and
+ * the backs of the ears a little tawny.)
+ */
 export const WOLF_COATS: Coat[] = [
-  coat(0x857e72, 0x3a3631, 0xbcb2a0, 0xa89a84, 0xb8ae9c, 0x5e564c, 0x181614),
-  coat(0x4e4a45, 0x211f1d, 0x8e877b, 0x6e655a, 0x8a8276, 0x2e2a26, 0x121110),
-  coat(0xb8b2a6, 0x7c766c, 0xe0dbd0, 0xc9bfae, 0xd6cfc2, 0x8a8278, 0x34302c),
-  coat(0x86735e, 0x3b3026, 0xcbbca2, 0xa88c6c, 0xbfae94, 0x5a4a3a, 0x1a1512),
+  coat(0x7d7b76, 0x2f2d2a, 0xb3b0a8, 0x938b7e, 0xa9a69e, 0x504c46, 0x161514),
+  coat(0x4b4946, 0x1e1d1c, 0x8a8781, 0x67625b, 0x85827c, 0x2b2927, 0x111010),
+  coat(0xb1afaa, 0x6f6c66, 0xdcd9d2, 0xbcb5a8, 0xd0cdc6, 0x7f7b75, 0x302e2b),
+  coat(0x78706a, 0x332e29, 0xbcb4a6, 0x958775, 0xb0a898, 0x4f473f, 0x181512),
 ];
 
 // ------------------------------------------------------------------------------------------

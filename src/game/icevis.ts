@@ -94,6 +94,21 @@ export function createIceVisuals(engine: CsEngine, world: World): GfxSystem {
   waterMat.name = 'lake-water';
   const film = instanceColor.r.sub(0.012).div(0.2).clamp(0, 1);
   waterMat.roughnessNode = mix(float(0.09), float(0.5), film);
+  // A flat mirror read as a grey floor, the sky lying in it unbroken (POLISH): the wind shivers the
+  // open water in small cat's-paw ripples drifting downwind, and the film stills them as it forms.
+  {
+    const { transformNormalToView, normalize: nrmz, mx_noise_float: nz } = TSL as any;
+    const t = U.time;
+    const q = positionWorld.xz;
+    const wv = U.windDir.mul(t.mul(0.45));
+    const e = 0.08;
+    const hgt = (o: any): any => nz(q.add(o).mul(2.3).sub(wv.mul(2.3))).mul(0.6).add(nz(q.add(o).mul(6.1).sub(wv.mul(4.4)).add(5.7)).mul(0.25));
+    const h0 = hgt(vec2(0, 0));
+    const amp = float(0.06).mul(film.oneMinus());
+    const dx = hgt(vec2(e, 0)).sub(h0).div(e).mul(amp);
+    const dz = hgt(vec2(0, e)).sub(h0).div(e).mul(amp);
+    waterMat.normalNode = transformNormalToView(nrmz(vec3(dx.negate(), 1, dz.negate())));
+  }
 
   // --- new ice: clear and dark, white fracture lines crazing it (two warped line families)
   const newMat = decalMaterial(new THREE.MeshStandardNodeMaterial({ metalness: 0 }));
@@ -115,7 +130,8 @@ export function createIceVisuals(engine: CsEngine, world: World): GfxSystem {
   const up = smoothstep(0.35, 0.85, (TSL as any).normalWorld.y);
   // glassy broken edges; on top a dusting of snow, uneven (wind-packed patches and bare ice)
   const dust = sin(positionWorld.x.mul(5.3).add(sin(positionWorld.z.mul(3.7)))).mul(sin(positionWorld.z.mul(6.1).add(positionWorld.x.mul(1.3)))).mul(0.5).add(0.5);
-  slabMat.colorNode = mix(vec3(0.16, 0.22, 0.27), mix(vec3(0.4, 0.46, 0.51), vec3(0.72, 0.75, 0.78), dust.mul(0.7).add(0.3)), up);
+  // (POLISH: the tops were near-white sheets of paper; clear grey-blue ice, snow only in patches)
+  slabMat.colorNode = mix(vec3(0.12, 0.17, 0.21), mix(vec3(0.22, 0.27, 0.31), vec3(0.52, 0.56, 0.6), smoothstep(0.5, 0.85, dust)), up);
   slabMat.roughnessNode = mix(float(0.1), float(0.65), up);
 
   const disc = raggedDisc(1.7);
@@ -180,7 +196,7 @@ export function createIceVisuals(engine: CsEngine, world: World): GfxSystem {
         let inside = false;
         for (const o of holes) if ((o.x !== x || o.z !== z) && Math.hypot(sx - o.x, sz - o.z) < R * 0.8) inside = true;
         if (inside) continue;
-        const len = 0.3 + 0.55 * h(30 + k), wid = 0.25 + 0.4 * h(40 + k), thick = 0.035 + 0.045 * h(80 + k);
+        const len = 0.3 + 0.55 * h(30 + k), wid = 0.25 + 0.4 * h(40 + k), thick = 0.07 + 0.08 * h(80 + k); // (POLISH: 4-8 cm read as paper)
         const tilt = open ? 0.02 + 0.16 * h(50 + k) : 0.01 + 0.035 * h(50 + k);
         _e.set(tilt * (h(60 + k) > 0.5 ? 1 : -1), a + Math.PI / 2 + (h(70 + k) - 0.5) * 0.8, tilt * 0.5, 'YXZ');
         _q.setFromEuler(_e);

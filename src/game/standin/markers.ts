@@ -1,13 +1,16 @@
-// STAND-IN for the entity visuals nobody else draws yet: plain coloured shapes so everything can
-// be seen and walked to. Pickups, crates, wood, heavy logs, notes, campfire stones, flares,
-// players and wolves (the helicopter is game/heli.ts). One instanced mesh per shape, rewritten every frame from
-// view.list(kind) (no allocation).
-// Others take over kinds at run time by wrapping update() with a filtered view (keep `update` a
-// plain assignable property): FX hides fires and flares (and lights them from its own pool),
-// FIGURES hides players and wolves. STRUCTURES draws the door, panel, generator, bed and beacon
-// devices and the locker and cupboard crates as parts of its buildings, so they are skipped here.
+// The entity things nobody else draws: pickups, crates, dead wood, heavy logs and notes, each with
+// its KIT model and the shared prop material (snow settles on them like on every prop): one
+// InstancedMesh per (model, variant), plus one per hinged part (crate lids open when looted),
+// rewritten every frame from view.list(kind) (no allocation). (POLISH: these were coloured boxes.)
+// Models: src/models/props (luggage, crate, toolbox, log_heavy, pickups.ts, deadwood.ts) and the
+// first-person extras of src/models/tools/extras.ts (matchbox, cartridge, cell, ration, ...).
+// Plain shapes remain only as fallbacks for kinds that others take over at run time by wrapping
+// update() with a filtered view (keep `update` a plain assignable property): FX hides fires and
+// flares (and lights them from its own pool), FIGURES hides players and wolves, VIEWMODEL hides
+// the tool pickups. STRUCTURES draws the door, panel, generator, bed and beacon devices and the
+// locker and cupboard crates as parts of its buildings, so they are skipped here.
 // No lights: an idle point light costs every lit pixel (fires and flares are FX's pool).
-// Owner: GAME.
+// Owner: GAME (models: POLISH).
 import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
 import { U } from '../../gfx/shared';
@@ -15,6 +18,11 @@ import type { Frame, GfxSystem } from '../../gfx/api';
 import type { CsEngine } from '../../gfx/engine';
 import type { CrateEnt, DeviceEnt, FireEnt, ItemId, LogEnt, PickupEnt, PlayerEnt, WoodEnt } from '../../sim/types';
 import type { ViewEnt } from '../view';
+import type { ModelDef } from '../../models/kit';
+import { getModel, hasModel, modelMeta } from '../../models/registry';
+import { getPropMaterial } from '../../models/material';
+import { getExtra, type ExtraName } from '../../models/tools/extras';
+import '../../models/props';
 
 type RGB = [number, number, number];
 const PARKA: RGB[] = [[0.5, 0.12, 0.05], [0.07, 0.14, 0.36], [0.2, 0.24, 0.09], [0.55, 0.34, 0.05]];
@@ -36,7 +44,6 @@ const ITEM_LOOK: Partial<Record<ItemId, { s: [number, number, number]; c: RGB }>
   rifle: { s: [0.08, 0.1, 1.05], c: [0.2, 0.13, 0.08] },
   radio: { s: [0.16, 0.22, 0.08], c: [0.18, 0.2, 0.16] },
 };
-const PART_LOOK = { s: [0.2, 0.16, 0.2] as [number, number, number], c: [0.95, 0.55, 0.1] as RGB };
 
 const CRATE_LOOK: Record<CrateEnt['type'], { s: [number, number, number]; c: RGB }> = {
   luggage: { s: [0.7, 0.28, 0.48], c: [0.1, 0.13, 0.22] },
@@ -55,6 +62,45 @@ const BUILT_IN_CRATES: ReadonlySet<CrateEnt['type']> = new Set(['locker', 'cupbo
 const DEVICE_LOOK: Partial<Record<DeviceEnt['type'], { s: [number, number, number]; y: number; c: RGB }>> = {
   note: { s: [0.22, 0.01, 0.3], y: 0.02, c: [0.75, 0.72, 0.62] },
 };
+
+// ---- real models -------------------------------------------------------------------------------
+
+/**
+ * How a pickup is drawn: a registered model (its variant picked by the entity id), or one of the
+ * first-person extras laid down (`lay: 'x'` turns its long +Y axis along X), up to three side by
+ * side when the stack holds several (`many`).
+ */
+interface Look { model?: string; extra?: ExtraName; lay?: 'x'; many?: boolean }
+const PICKUP_MODEL: Partial<Record<ItemId, Look>> = {
+  stick: { model: 'pickup_sticks' },
+  log: { model: 'pickup_logs' },
+  tinder: { model: 'pickup_tinder' },
+  ammo: { model: 'pickup_ammo' },
+  matches: { extra: 'matchbox', many: true },
+  flare: { extra: 'cartridge', lay: 'x', many: true },
+  cell: { extra: 'cell', lay: 'x', many: true },
+  ration: { extra: 'ration', lay: 'x', many: true },
+  thermos: { extra: 'thermos', lay: 'x' },
+  bandage: { extra: 'bandage', many: true },
+  part_battery: { model: 'part_battery' },
+  part_handset: { model: 'part_handset' },
+  part_coil: { model: 'part_coil' },
+  part_tube: { model: 'part_tube' },
+  part_fuse: { model: 'part_fuse' },
+};
+const CRATE_MODEL: Partial<Record<CrateEnt['type'], string>> = { luggage: 'luggage', crate: 'crate', toolbox: 'toolbox', medkit: 'pickup_medkit' };
+const WOOD_MODEL: Record<WoodEnt['type'], string> = { snag: 'snag', deadfall: 'deadfall', stump: 'stump', branchpile: 'branchpile' };
+
+/** One (model, variant): its instanced body and one instanced mesh per hinged part. */
+interface Batch {
+  mesh: THREE.InstancedMesh;
+  parts: { mesh: THREE.InstancedMesh; pivot: THREE.Vector3; axis: THREE.Vector3; angle: number }[];
+  n: number;
+  /** Lays the model down and rests it on y = 0 (identity for registered models). */
+  base: THREE.Matrix4;
+  /** Height above the ground once laid down (how far 'snow' sinks it). */
+  height: number;
+}
 
 interface Pool {
   mesh: THREE.InstancedMesh;
@@ -183,6 +229,103 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
   for (const p of all) group.add(p.mesh);
   scene.add(group);
 
+  // ---- real models: one batch per (model, variant) ----
+  const propMat = getPropMaterial();
+  const batches = new Map<string, Batch>();
+  const batchList: Batch[] = [];
+  const _box = new THREE.Box3();
+  const _rz = new THREE.Matrix4().makeRotationZ(Math.PI / 2);
+  function makeBatch(def: ModelDef, cap: number, shadow: boolean, lay: 'x' | undefined, name: string): Batch {
+    const base = new THREE.Matrix4();
+    _box.copy(def.bounds);
+    if (lay === 'x') {
+      base.copy(_rz);
+      _box.applyMatrix4(_rz);
+    }
+    // extras are centred on their origin: rest them on the ground (registered models already are)
+    const lift = -_box.min.y;
+    base.premultiply(new THREE.Matrix4().makeTranslation(0, lift, 0));
+    const mesh = new THREE.InstancedMesh(def.geometry!, propMat, cap);
+    mesh.name = 'markers-' + name;
+    mesh.count = 0;
+    mesh.frustumCulled = false;
+    mesh.castShadow = shadow;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+    const parts: Batch['parts'] = [];
+    for (const p of Object.values(def.parts)) {
+      if (!p.geometry) continue;
+      const pm = new THREE.InstancedMesh(p.geometry, propMat, cap);
+      pm.name = 'markers-' + name + '-' + p.name;
+      pm.count = 0;
+      pm.frustumCulled = false;
+      pm.castShadow = shadow;
+      pm.receiveShadow = true;
+      group.add(pm);
+      parts.push({ mesh: pm, pivot: p.pivot.clone(), axis: p.axis.clone(), angle: p.openAngle });
+    }
+    const b: Batch = { mesh, parts, n: 0, base, height: _box.max.y - _box.min.y };
+    batchList.push(b);
+    return b;
+  }
+  /** The batch of a registered model's variant for `seed` (built on first use). */
+  function modelBatch(name: string, seed: number, cap: number, shadow: boolean): Batch | null {
+    if (!hasModel(name)) return null;
+    const v = Math.abs(Math.floor(seed)) % Math.max(1, modelMeta(name).variants);
+    const key = name + '#' + v;
+    let b = batches.get(key);
+    if (!b) {
+      const def = getModel(name, v);
+      if (!def.geometry) return null;
+      b = makeBatch(def, cap, shadow, undefined, key);
+      batches.set(key, b);
+    }
+    return b;
+  }
+  function extraBatch(name: ExtraName, lay: 'x' | undefined, cap: number): Batch | null {
+    const key = 'extra:' + name;
+    let b = batches.get(key);
+    if (!b) {
+      const def = getExtra(name);
+      if (!def.geometry) return null;
+      b = makeBatch(def, cap, false, lay, key);
+      batches.set(key, b);
+    }
+    return b;
+  }
+  const _q2 = new THREE.Quaternion();
+  const _yAxis = new THREE.Vector3(0, 1, 0);
+  const _inst = new THREE.Matrix4();
+  const _pm = new THREE.Matrix4();
+  const _pr = new THREE.Matrix4();
+  /** One instance: world position, yaw, scale (x, y, z), lid opening 0..1. */
+  function put(b: Batch, x: number, y: number, z: number, yaw: number, sx: number, sy: number, sz: number, open = 0): void {
+    if (b.n >= b.mesh.instanceMatrix.count) return;
+    _q2.setFromAxisAngle(_yAxis, yaw);
+    _inst.compose(_p.set(x, y, z), _q2, _s.set(sx, sy, sz)).multiply(b.base);
+    b.mesh.setMatrixAt(b.n, _inst);
+    for (const part of b.parts) {
+      // the part's geometry is relative to its pivot: place the pivot, then swing about the hinge
+      _pm.makeTranslation(part.pivot.x, part.pivot.y, part.pivot.z);
+      if (open > 0 && part.angle !== 0) _pm.multiply(_pr.makeRotationAxis(part.axis, part.angle * open));
+      _pm.premultiply(_inst);
+      part.mesh.setMatrixAt(b.n, _pm);
+    }
+    b.n++;
+  }
+  /** Small stable per-entity number for variants. */
+  const vseed = (id: number): number => (id * 2654435761) >>> 0;
+
+  // Build the batches the world will certainly need now, under the loading screen, so the first
+  // sight of a snag or a suitcase does not stall a frame (the rare ones build on first use).
+  for (let v = 0; v < 4; v++) {
+    modelBatch('pickup_sticks', v, 160, false);
+    modelBatch('snag', v, 48, true);
+    modelBatch('deadfall', v, 48, true);
+    modelBatch('luggage', v, 16, true);
+    modelBatch('log_heavy', v, 12, true);
+  }
+
   const FIRE: RGB = [1.0, 0.42, 0.12];
   const FLARE: RGB = [1.0, 0.12, 0.06];
 
@@ -192,31 +335,48 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
       const view = f.view;
       const t = f.time;
       for (const p of all) p.n = 0;
+      for (const b of batchList) b.n = 0;
       // small things are not drawn far away (sub-pixel specks): metres, squared
       const cx = view.camera.x, cz = view.camera.z;
       const beyond = (e: { x: number; z: number }, r: number) => (e.x - cx) * (e.x - cx) + (e.z - cz) * (e.z - cz) > r * r;
 
       for (const e of view.list('pickup') as ViewEnt<PickupEnt>[]) {
         if (beyond(e, e.item.startsWith('part_') ? 200 : 110)) continue;
-        const look = e.item.startsWith('part_') ? PART_LOOK : ITEM_LOOK[e.item] ?? { s: [0.16, 0.16, 0.16] as [number, number, number], c: [0.4, 0.4, 0.4] as RGB };
-        const sink = e.lie === 'snow' ? look.s[1] * 0.5 : 0;
-        if (e.item === 'stick' || e.item === 'log') {
-          // a few pieces side by side
-          const n = Math.min(3, Math.max(1, e.n));
+        const look = PICKUP_MODEL[e.item];
+        const b = look?.model ? modelBatch(look.model, vseed(e.id), look.model === 'pickup_sticks' ? 160 : 48, false) : look?.extra ? extraBatch(look.extra, look.lay, 48) : null;
+        if (b) {
+          // half sunk where it lies in the snow
+          const sink = e.lie === 'snow' ? b.height * 0.45 : 0;
+          const n = look?.many ? Math.min(3, Math.max(1, e.n)) : 1;
           for (let i = 0; i < n; i++) {
-            const off = (i - (n - 1) / 2) * look.s[1] * 1.3;
-            add(sticks, e.x + Math.sin(e.yaw) * off, e.y + look.s[1] / 2 - sink, e.z + Math.cos(e.yaw) * off, e.yaw + i * 0.15, 0, 0, look.s[0], look.s[1] / 2, look.s[2] / 2, look.c);
+            const off = (i - (n - 1) / 2) * 0.07;
+            put(b, e.x + Math.cos(e.yaw) * off, e.y - sink, e.z - Math.sin(e.yaw) * off, e.yaw + i * 0.4, 1, 1, 1);
           }
-        } else add(items, e.x, e.y - sink, e.z, e.yaw, 0, 0, look.s[0], look.s[1], look.s[2], look.c);
+          continue;
+        }
+        const fb = ITEM_LOOK[e.item] ?? { s: [0.16, 0.16, 0.16] as [number, number, number], c: [0.4, 0.4, 0.4] as RGB };
+        add(items, e.x, e.y - (e.lie === 'snow' ? fb.s[1] * 0.5 : 0), e.z, e.yaw, 0, 0, fb.s[0], fb.s[1], fb.s[2], fb.c);
       }
       for (const e of view.list('crate') as ViewEnt<CrateEnt>[]) {
         if (BUILT_IN_CRATES.has(e.type) || beyond(e, 250)) continue;
+        const name = CRATE_MODEL[e.type];
+        const b = name ? modelBatch(name, vseed(e.id), 16, true) : null;
+        if (b) {
+          put(b, e.x, e.y, e.z, e.yaw, 1, 1, 1, e.open ? 1 : 0);
+          continue;
+        }
         const look = CRATE_LOOK[e.type] ?? CRATE_LOOK.crate;
         add(boxes, e.x, e.y, e.z, e.yaw, 0, 0, look.s[0], look.s[1], look.s[2], look.c, e.open ? 0.55 : 1);
       }
       for (const e of view.list('wood') as ViewEnt<WoodEnt>[]) {
         if (beyond(e, e.type === 'snag' ? 400 : 200)) continue;
         const s = e.scale || 1;
+        const b = modelBatch(WOOD_MODEL[e.type], e.seed ?? vseed(e.id), 48, true);
+        if (b) {
+          // snags and stumps stand a little into the snow; deadfall lies in it (the model is sunk already)
+          put(b, e.x, e.y - (e.type === 'snag' ? 0.12 : e.type === 'stump' ? 0.05 : 0), e.z, e.yaw, s, s, s);
+          continue;
+        }
         if (e.type === 'snag') add(posts, e.x, e.y - 0.2, e.z, e.yaw, 0, 0, 0.17 * s, 7 * s, 0.17 * s, [0.21, 0.2, 0.19]);
         else if (e.type === 'stump') add(posts, e.x, e.y - 0.05, e.z, e.yaw, 0, 0, 0.28 * s, 0.5 * s, 0.28 * s, [0.2, 0.15, 0.1]);
         else if (e.type === 'deadfall') add(cyls, e.x, e.y + 0.18 * s, e.z, e.yaw, 0, 0.06, 2.6 * s, 0.2 * s, 0.2 * s, [0.19, 0.17, 0.15]);
@@ -224,10 +384,18 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
       }
       for (const e of view.list('log') as ViewEnt<LogEnt>[]) {
         if (beyond(e, 250)) continue;
-        add(cyls, e.x, e.y + 0.22, e.z, e.yaw + Math.PI / 2, 0, 0, Math.max(1, e.len), 0.22, 0.22, [0.23, 0.17, 0.11]);
+        const b = modelBatch('log_heavy', vseed(e.id), 12, true);
+        // the model is a 2.4 m log along Z, standing on y = 0
+        if (b) put(b, e.x, e.y, e.z, e.yaw, 1, 1, Math.max(1, e.len) / 2.4);
+        else add(cyls, e.x, e.y + 0.22, e.z, e.yaw + Math.PI / 2, 0, 0, Math.max(1, e.len), 0.22, 0.22, [0.23, 0.17, 0.11]);
       }
       for (const e of view.list('device') as ViewEnt<DeviceEnt>[]) {
         if (BUILT_IN_DEVICES.has(e.type) || beyond(e, 250)) continue;
+        const nb = e.type === 'note' ? modelBatch('note', 0, 16, false) : null;
+        if (nb) {
+          put(nb, e.x, e.y, e.z, e.yaw, 1, 1, 1);
+          continue;
+        }
         const look = DEVICE_LOOK[e.type];
         if (!look) continue;
         add(boxes, e.x, e.y + look.y, e.z, e.yaw, 0, 0, look.s[0], look.s[1], look.s[2], look.c);
@@ -286,6 +454,17 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
         }
       }
       for (const p of all) done(p);
+      for (const b of batchList) {
+        const n = b.n;
+        b.mesh.count = n;
+        b.mesh.visible = n > 0;
+        if (n > 0) b.mesh.instanceMatrix.needsUpdate = true;
+        for (const part of b.parts) {
+          part.mesh.count = n;
+          part.mesh.visible = n > 0;
+          if (n > 0) part.mesh.instanceMatrix.needsUpdate = true;
+        }
+      }
     },
     dispose(): void {
       scene.remove(group);
@@ -293,6 +472,11 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
       flameMat.dispose();
       lit.dispose();
       glow.dispose();
+      // the model geometries belong to the registry's cache: only the instance buffers go
+      for (const b of batchList) {
+        b.mesh.dispose();
+        for (const part of b.parts) part.mesh.dispose();
+      }
     },
   };
 }

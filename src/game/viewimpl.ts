@@ -37,6 +37,8 @@ export class ViewImpl implements View {
   readonly camera: Camera = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0, fov: 75, third: 0 };
   readonly hud: Hud = makeHud();
   readonly rig = { bob: 0, stride: 0, speed: 0, recoil: 0, sway: 0, breath: 0, shiver: 0, landing: 0 };
+  /** Seconds left of a new game's opening (game.ts counts it down; ui/opening.ts draws it). */
+  opening = 0;
 
   private session: ClientSession | null = null;
   private phase = 0;
