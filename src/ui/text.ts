@@ -66,6 +66,9 @@ export const DEATH: Record<HurtCause | 'unknown', { title: string; line: string 
   unknown: { title: 'You did not make it', line: 'The mountain keeps what it is given.' },
 };
 
+/** The co-op end: every human on the mountain is dead at once (stage 'lost'). */
+export const LOST = { title: 'No one is left', line: 'The radio stays silent on the ridge. The snow covers the tracks by morning.' };
+
 export interface ControlLine { k: string; a: string }
 export const CONTROLS: { kbm: ControlLine[]; pad: ControlLine[]; touch: ControlLine[] } = {
   kbm: [

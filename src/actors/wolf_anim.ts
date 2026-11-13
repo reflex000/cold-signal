@@ -192,20 +192,41 @@ export class WolfAnimator {
 
   update(e: WolfEnt, ctx: AnimCtx, target: Entity | null, cam: THREE.Vector3): void {
     if (!this.init) this.reset(e, ctx);
-    const dt = clamp(ctx.dt, 0, 0.1);
+    // the time since the last update; the animation integrates at most 0.1 s of it
+    const gap = Math.max(0, ctx.dt);
+    const dt = Math.min(gap, 0.1);
     if (Math.hypot(e.x - this.lastX, e.z - this.lastZ) > 6) this.reset(e, ctx);
     const mood = e.mood;
     const dead = mood === 'dead';
-    // velocity from the motion actually drawn (snapshot velocity only as a hint while the drawn
-    // position has not caught up): a blocked or lagging wolf must not run on the spot
-    if (dt > 1e-4) {
-      const mvx = (e.x - this.lastX) / dt, mvz = (e.z - this.lastZ) / dt;
+    const jx = e.x - this.lastX, jz = e.z - this.lastZ;
+    this.lastX = e.x;
+    this.lastZ = e.z;
+    const moved = Math.hypot(jx, jz);
+    // more ground than this update's time explains (frames skipped by a hitch or a tool, a late snapshot):
+    // the excess carries the feet along with the body instead of leaving the planted feet behind
+    const ev = Math.hypot(e.vx, e.vz);
+    const absorb = Math.max(ev, this.spd) * dt + 0.06;
+    const skip = moved > Math.max(0.35, absorb * 1.5);
+    if (skip) {
+      const k = 1 - absorb / moved;
+      for (const f of this.feet) {
+        for (const p of [f.pos, f.from, f.to]) {
+          p.x += jx * k;
+          p.z += jz * k;
+          p.y = this.groundY(ctx, p.x, p.z, e.y);
+        }
+      }
+      this.velX = e.vx;
+      this.velZ = e.vz;
+      this.spd = ev;
+    } else if (gap > 1e-4) {
+      // velocity from the motion actually drawn (snapshot velocity only as a hint while the drawn
+      // position has not caught up): a blocked or lagging wolf must not run on the spot
+      const mvx = jx / gap, mvz = jz / gap;
       const hint = Math.abs(e.vx) + Math.abs(e.vz) > 1e-4 && Math.hypot(mvx, mvz) < 0.05 ? 0.25 : 0;
       this.velX = damp(this.velX, mvx + (e.vx - mvx) * hint, 10, dt);
       this.velZ = damp(this.velZ, mvz + (e.vz - mvz) * hint, 10, dt);
     }
-    this.lastX = e.x;
-    this.lastZ = e.z;
     const v = dead ? 0 : Math.hypot(this.velX, this.velZ);
     this.spd = damp(this.spd, v, 8, dt);
 
@@ -234,7 +255,7 @@ export class WolfAnimator {
     // ---- facing ----
     let yawT = e.yaw;
     if (this.wDrag > 0.5 && v > 0.2) yawT = Math.atan2(this.velX, this.velZ); // backing away, facing the prey
-    this.yaw = dampAngle(this.yaw, yawT, this.wDead > 0.5 ? 0 : 5 + this.spd * 0.6, dt);
+    this.yaw = dampAngle(this.yaw, yawT, this.wDead > 0.5 ? 0 : 5 + this.spd * 0.6, skip ? gap : dt);
 
     // ---- gait ----
     this.wTrot = damp(this.wTrot, smooth(1.8, 2.8, this.spd), 4, dt);

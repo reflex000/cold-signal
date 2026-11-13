@@ -12,5 +12,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 4000,
     sourcemap: false,
   },
-  test: { include: ['src/**/*.test.ts'], environment: 'node' },
+  // The suite runs its files in parallel on a shared machine: long behavioural traces get room
+  // (cost tests scale their budgets with the measured machine speed, see src/sim/timing.ts).
+  test: { include: ['src/**/*.test.ts'], environment: 'node', testTimeout: 30000, hookTimeout: 120000 },
 });

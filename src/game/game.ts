@@ -24,7 +24,7 @@ import { U } from '../gfx/shared';
 import { ClientSession } from '../net/client';
 import { Host } from '../net/host';
 import { createLoopback, type Loopback } from '../net/loopback';
-import { neutralInput } from '../sim/entities';
+import { copyInput, neutralInput } from '../sim/entities';
 import { Sim } from '../sim/sim';
 import { DT, type Action, type InputCmd, type SimEvent, type ToolId } from '../sim/types';
 import { TOOL_ORDER } from '../ui/text';
@@ -32,7 +32,8 @@ import { createUI } from '../ui/index';
 import type { UiApi, UiGame } from '../ui/api';
 import { createWorld, type WorldEx } from '../world/index';
 import type { World } from '../world/types';
-import { BotBrain } from './bots';
+import { BotBrain, litFires, Mind, type BodyLink } from './bots';
+import { ViewReader } from './botnav';
 import { CameraRig } from './camera';
 import { FocusPicker } from './focus';
 import { HudModel } from './hudmodel';
@@ -383,7 +384,8 @@ export class Game {
         if (this.session && this.session.ready) this.session.sendAction({ t: 'equip', tool });
       },
       respawn: () => {
-        if (this.mode !== 'dead') return;
+        // a lost game has no respawn (the host refuses it too)
+        if (this.mode !== 'dead' || this.view.objective.stage === 'lost') return;
         this.session?.sendAction({ t: 'respawn' });
       },
       photo: (on: boolean) => {
@@ -405,7 +407,10 @@ export class Game {
       location.href = u.toString();
       return;
     }
-    if (!this.fresh || !this.session) this.openSession(null);
+    // The session behind the title was laid out for 1 + bots players (loot and packs scale with the
+    // group): a bots setting changed on the title since then wants a new layout.
+    const expected = 1 + this.settings.bots;
+    if (!this.fresh || !this.session || !this.sim || this.sim.state.vars['sim.players'] !== expected) this.openSession(null);
     this.save.clear();
     this.cam.reset();
     this.hud.reset();
@@ -437,6 +442,9 @@ export class Game {
 
   saveNow(): boolean {
     if (!this.sim || this.fresh || !IN_GAME.includes(this.mode)) return false;
+    // a finished run (won, or lost in co-op) leaves no save behind
+    const stage = this.sim.state.objective.stage;
+    if (stage === 'won' || stage === 'lost') return false;
     const ok = this.save.write(this.sim.serialize());
     if (ok) this.bus.emit('save', {});
     return ok;
@@ -516,11 +524,14 @@ export class Game {
     return this.looping;
   }
 
-  /** One host tick: sample the input, send it, run the bots, step the host. */
+  /** One host tick: sample the input (or let the autopilot play), send it, run the bots, step the host. */
   private tick(): void {
     const s = this.session!;
-    this.input.sample(this.cmd);
-    this.cmd.focus = this.focus.id;
+    if (this.auto && this.view.me) this.autoTick();
+    else {
+      this.input.sample(this.cmd);
+      this.cmd.focus = this.focus.id;
+    }
     s.sendInput(this.cmd);
     this.pump();
     this.bots.tick(DT);
@@ -610,14 +621,59 @@ export class Game {
     const me = this.view.me;
     const m = this.mode;
     if (m === 'title' || m === 'boot') return;
-    if (this.view.objective.stage === 'won' && m !== 'won') {
-      this.saveNow();
-      this.save.clear();
-      this.setMode('won');
+    const stage = this.view.objective.stage;
+    if (stage === 'won' || stage === 'lost') {
+      // The run is over either way: nothing to continue (saveNow refuses a finished game from here on).
+      if (this.save.has()) this.save.clear();
+      if (stage === 'won' && m !== 'won') this.setMode('won');
+      // Mode has no 'lost': the end card is the death screen's, which reads the stage (no Respawn).
+      else if (stage === 'lost' && m !== 'dead') this.setMode('dead');
       return;
     }
     if (me && me.life === 'dead' && m !== 'dead' && m !== 'won') this.setMode('dead');
     else if (me && me.life !== 'dead' && m === 'dead') this.setMode('play');
+  }
+
+  // ======================================================================================== autopilot
+
+  /**
+   * The release scenario's player: a bot mind in the 'lead' role plays the LOCAL player through the
+   * same path as the devices (one InputCmd per tick into the client session, Actions through
+   * GameActions), reading only the client's View. Off by default; CS.auto(true) turns it on.
+   */
+  private auto: { mind: Mind; reader: ViewReader } | null = null;
+  private readonly autoLink: BodyLink = {
+    send: (cmd) => {
+      copyInput(this.cmd, cmd);
+      // the camera looks where the autopilot looks
+      this.input.setLook(cmd.yaw, cmd.pitch);
+    },
+    act: (a) => this.actions.act(a),
+  };
+
+  setAuto(on: boolean): void {
+    if (!on) {
+      this.auto = null;
+      return;
+    }
+    const id = this.view.myId;
+    if (!id || !this.world) return;
+    this.auto = { mind: new Mind(id, 'lead', 1), reader: new ViewReader(this.world, this.view) };
+  }
+
+  /** What the autopilot and each companion are doing (tools). */
+  botsDoing(): Record<string, string> {
+    const out = this.bots ? this.bots.doing() : {};
+    if (this.auto) out.auto = this.auto.mind.doing;
+    return out;
+  }
+
+  private autoTick(): void {
+    const a = this.auto!;
+    if (a.mind.id !== this.view.myId) this.setAuto(true); // a new session: a new body
+    const pl = this.bots.planner;
+    pl.fires = litFires(a.reader, pl.fires);
+    this.auto!.mind.tick(a.reader, pl, DT, this.autoLink);
   }
 
   // ======================================================================================== tools

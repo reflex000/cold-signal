@@ -207,6 +207,7 @@ export function createActorsSystem(engine: CsEngine, world: World | null): Actor
   const players = new Map<NetId, PlayerFig>();
   const wolves = new Map<NetId, WolfFig>();
   let frameNo = 0;
+  let lastTime = -1;
   let muted = false;
   let pool: LightPoolLike | null = null;
   let poolChecked = false;
@@ -290,7 +291,12 @@ export function createActorsSystem(engine: CsEngine, world: World | null): Actor
     listen(view);
     if (!muted) muted = muteMarkers(engine);
     findPool();
-    const dt = Math.min(0.1, Math.max(0, f.dt));
+    // the time since the last update, not f.dt: tools step several frames per rendered one (?still=1) and
+    // a hitch skips frames; the figures must cover that time or their planted feet are left behind. The
+    // render clock standing still (pause menu, photo mode) freezes them with everything else.
+    const elapsed = lastTime < 0 ? f.dt : f.time - lastTime;
+    const dt = Math.min(0.25, Math.max(0, elapsed < 1 ? elapsed : f.dt));
+    lastTime = f.time;
     ctx.dt = dt;
     ctx.time = f.time;
     _cam.copy(engine.camera.position);

@@ -3,6 +3,7 @@ import { makePickup, makeWolf } from '../sim/entities';
 import { Sim } from '../sim/sim';
 import { cmd, jsonIssues, scriptCmd } from '../sim/testkit';
 import { createTestWorld } from '../sim/testworld';
+import { cost, LONG_TEST_MS } from '../sim/timing';
 import { DT, DYNAMIC_KINDS, type InputCmd, type PlayerEnt, type SimEvent } from '../sim/types';
 import { ClientSession, INTERP_DELAY } from './client';
 import { Host } from './host';
@@ -555,13 +556,13 @@ describe('host and client', () => {
       n++;
     };
     for (let i = 0; i < 600; i++) loop(); // warm up the JIT
-    const t0 = performance.now();
-    for (let i = 0; i < 900; i++) loop();
-    const ms = (performance.now() - t0) / 900;
+    // best of five rounds of 180 ticks; the budget follows the machine's measured slowdown (sim/timing.ts)
+    const { ms, slow } = cost(loop, 180, 5);
     expect(client.ents.size).toBe(616);
     expect(events).toBeGreaterThan(0);
-    expect(ms, `${ms.toFixed(4)} ms per tick`).toBeLessThan(1.0) // the design budget; measured about 0.1 ms on an idle machine, more when the machine is busy;
-  });
+    // the design budget; measured about 0.1 ms on an idle machine
+    expect(ms, `${ms.toFixed(4)} ms per tick (machine ${slow.toFixed(2)}x slower than idle)`).toBeLessThan(1.0 * slow);
+  }, LONG_TEST_MS);
 
   it('a client continuing a saved game takes back its body and numbering', () => {
     const r = rig({ wire: 'json' });

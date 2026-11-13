@@ -14,6 +14,8 @@
 //   CS.stats()                     fps, frame ms, draw calls, triangles, tick ms, entity counts, backend, quality
 //   CS.shotReady()                 resolves when the last rendered frame is on screen
 //   CS.mode(m)                     'title' | 'play' | 'pause' | 'inventory' | 'photo' (through GameActions)
+//   CS.auto(on)                    the autopilot plays the local player (bots.ts Mind, 'lead' role)
+//   CS.doing()                     what the autopilot and each companion bot are doing
 // Owner: GAME.
 import type { Action, ItemId, PlayerEnt, ToolId } from '../sim/types';
 import type { Game } from './game';
@@ -99,6 +101,14 @@ export function installCS(game: Game): void {
     },
     stats(): Record<string, unknown> {
       return game.stats();
+    },
+    /** The autopilot plays the local player (the release scenario) through the normal input path. */
+    auto(on = true): void {
+      game.setAuto(on);
+    },
+    /** What the autopilot ('auto') and each companion bot (by id) are doing. */
+    doing(): Record<string, string> {
+      return game.botsDoing();
     },
     async shotReady(): Promise<void> {
       await frame();

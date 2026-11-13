@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Atmosphere, SkyLut } from './atmosphere';
+import { slowdown } from '../../sim/timing';
 
 const DEG = Math.PI / 180;
 const verbose = !!(globalThis as any).process?.env?.ATMOS_VERBOSE;
@@ -8,13 +9,16 @@ const log = (...a: unknown[]): void => {
 };
 
 describe('atmosphere', () => {
+  // how busy the machine was around the build (1 = idle): the budget scales with it (sim/timing.ts)
+  const before = slowdown();
   const t0 = performance.now();
   const atm = new Atmosphere(1.6);
   const built = performance.now() - t0;
+  const slow = Math.max(before, slowdown());
 
   it('builds its static tables quickly', () => {
-    log('static tables ms', built.toFixed(1));
-    expect(built).toBeLessThan(400);
+    log('static tables ms', built.toFixed(1), 'machine slowdown', slow.toFixed(2));
+    expect(built).toBeLessThan(400 * slow);
   });
 
   it('reddens the sun toward the horizon', () => {

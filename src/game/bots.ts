@@ -1,44 +1,978 @@
-// The companion bot brain (settings.bots). Bots are players without a transport: the brain runs
-// beside the host, reads the authoritative state and drives each bot with the same InputCmd a
-// human sends (Host.setBotInput), so every co-op system sees them exactly as it sees people.
-// For now they keep near the local player: walk to them when they fall behind, hold a loose
-// spacing, step round what blocks the way, hop when stuck, sprint to catch up.
-// Owner: GAME.
+// The companion bot brain (settings.bots) and the autopilot of the release scenario.
+//
+// A Mind drives one body with exactly what a remote player sends: one InputCmd per tick (move,
+// look, buttons, the entity under the crosshair) and discrete Actions. Companion bots are players
+// without a transport: BotBrain runs their minds beside the host (reading the authoritative state)
+// and hands their commands to Host.setBotInput / Host.botAct, the same path a client's messages
+// take. The autopilot (CS.auto) is a Mind in the 'lead' role driving the LOCAL player through the
+// game's own input path and the client session, reading only the client's View.
+//
+// What a mind does, most urgent first (each step either takes the tick or passes it on):
+//   dead      a companion wakes at the last checkpoint after a few seconds (the 'respawn' action)
+//   downed    crawl toward the nearest teammate; bandage the wound when it is running out
+//   water     swim for the nearest solid edge and hold USE to climb out
+//   self      bandage a bad wound, eat when starving, drink the thermos when freezing
+//   defend    a wolf going for anyone near: rifle (aimed, never across a teammate), axe at arm's length,
+//             a flare between the pack and the group in the dark; otherwise close up on the group
+//   revive    a downed teammate within 60 m: go, kneel, hold USE until they are up
+//   carry     the leader lifts a heavy log: take the free end and walk it at their pace
+//   tower     carry radio parts to the panel and fit them; crank the generator; the winch circle at the end
+//   lead      (autopilot) warm up at a fire or build one when cold, sit out a whiteout at a fire, then the
+//             next radio part in route order, picking up useful things it passes
+//   follow    (companion) build and feed a fire when the group stops in the cold, hand over what the leader
+//             lacks, gather sticks and chop dead wood while the group is camped, and keep a slot beside the
+//             leader: closer in bad weather (inside huddle range), never onto thin ice or off a cliff
+// Movement goes through botnav.ts (trail, local A*, hazard checks). Simple, readable rules; no cheats:
+// a mind reads the state (as any client does) and its body obeys the same simulation as everyone's.
+// Owner: TOGETHER (first version: GAME).
 import { wrapAngle } from '../core/math';
 import type { Host } from '../net/host';
 import { neutralInput } from '../sim/entities';
-import { BTN, type InputCmd, type NetId, type PlayerEnt } from '../sim/types';
-import type { World } from '../world/types';
+import { EYE_STAND } from '../sim/move';
+import { padOf, PARTS, PART_ITEM } from '../sim/systems/objective';
+import { REVIVE_RANGE } from '../sim/systems/vitals';
+import { BTN, type Action, type DeviceEnt, type Entity, type FireEnt, type InputCmd, type ItemId, type LogEnt, type NetId, type PickupEnt, type PlayerEnt, type ToolId, type WolfEnt } from '../sim/types';
+import type { WorldEx } from '../world/index';
+import { iceRisk, Planner, SimReader, steer, Walker, type Reader, type Steer } from './botnav';
 
 const NAMES = ['Mara', 'Tomas', 'Ines'];
 
-interface Bot {
-  id: NetId;
-  cmd: InputCmd;
-  /** Where it was a second ago, to notice being stuck. */
-  lastX: number;
-  lastZ: number;
-  checkIn: number;
-  stuck: number;
-  side: number;
+export type Role = 'follow' | 'lead';
+
+/** Where a mind's decisions go: a bot's host link, or the local player's input path. */
+export interface BodyLink {
+  send(cmd: InputCmd): void;
+  act(a: Action): void;
 }
 
+// --- tuning (seconds, metres, degrees C) ---------------------------------------------------------
+const COLD_START = 35.2; // warm up below this core ...
+const WARM_ENOUGH = 36.8; // ... until this
+const WET_START = 0.35;
+const STORM_CAMP = 0.62; // storm at which a group gets to a fire and stays
+const STORM_BREAK = 0.5; // ... until it falls back below this
+const FIRE_NEAR = 1.7; // where to stand to be warmed by a fire
+const FEED_BELOW = 150; // feed a fire with less burn left than this
+const STILL_FOR = 5; // the leader standing this long counts as a stop
+const THREAT_RANGE = 35;
+const SUPPLIES: readonly ItemId[] = ['matches', 'tinder', 'flare', 'ammo', 'cell', 'bandage', 'ration', 'thermos'];
+const TOOLS: readonly ItemId[] = ['axe', 'rifle', 'flaregun', 'radio', 'flashlight'];
+const ATTACKING = new Set<WolfEnt['mood']>(['charge', 'bite', 'drag', 'feint']);
+const CALM = new Set<WolfEnt['mood']>(['flee', 'cower', 'dead', 'rest', 'feed']);
+
+const has = (p: PlayerEnt, item: ItemId): number => p.inv[item] ?? 0;
+const dist = (a: { x: number; z: number }, b: { x: number; z: number }): number => Math.hypot(a.x - b.x, a.z - b.z);
+const yawTo = (dx: number, dz: number): number => Math.atan2(-dx, -dz);
+
+/** One body's decisions. */
+export class Mind {
+  readonly id: NetId;
+  role: Role;
+  leader: NetId = 0;
+  /** What the mind is doing right now (for tools and debugging). */
+  doing = 'idle';
+  private readonly cmd: InputCmd = neutralInput();
+  private readonly walker: Walker;
+  private readonly sv: Steer = { yaw: 0, mz: 0, sprint: false, jump: false, arrived: false, blocked: false };
+  private seq = 0;
+  private prevB = 0;
+  private t = 0;
+  /** Wanted look direction this tick and how fast to turn to it (rad/s). */
+  private yaw = 0;
+  private pitch = 0;
+  private turn = 5;
+  private readonly cool = new Map<string, number>();
+  private deadT = 0;
+  private leaderStill = 0;
+  private leaderX = 0;
+  private leaderZ = 0;
+  private buildYaw = 0;
+  private buildTries = 0;
+  /** The fire a mind is warming at or tending, and the storm it is sitting out. */
+  private camp: NetId = 0;
+  private camping = false;
+  private stormPrev = 0;
+  private stormRise = 0;
+  /** Lead: goals that failed recently (part -> retry time). */
+  private readonly skip = new Map<string, number>();
+  private chopId: NetId = 0;
+  private yawSet = false;
+  private lastFlare = -1e9;
+
+  constructor(id: NetId, role: Role, side: number) {
+    this.id = id;
+    this.role = role;
+    this.walker = new Walker(side);
+  }
+
+  /** One tick: read, decide, send one command (and maybe an action). */
+  tick(r: Reader, pl: Planner, dt: number, link: BodyLink): void {
+    const p = r.get(this.id) as PlayerEnt | undefined;
+    if (!p || p.kind !== 'player') return;
+    this.t += dt;
+    const c = this.cmd;
+    if (!this.yawSet) {
+      this.yaw = p.yaw;
+      c.yaw = p.yaw;
+      this.yawSet = true;
+    }
+    c.mx = 0;
+    c.mz = 0;
+    c.b = 0;
+    c.focus = 0;
+    this.yaw = c.yaw;
+    this.pitch = 0;
+    this.turn = 5;
+    this.link = link;
+    this.trackStorm(r, dt);
+
+    this.decide(r, pl, p, dt);
+
+    // turn toward the wanted look at a human rate; buttons go out with their edges intact
+    const dy = wrapAngle(this.yaw - c.yaw);
+    const maxTurn = this.turn * dt;
+    c.yaw = wrapAngle(c.yaw + Math.max(-maxTurn, Math.min(maxTurn, dy)));
+    c.pitch += Math.max(-2.5 * dt, Math.min(2.5 * dt, this.pitch - c.pitch));
+    c.seq = ++this.seq;
+    this.prevB = c.b;
+    link.send(c);
+  }
+
+  // =========================================================================================== plumbing
+
+  private link: BodyLink | null = null;
+
+  private ready(key: string, every: number): boolean {
+    const t = this.cool.get(key) ?? -1e9;
+    if (this.t - t < every) return false;
+    this.cool.set(key, this.t);
+    return true;
+  }
+
+  private act(a: Action, key: string, every: number): void {
+    if (this.link && this.ready(key, every)) this.link.act(a);
+  }
+
+  /** Hold a button this tick. */
+  private hold(btn: number): void {
+    this.cmd.b |= btn;
+  }
+
+  /** A press: down this tick only if it was up the tick before (the sim acts on the edge). */
+  private press(btn: number): void {
+    if ((this.prevB & btn) === 0) this.cmd.b |= btn;
+  }
+
+  private look(p: PlayerEnt, x: number, y: number, z: number, fast = false): void {
+    const dx = x - p.x, dz = z - p.z;
+    this.yaw = yawTo(dx, dz);
+    this.pitch = Math.atan2(y - (p.y + EYE_STAND), Math.max(0.3, Math.hypot(dx, dz)));
+    if (fast) this.turn = 9;
+  }
+
+  /** Walk toward (x, z); true once within `near`. */
+  private go(r: Reader, pl: Planner, p: PlayerEnt, x: number, z: number, near: number, dt: number, run = false, goal?: (x: number, z: number) => boolean): boolean {
+    const s = steer(pl, r, this.walker, p, x, z, near, dt, this.sv, { run, goal });
+    if (s.arrived) return true;
+    this.yaw = s.yaw;
+    this.cmd.mz = s.mz;
+    if (s.sprint) this.cmd.b |= BTN.SPRINT;
+    if (s.jump) this.press(BTN.JUMP);
+    return false;
+  }
+
+  /**
+   * Seconds spent on the thing named `key` (a pickup, a crate, dead wood, a part) without a break: a
+   * key not asked about for a second starts again from 0. Several keys run at once (a part and the
+   * pickup it lies in).
+   */
+  private on(key: string): number {
+    let s = this.onTimes.get(key);
+    if (!s || this.t - s.last > 1) {
+      s = { since: this.t, last: this.t };
+      this.onTimes.set(key, s);
+      if (this.onTimes.size > 64) for (const [k, v] of this.onTimes) if (this.t - v.last > 1) this.onTimes.delete(k);
+    }
+    s.last = this.t;
+    return this.t - s.since;
+  }
+  private readonly onTimes = new Map<string, { since: number; last: number }>();
+
+  /** Working at `key` has taken too long, or there is no way to it: time to try something else. */
+  private giveUp(key: string): boolean {
+    const t = this.on(key);
+    return t > 30 || (this.sv.blocked && t > 8);
+  }
+
+  private equip(p: PlayerEnt, tool: ToolId): boolean {
+    if (p.held === tool) return true;
+    this.act({ t: 'equip', tool }, 'equip', 0.4);
+    return false;
+  }
+
+  private trackStorm(r: Reader, dt: number): void {
+    const s = r.env().storm;
+    this.stormRise += ((s - this.stormPrev) / Math.max(1e-3, dt) - this.stormRise) * Math.min(1, dt / 8);
+    this.stormPrev = s;
+  }
+
+  // =========================================================================================== decisions
+
+  private decide(r: Reader, pl: Planner, p: PlayerEnt, dt: number): void {
+    if (p.life === 'rescued') {
+      this.doing = 'aboard';
+      return;
+    }
+    if (p.life === 'dead') {
+      this.doing = 'dead';
+      this.deadT += dt;
+      // the autopilot's death screen is the game's; a companion wakes by itself
+      if (this.role === 'follow' && this.deadT > 6) this.act({ t: 'respawn' }, 'respawn', 3);
+      return;
+    }
+    this.deadT = 0;
+    if (p.life === 'downed') return this.downed(r, p);
+    if (p.swim) return this.swim(r, pl, p);
+    this.selfCare(r, p);
+    if (this.defend(r, pl, p, dt)) return;
+    if (this.revive(r, pl, p, dt)) return;
+    if (this.role === 'follow' && this.carry(r, pl, p, dt)) return;
+    if (p.carry) this.act({ t: 'release' }, 'release', 1);
+    if (this.tower(r, pl, p, dt)) return;
+    if (this.role === 'lead') this.lead(r, pl, p, dt);
+    else this.follow(r, pl, p, dt);
+  }
+
+  // ----------------------------------------------------------------------------------------- body
+
+  private downed(r: Reader, p: PlayerEnt): void {
+    this.doing = 'downed';
+    const mate = this.nearestMate(r, p, (q) => q.life === 'alive');
+    if (mate && dist(mate, p) > 1.5) {
+      this.yaw = yawTo(mate.x - p.x, mate.z - p.z);
+      this.cmd.mz = 1; // crawl
+    }
+    if (has(p, 'bandage') > 0 && p.bleed < 45 && p.revive === 0) this.act({ t: 'consume', item: 'bandage' }, 'bandage', 4);
+  }
+
+  private swim(r: Reader, pl: Planner, p: PlayerEnt): void {
+    this.doing = 'climb out';
+    // the nearest edge that holds: hold USE while swimming at it (climbing needs to be within reach)
+    let best: { x: number; z: number } | null = null, bd = Infinity;
+    for (let rad = 0.6; rad <= 6 && !best; rad += 0.4) {
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2;
+        const x = p.x + Math.sin(a) * rad, z = p.z + Math.cos(a) * rad;
+        if (iceRisk(r, x, z) < 0.9 && pl.walk.at(x, z) && rad < bd) {
+          bd = rad;
+          best = { x, z };
+        }
+      }
+    }
+    if (best) {
+      this.yaw = yawTo(best.x - p.x, best.z - p.z);
+      this.cmd.mz = 1;
+    }
+    this.hold(BTN.USE);
+  }
+
+  private selfCare(r: Reader, p: PlayerEnt): void {
+    if (p.act !== 'none') return;
+    const fireNear = this.litFire(r, p.x, p.z, 4) !== null;
+    if (p.health < 55 && has(p, 'bandage') > 0) this.act({ t: 'consume', item: 'bandage' }, 'consume', 3);
+    else if (p.hunger > 0.7 && has(p, 'ration') > 0) this.act({ t: 'consume', item: 'ration' }, 'consume', 3);
+    else if (p.core < 34.3 && !fireNear && has(p, 'thermos') > 0) this.act({ t: 'consume', item: 'thermos' }, 'consume', 3);
+  }
+
+  // ----------------------------------------------------------------------------------------- wolves
+
+  /** The wolf most worth stopping: one going for someone near (feint, charge, bite, drag), or any right on me. */
+  private threat(r: Reader, p: PlayerEnt): WolfEnt | null {
+    let best: WolfEnt | null = null, bs = Infinity;
+    for (const w of r.list('wolf')) {
+      if (CALM.has(w.mood)) continue;
+      const d = dist(w, p);
+      if (d > THREAT_RANGE) continue;
+      const target = w.target ? (r.get(w.target) as PlayerEnt | undefined) : undefined;
+      const onUs = target !== undefined && target.kind === 'player' && dist(target, p) < 25;
+      const score = ATTACKING.has(w.mood) && onUs ? d * 0.5 : d < 6 ? d : Infinity;
+      if (score < bs) {
+        bs = score;
+        best = w;
+      }
+    }
+    return best;
+  }
+
+  /** No teammate stands in the line of fire toward (x, z) at distance d. */
+  private clearShot(r: Reader, p: PlayerEnt, x: number, z: number, d: number): boolean {
+    const ux = (x - p.x) / d, uz = (z - p.z) / d;
+    for (const q of r.list('player')) {
+      if (q.id === p.id || q.life === 'dead' || q.life === 'rescued') continue;
+      const qx = q.x - p.x, qz = q.z - p.z;
+      const along = qx * ux + qz * uz;
+      if (along <= 0 || along > d + 3) continue;
+      if (Math.abs(qx * uz - qz * ux) < 1.4) return false;
+    }
+    return true;
+  }
+
+  private defend(r: Reader, pl: Planner, p: PlayerEnt, dt: number): boolean {
+    const w = this.threat(r, p);
+    if (!w) return false;
+    const d = dist(w, p);
+    this.doing = 'defend';
+    const wy = w.y + 0.45;
+    const night = r.env().clock > 18.8 || r.env().clock < 6.5;
+    // rifle: aimed fire at an attacking wolf, never across a teammate
+    if (has(p, 'rifle') > 0 && (p.loaded > 0 || has(p, 'ammo') > 0) && ATTACKING.has(w.mood) && d < 70) {
+      if (!this.equip(p, 'rifle')) return true;
+      if (p.loaded === 0) {
+        if (p.act === 'none') this.act({ t: 'reload' }, 'reload', 2);
+        this.look(p, w.x, wy, w.z, true);
+        return true;
+      }
+      this.look(p, w.x, wy, w.z, true);
+      this.hold(BTN.SECONDARY);
+      const aimed = Math.abs(wrapAngle(this.yaw - this.cmd.yaw)) < 0.05;
+      if (p.aim > 0.85 && aimed && p.act === 'none' && this.clearShot(r, p, w.x, w.z, d)) this.press(BTN.PRIMARY);
+      return true;
+    }
+    // axe: at arm's length
+    if (has(p, 'axe') > 0 && d < 3.2) {
+      if (!this.equip(p, 'axe')) return true;
+      this.look(p, w.x, wy, w.z, true);
+      this.press(BTN.PRIMARY);
+      return true;
+    }
+    // a flare between the pack and the group, in the dark, at most one burning at a time (40 s)
+    if (has(p, 'flaregun') > 0 && (p.flareLoaded > 0 || has(p, 'flare') > 0) && night && d < 18 && this.t - this.lastFlare > 45) {
+      if (!this.equip(p, 'flaregun')) return true;
+      if (p.flareLoaded < 1) {
+        if (p.act === 'none') this.act({ t: 'reload' }, 'reload', 2);
+        return true;
+      }
+      // aim at the snow halfway to the wolf: it lands between us
+      const mx = (p.x + w.x) / 2, mz = (p.z + w.z) / 2;
+      this.look(p, mx, r.world.heightAt(mx, mz), mz, true);
+      if (Math.abs(wrapAngle(this.yaw - this.cmd.yaw)) < 0.08 && p.act === 'none') {
+        this.press(BTN.PRIMARY);
+        this.lastFlare = this.t;
+      }
+      return true;
+    }
+    // nothing to fight with: close up on the group (wolves pick the isolated), axe out if there is one
+    if (has(p, 'axe') > 0) this.equip(p, 'axe');
+    const mate = this.nearestMate(r, p, (q) => q.life === 'alive');
+    if (mate && dist(mate, p) > 2.2) this.go(r, pl, p, mate.x, mate.z, 2, dt, true);
+    else this.look(p, w.x, wy, w.z);
+    return true;
+  }
+
+  // ----------------------------------------------------------------------------------------- teammates
+
+  private nearestMate(r: Reader, p: PlayerEnt, ok: (q: PlayerEnt) => boolean): PlayerEnt | null {
+    let best: PlayerEnt | null = null, bd = Infinity;
+    for (const q of r.list('player')) {
+      if (q.id === p.id || !ok(q)) continue;
+      const d = dist(q, p);
+      if (d < bd) {
+        bd = d;
+        best = q;
+      }
+    }
+    return best;
+  }
+
+  private revive(r: Reader, pl: Planner, p: PlayerEnt, dt: number): boolean {
+    const d = this.nearestMate(r, p, (q) => q.life === 'downed' && !q.swim);
+    if (!d || dist(d, p) > 60) return false;
+    // someone else closer is already on it
+    if (d.reviver && d.reviver !== p.id) {
+      const other = r.get(d.reviver) as PlayerEnt | undefined;
+      if (other && other.kind === 'player' && dist(other, d) < 2) return false;
+    }
+    this.doing = 'revive';
+    if (p.held !== 'hands' && dist(d, p) < 6) this.equip(p, 'hands');
+    if (!this.go(r, pl, p, d.x, d.z, REVIVE_RANGE - 0.5, dt, true)) return true;
+    this.look(p, d.x, d.y + 0.3, d.z);
+    this.cmd.focus = d.id;
+    this.hold(BTN.USE);
+    return true;
+  }
+
+  /** Take the free end of the log the leader lifted, and walk it at their pace. */
+  private carry(r: Reader, pl: Planner, p: PlayerEnt, dt: number): boolean {
+    const L = r.get(this.leader) as PlayerEnt | undefined;
+    if (!L || L.kind !== 'player' || L.life !== 'alive') return false;
+    if (p.carry) {
+      const log = r.get(p.carry) as LogEnt | undefined;
+      if (!log || L.carry !== p.carry) {
+        this.act({ t: 'release' }, 'release', 1);
+        return true;
+      }
+      this.doing = 'carry';
+      // keep the log's length to the leader, on the line we already hold
+      const d = dist(L, p);
+      const ux = (p.x - L.x) / Math.max(0.01, d), uz = (p.z - L.z) / Math.max(0.01, d);
+      const tx = L.x + ux * log.len, tz = L.z + uz * log.len;
+      if (d > log.len + 0.5) this.go(r, pl, p, tx, tz, 0.3, dt);
+      this.look(p, L.x, L.y + 1.2, L.z);
+      return true;
+    }
+    if (!L.carry) return false;
+    const log = r.get(L.carry) as LogEnt | undefined;
+    if (!log || log.kind !== 'log' || (log.a && log.b)) return false;
+    this.doing = 'carry: take an end';
+    const ux = Math.sin(log.yaw), uz = Math.cos(log.yaw), h = 0.5 * log.len;
+    const front = log.a === 0; // the free end
+    const ex = log.x + (front ? ux : -ux) * h, ez = log.z + (front ? uz : -uz) * h;
+    if (p.held !== 'hands') this.equip(p, 'hands');
+    if (this.go(r, pl, p, ex, ez, 1.2, dt, true)) this.act({ t: 'carry', log: log.id }, 'carry', 1);
+    return true;
+  }
+
+  // ----------------------------------------------------------------------------------------- the tower
+
+  private device(r: Reader, type: DeviceEnt['type']): DeviceEnt | null {
+    for (const d of r.list('device')) if (d.type === type) return d;
+    return null;
+  }
+
+  private partsIn(r: Reader): number {
+    const parts = r.objective().parts;
+    let n = 0;
+    for (const k of PARTS) if (parts[k] === 'installed') n++;
+    return n;
+  }
+
+  private tower(r: Reader, pl: Planner, p: PlayerEnt, dt: number): boolean {
+    const o = r.objective();
+    const stage = o.stage;
+    if (stage === 'won' || stage === 'lost') return false;
+    // the end: everyone into the winch circle
+    if (stage === 'rescue') {
+      const pad = padOf(r.world);
+      this.doing = 'winch';
+      if (this.go(r, pl, p, pad.x, pad.z, 1.6, dt, true)) this.look(p, pad.x, pad.y + 18, pad.z);
+      return true;
+    }
+    const carried = PARTS.find((k) => has(p, PART_ITEM[k]) > 0);
+    const atTower = dist(p, r.world.poi('tower')) < 90;
+    if (carried && (stage === 'tower' || stage === 'power') && (atTower || this.role === 'lead')) {
+      const panel = this.device(r, 'panel');
+      if (!panel) return false;
+      this.doing = 'install ' + carried;
+      if (this.useDevice(r, pl, p, panel, dt)) this.hold(BTN.USE);
+      return true;
+    }
+    if (stage === 'power' && this.partsIn(r) === 5 && atTower) {
+      const gen = this.device(r, 'generator');
+      if (!gen) return false;
+      this.doing = 'crank';
+      if (p.held !== 'hands') this.equip(p, 'hands');
+      if (this.useDevice(r, pl, p, gen, dt)) this.hold(BTN.USE);
+      return true;
+    }
+    if (stage === 'holdout' && atTower) {
+      // the worst of the storm: shelter in the shed, out again for the helicopter
+      const door = r.world.anchors['tower:shed.door'];
+      const panel = this.device(r, 'panel');
+      if (panel && door) {
+        this.doing = 'hold out';
+        if (this.go(r, pl, p, panel.x + (door.x - panel.x) * 0.45, panel.z + (door.z - panel.z) * 0.45, 0.8, dt)) this.look(p, door.x, door.y + 1.4, door.z);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Walk to within reach of a device and aim at it; true once there (focus set). */
+  private useDevice(r: Reader, pl: Planner, p: PlayerEnt, d: DeviceEnt, dt: number): boolean {
+    const near = (x: number, z: number) => Math.hypot(x - d.x, z - d.z) < 1.3 && pl.lineOk(r, x, z, x, z);
+    if (dist(d, p) > 1.35) {
+      this.go(r, pl, p, d.x, d.z, 1.3, dt, false, near);
+      return false;
+    }
+    this.look(p, d.x, d.y + 0.1, d.z);
+    this.cmd.focus = d.id;
+    return true;
+  }
+
+  // ----------------------------------------------------------------------------------------- fire
+
+  private litFire(r: Reader, x: number, z: number, within: number): FireEnt | null {
+    let best: FireEnt | null = null, bd = within;
+    for (const f of r.list('fire')) {
+      if (!f.lit) continue;
+      const d = Math.hypot(f.x - x, f.z - z);
+      if (d < bd) {
+        bd = d;
+        best = f;
+      }
+    }
+    return best;
+  }
+
+  /** An unlit fire with wood on it (or embers) near (x, z). */
+  private laidFire(r: Reader, x: number, z: number, within: number): FireEnt | null {
+    let best: FireEnt | null = null, bd = within;
+    for (const f of r.list('fire')) {
+      if (f.lit || (f.size <= 0.01 && f.embers <= 0)) continue;
+      const d = Math.hypot(f.x - x, f.z - z);
+      if (d < bd) {
+        bd = d;
+        best = f;
+      }
+    }
+    return best;
+  }
+
+  /** Can a campfire go down at (x, z) (the sim checks again): not on ice, floors, steep ground or in a wall. */
+  private layable(r: Reader, pl: Planner, p: PlayerEnt, x: number, z: number): boolean {
+    const w = r.world;
+    if (w.iceAt(x, z) > 0 || !pl.walk.at(x, z)) return false;
+    const g = w.groundAt(x, z, p.y + 0.5);
+    if (g.surface === 'ice' || g.surface === 'water' || g.surface === 'wood' || g.surface === 'metal') return false;
+    if (Math.abs(g.y - p.y) > 0.8 || w.slopeAt(x, z) > 0.28) return false;
+    for (const f of r.list('fire')) if (Math.hypot(f.x - x, f.z - z) < 1.6) return false;
+    return w.lineClear(p.x, p.y + 1, p.z, x, g.y + 0.3, z);
+  }
+
+  /**
+   * Tend the fire at `f`: stand by it, light it if it is laid, feed it when low. Returns true while
+   * busy with it (standing there counts).
+   */
+  private tend(r: Reader, pl: Planner, p: PlayerEnt, f: FireEnt, dt: number): boolean {
+    const d = dist(f, p);
+    if (d > FIRE_NEAR + 0.4) {
+      this.go(r, pl, p, f.x, f.z, FIRE_NEAR, dt, true, (x, z) => {
+        const e = Math.hypot(x - f.x, z - f.z);
+        return e > 1.0 && e < FIRE_NEAR;
+      });
+      return true;
+    }
+    this.look(p, f.x, f.y + 0.2, f.z);
+    if (!f.lit) {
+      // a laid fire lights with a match (or by blowing on its embers); with neither it is no use
+      if (has(p, 'matches') === 0 && f.embers <= 0) return false;
+      this.act({ t: 'ignite', fire: f.id }, 'ignite', 1.6);
+      return true;
+    }
+    if (f.fuel < FEED_BELOW && p.act === 'none') {
+      const item = has(p, 'log') > 0 && f.fuel < 90 ? 'log' : has(p, 'stick') > 0 ? 'stick' : has(p, 'log') > 0 ? 'log' : null;
+      if (item) this.act({ t: 'feed', fire: f.id, item }, 'feed', 0.8);
+    }
+    return true;
+  }
+
+  /** Build a campfire near the spot (x, z), facing it; true while working at it. */
+  private build(r: Reader, pl: Planner, p: PlayerEnt, x: number, z: number, dt: number): boolean {
+    if (has(p, 'stick') < 3 || p.carry) return false;
+    // stand 1.1 m short of the spot (where buildFire lays it), facing it
+    const tryYaw = this.buildYaw;
+    const sx = x + Math.sin(tryYaw) * 1.1, sz = z + Math.cos(tryYaw) * 1.1;
+    if (!pl.passable(r, sx, sz) || !this.layable(r, pl, p, x, z)) {
+      this.buildYaw += 1.1;
+      this.buildTries++;
+      return this.buildTries < 12;
+    }
+    if (!this.go(r, pl, p, sx, sz, 0.35, dt)) return true;
+    this.look(p, x, r.world.heightAt(x, z), z, true);
+    if (Math.abs(wrapAngle(this.yaw - this.cmd.yaw)) < 0.06 && p.act === 'none') {
+      if (this.ready('buildFire', 2.5)) {
+        this.link?.act({ t: 'buildFire' });
+        this.buildTries++;
+        this.buildYaw += 0.7; // if it is refused, the next try faces another way
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Get warm at a fire near (cx, cz): tend a lit one, light a laid one, build one, or fetch sticks
+   * to build one. False when none of that is possible here.
+   */
+  private warmAt(r: Reader, pl: Planner, p: PlayerEnt, cx: number, cz: number, dt: number, reach = 30): boolean {
+    const lit = this.litFire(r, cx, cz, reach);
+    if (lit) {
+      this.camp = lit.id;
+      this.buildTries = 0;
+      return this.tend(r, pl, p, lit, dt);
+    }
+    const laid = this.laidFire(r, cx, cz, Math.min(reach, 15));
+    if (laid && (has(p, 'matches') > 0 || laid.embers > 0)) return this.tend(r, pl, p, laid, dt);
+    if (has(p, 'matches') === 0 && !laid) return false;
+    if (has(p, 'stick') >= 3 && this.buildTries < 12) {
+      this.doing = 'build a fire';
+      // on a frozen lake the fire goes on the nearest shore
+      let bx = cx, bz = cz;
+      if (r.world.iceAt(bx, bz) > 0) {
+        const t = pl.world.trail[pl.trailIndex(p.x, p.z)];
+        bx = t.x;
+        bz = t.z;
+      }
+      return this.build(r, pl, p, bx, bz, dt);
+    }
+    return this.fetch(r, pl, p, 'stick', 40, dt);
+  }
+
+  // ----------------------------------------------------------------------------------------- gathering
+
+  /** The nearest pickup of `item` within `within` m that a body can reach (not on thin ice). */
+  private pickupNear(r: Reader, pl: Planner, x: number, z: number, item: ItemId | null, within: number, wanted?: (pk: PickupEnt) => boolean): PickupEnt | null {
+    let best: PickupEnt | null = null, bd = within;
+    for (const pk of r.list('pickup')) {
+      if (item ? pk.item !== item : !(wanted && wanted(pk))) continue;
+      const d = Math.hypot(pk.x - x, pk.z - z);
+      if (d >= bd || this.skip.has('pk' + pk.id) && this.t < (this.skip.get('pk' + pk.id) ?? 0)) continue;
+      if (iceRisk(r, pk.x, pk.z) > 0.25) continue;
+      bd = d;
+      best = pk;
+    }
+    return best;
+  }
+
+  /** Walk to a pickup and press USE on it. True while busy. */
+  private take(r: Reader, pl: Planner, p: PlayerEnt, pk: PickupEnt, dt: number): boolean {
+    const key = 'pk' + pk.id;
+    const reachable = (x: number, z: number) => {
+      const dd = Math.hypot(x - pk.x, z - pk.z);
+      return dd < 1.9 && r.world.lineClear(x, p.y + 1.5, z, pk.x, pk.y + 0.25, pk.z);
+    };
+    const d = dist(pk, p);
+    if (d > 1.9 || !reachable(p.x, p.z)) {
+      this.go(r, pl, p, pk.x, pk.z, 0.9, dt, false, reachable);
+      if (this.giveUp(key)) this.skip.set(key, this.t + 120); // cannot get there: forget it for a while
+      return true;
+    }
+    this.look(p, pk.x, pk.y + 0.1, pk.z);
+    this.cmd.focus = pk.id;
+    this.press(BTN.USE);
+    return true;
+  }
+
+  /** Fetch `item` from the nearest pickup within `within` m. False when there is none. */
+  private fetch(r: Reader, pl: Planner, p: PlayerEnt, item: ItemId, within: number, dt: number): boolean {
+    const pk = this.pickupNear(r, pl, p.x, p.z, item, within);
+    if (!pk) return false;
+    this.doing = 'fetch ' + item;
+    return this.take(r, pl, p, pk, dt);
+  }
+
+  /** Useful things lying within `within` m: tools not yet carried, supplies with room, sticks when short. */
+  private scavenge(r: Reader, pl: Planner, p: PlayerEnt, within: number, dt: number): boolean {
+    const want = (pk: PickupEnt): boolean => {
+      if (pk.item.startsWith('part_')) return true;
+      if (TOOLS.includes(pk.item)) return has(p, pk.item) === 0 && (pk.item !== 'flashlight');
+      if (SUPPLIES.includes(pk.item)) return has(p, pk.item) < 6;
+      if (pk.item === 'stick') return has(p, 'stick') < 9;
+      if (pk.item === 'log') return has(p, 'log') < 2;
+      return false;
+    };
+    const pk = this.pickupNear(r, pl, p.x, p.z, null, within, want);
+    if (pk) {
+      this.doing = 'take ' + pk.item;
+      return this.take(r, pl, p, pk, dt);
+    }
+    // a closed crate close by (a suitcase, a locker, a crate): a short hold of USE opens it
+    for (const c of r.list('crate')) {
+      if (c.open) continue;
+      if (dist(c, p) > within || iceRisk(r, c.x, c.z) > 0.25) continue;
+      const key = 'cr' + c.id;
+      if (this.skip.has(key) && this.t < (this.skip.get(key) ?? 0)) continue;
+      this.doing = 'open ' + c.type;
+      const reachable = (x: number, z: number) => Math.hypot(x - c.x, z - c.z) < 1.6 && r.world.lineClear(x, p.y + 1.5, z, c.x, c.y + 0.4, c.z);
+      if (dist(c, p) > 1.6 || !reachable(p.x, p.z)) {
+        this.go(r, pl, p, c.x, c.z, 1.0, dt, false, reachable);
+        if (this.giveUp(key)) this.skip.set(key, this.t + 120);
+        return true;
+      }
+      this.look(p, c.x, c.y + 0.35, c.z);
+      this.cmd.focus = c.id;
+      this.hold(BTN.USE);
+      return true;
+    }
+    return false;
+  }
+
+  /** Chop the nearest dead wood near (x, z) with the axe (USE on it chops). True while busy. */
+  private chop(r: Reader, pl: Planner, p: PlayerEnt, x: number, z: number, within: number, dt: number): boolean {
+    if (has(p, 'axe') === 0 || p.stamina < 0.2) return false;
+    let target = this.chopId ? (r.get(this.chopId) as Entity | undefined) : undefined;
+    if (!target || target.kind !== 'wood') {
+      target = undefined;
+      let bd = within;
+      for (const w of r.list('wood')) {
+        const d = Math.hypot(w.x - x, w.z - z);
+        if (d < bd && iceRisk(r, w.x, w.z) === 0 && !(this.skip.has('wd' + w.id) && this.t < (this.skip.get('wd' + w.id) ?? 0))) {
+          bd = d;
+          target = w;
+        }
+      }
+    }
+    if (!target || target.kind !== 'wood') {
+      this.chopId = 0;
+      return false;
+    }
+    this.chopId = target.id;
+    this.doing = 'chop ' + target.type;
+    const w = target;
+    if (dist(w, p) > 1.7) {
+      this.go(r, pl, p, w.x, w.z, 1.5, dt);
+      if (this.giveUp("wd" + w.id)) {
+        this.skip.set('wd' + w.id, this.t + 180);
+        this.chopId = 0;
+      }
+      return true;
+    }
+    this.look(p, w.x, w.y + 0.5, w.z);
+    this.cmd.focus = w.id;
+    this.hold(BTN.USE);
+    return true;
+  }
+
+  // ----------------------------------------------------------------------------------------- lead (autopilot)
+
+  /** The parts still lying somewhere, in the order the route passes them. */
+  private partGoals(r: Reader): { part: string; pk: PickupEnt | null; x: number; z: number }[] {
+    const o = r.objective();
+    const out: { part: string; pk: PickupEnt | null; x: number; z: number; k: number }[] = [];
+    const spots = r.world.spawn.parts;
+    for (const part of PARTS) {
+      if (o.parts[part] !== 'lost') continue;
+      const item = PART_ITEM[part];
+      let pk: PickupEnt | null = null;
+      for (const q of r.list('pickup')) if (q.item === item) pk = q;
+      const s = pk ?? spots[part];
+      out.push({ part, pk, x: s.x, z: s.z, k: 0 });
+    }
+    return out;
+  }
+
+  private routeOrder = new Map<string, number>();
+
+  private lead(r: Reader, pl: Planner, p: PlayerEnt, dt: number): void {
+    const env = r.env();
+    // 1. the cold and the storm come first
+    const stormy = env.storm > 0.85 || (env.storm > STORM_CAMP && this.stormRise > 0.0005);
+    if (stormy) this.camping = true;
+    else if (this.camping && env.storm < STORM_BREAK) this.camping = false;
+    const cold = p.core < COLD_START || p.wet > WET_START;
+    if (this.camping || cold || (this.camp && (p.core < WARM_ENOUGH || p.wet > 0.15) && this.litFire(r, p.x, p.z, 6))) {
+      this.doing = this.camping ? 'sit out the storm' : 'warm up';
+      // stock up on sticks close by while a well-fed fire burns and the body can spare it
+      const lit = this.litFire(r, p.x, p.z, 8);
+      if (lit && lit.fuel > 240 && p.core > 35.6 && env.storm < 0.8 && has(p, 'stick') < 6) {
+        const pk = this.pickupNear(r, pl, lit.x, lit.z, 'stick', 14);
+        if (pk && this.take(r, pl, p, pk, dt)) return;
+      }
+      if (this.warmAt(r, pl, p, p.x, p.z, dt, 40)) return;
+    } else this.camp = 0;
+
+    // 2. keep the fire-making kit: sticks
+    if (has(p, 'stick') < 4 && this.fetch(r, pl, p, 'stick', 18, dt)) return;
+
+    // 3. useful things on the way
+    if (this.scavenge(r, pl, p, 9, dt)) return;
+
+    // 4. the next radio part (or, with all five found, the tower)
+    const goals = this.partGoals(r);
+    if (this.routeOrder.size === 0) {
+      for (const part of PARTS) {
+        const s = r.world.spawn.parts[part];
+        this.routeOrder.set(part, pl.trailIndex(s.x, s.z));
+      }
+    }
+    goals.sort((a, b) => (this.routeOrder.get(a.part) ?? 0) - (this.routeOrder.get(b.part) ?? 0));
+    const g = goals.find((q) => !(this.skip.has(q.part) && this.t < (this.skip.get(q.part) ?? 0)));
+    if (g) {
+      this.doing = 'find the ' + g.part;
+      if (dist(g, p) < 14 && g.pk) {
+        this.take(r, pl, p, g.pk, dt);
+        if (this.on("part" + g.part) > 75) this.skip.set(g.part, this.t + 90);
+        return;
+      }
+      this.go(r, pl, p, g.x, g.z, 3, dt, false);
+      return;
+    }
+    const stage = r.objective().stage;
+    if (stage === 'tower' || stage === 'search' || stage === 'power' || stage === 'holdout') {
+      const door = r.world.anchors['tower:shed.door'];
+      const t = door ?? r.world.poi('tower');
+      this.doing = 'to the tower';
+      this.go(r, pl, p, t.x, t.z, 2.5, dt, false);
+    }
+  }
+
+  // ----------------------------------------------------------------------------------------- follow (companion)
+
+  private follow(r: Reader, pl: Planner, p: PlayerEnt, dt: number): void {
+    const L = r.get(this.leader) as PlayerEnt | undefined;
+    if (!L || L.kind !== 'player' || (L.life !== 'alive' && L.life !== 'downed')) {
+      // nobody to follow: look after yourself
+      this.doing = 'wait';
+      if (p.core < COLD_START) this.warmAt(r, pl, p, p.x, p.z, dt, 40);
+      return;
+    }
+    const env = r.env();
+    // is the leader stopped?
+    const moved = Math.hypot(L.x - this.leaderX, L.z - this.leaderZ);
+    if (moved > 0.08 * Math.max(1, dt * 30)) this.leaderStill = 0;
+    else this.leaderStill += dt;
+    this.leaderX = L.x;
+    this.leaderZ = L.z;
+    const still = this.leaderStill > STILL_FOR;
+    const night = env.clock > 18.8 || env.clock < 6.5;
+    const bad = env.storm > 0.55 || night || L.core < 35.6 || p.core < 35.6;
+    const indoor = r.world.shelterAt(L.x, L.y + 1, L.z, env.windX, env.windZ).indoor;
+
+    // a fire for the group when it stops in the cold (or my own when I am freezing)
+    const wantFire = still && !indoor && (L.core < 36.4 || p.core < 36 || env.storm > 0.5 || night || L.wet > 0.2);
+    if (wantFire || p.core < 33.8) {
+      const lit = this.litFire(r, L.x, L.z, 7);
+      if (lit) {
+        if (lit.fuel < FEED_BELOW && (has(p, 'stick') > 0 || has(p, 'log') > 0)) {
+          this.doing = 'feed the fire';
+          this.tend(r, pl, p, lit, dt);
+          return;
+        }
+        // the fire is going: gather wood near it while warm enough, else warm up beside it
+        if (p.core > 35.8 && dist(L, p) < 25) {
+          if (has(p, 'stick') < 8 && this.fetch(r, pl, p, 'stick', 16, dt)) return;
+          if (has(p, 'log') < 2 && this.chop(r, pl, p, lit.x, lit.z, 18, dt)) return;
+        }
+        this.doing = 'warm by the fire';
+        this.tend(r, pl, p, lit, dt);
+        return;
+      }
+      const laid = this.laidFire(r, L.x, L.z, 6);
+      if (laid && (has(p, 'matches') > 0 || laid.embers > 0)) {
+        this.doing = 'light the fire';
+        this.tend(r, pl, p, laid, dt);
+        return;
+      }
+      if (has(p, 'stick') >= 3 && has(p, 'matches') > 0 && this.buildTries < 12) {
+        this.doing = 'build a fire';
+        // lay it 1.5 m from the leader on my side
+        const d = Math.max(0.5, dist(L, p));
+        const ux = (p.x - L.x) / d, uz = (p.z - L.z) / d;
+        if (this.build(r, pl, p, L.x + ux * 1.5, L.z + uz * 1.5, dt)) return;
+      } else if (has(p, 'stick') < 3 && this.fetch(r, pl, p, 'stick', 20, dt)) return;
+    } else this.buildTries = 0;
+
+    // hand over what the leader lacks
+    if (this.give(r, pl, p, L, dt)) return;
+
+    // gather on the way: sticks when short, supplies close by, while the leader is near
+    if (dist(L, p) < 14 && !(L.life === 'downed')) {
+      if (has(p, 'stick') < 6 && this.fetch(r, pl, p, 'stick', 8, dt)) return;
+      if (this.scavenge(r, pl, p, 6, dt)) return;
+    }
+
+    // keep a slot beside and a little behind the leader; closer in bad weather (huddle range 2.5 m)
+    this.doing = 'follow';
+    const ly = L.yaw;
+    const back = bad ? 1.5 : 2.6;
+    const side = (bad ? 0.9 : 1.6) * this.walkerSide();
+    let tx = L.x + Math.sin(ly) * back + Math.cos(ly) * side;
+    let tz = L.z + Math.cos(ly) * back - Math.sin(ly) * side;
+    if (!pl.passable(r, tx, tz)) {
+      const q = pl.nearestPassable(r, tx, tz, 5);
+      if (q) {
+        tx = q.x;
+        tz = q.z;
+      } else {
+        tx = p.x;
+        tz = p.z;
+      }
+    }
+    // on the ice keep apart (two close together load the same cells)
+    if (r.world.iceAt(p.x, p.z) > 0 && dist(L, p) < 4.5 && r.world.iceAt(L.x, L.z) > 0) {
+      const d = Math.max(0.1, dist(L, p));
+      tx = L.x + ((p.x - L.x) / d) * 5;
+      tz = L.z + ((p.z - L.z) / d) * 5;
+    }
+    const far = dist(L, p) > 16;
+    if (this.go(r, pl, p, tx, tz, still ? 1.2 : 0.8, dt, far)) {
+      // there: face where the leader looks, or toward them when they stopped
+      if (still) this.look(p, L.x, L.y + 1.4, L.z);
+      else this.yaw = this.cmd.yaw + wrapAngle(ly - this.cmd.yaw) * 0.08;
+    }
+  }
+
+  private walkerSide(): number {
+    return this.walker.side >= 0 ? 1 : -1;
+  }
+
+  /** Hand the leader what they need and I can spare. True while walking over to do it. */
+  private give(r: Reader, pl: Planner, p: PlayerEnt, L: PlayerEnt, dt: number): boolean {
+    if (L.life !== 'alive' || !this.ready('giveCheck', 1)) return this.giving !== null && this.giveTo(r, pl, p, L, dt);
+    this.giving = null;
+    const lacks = (item: ItemId) => L.inv[item] ?? 0;
+    if (lacks('matches') < 2 && has(p, 'matches') >= 4) this.giving = { item: 'matches', n: 2 };
+    else if (L.health < 60 && lacks('bandage') === 0 && has(p, 'bandage') > 0) this.giving = { item: 'bandage', n: 1 };
+    else if (lacks('rifle') > 0 && lacks('ammo') + L.loaded < 3 && has(p, 'ammo') > 0 && has(p, 'rifle') === 0) this.giving = { item: 'ammo', n: has(p, 'ammo') };
+    else if (lacks('stick') < 3 && has(p, 'stick') >= 6) this.giving = { item: 'stick', n: 3 };
+    else if (L.core < 34.6 && lacks('thermos') === 0 && has(p, 'thermos') > 0) this.giving = { item: 'thermos', n: 1 };
+    else if (L.hunger > 0.7 && lacks('ration') === 0 && has(p, 'ration') > 0) this.giving = { item: 'ration', n: 1 };
+    else if (lacks('flaregun') > 0 && lacks('flare') === 0 && L.flareLoaded === 0 && has(p, 'flare') > 0 && has(p, 'flaregun') === 0) this.giving = { item: 'flare', n: 1 };
+    return this.giving !== null && this.giveTo(r, pl, p, L, dt);
+  }
+
+  private giving: { item: ItemId; n: number } | null = null;
+
+  private giveTo(r: Reader, pl: Planner, p: PlayerEnt, L: PlayerEnt, dt: number): boolean {
+    const g = this.giving;
+    if (!g || has(p, g.item) < 1) {
+      this.giving = null;
+      return false;
+    }
+    this.doing = 'hand over ' + g.item;
+    if (!this.go(r, pl, p, L.x, L.z, 2.2, dt)) return true;
+    this.look(p, L.x, L.y + 1.2, L.z);
+    this.act({ t: 'give', to: L.id, item: g.item, n: Math.min(g.n, has(p, g.item)) }, 'give', 2);
+    this.giving = null;
+    return true;
+  }
+}
+
+// =================================================================================================== the brain
+
+interface Bot {
+  id: NetId;
+  mind: Mind;
+}
+
+/** The companions of a session (and the shared planner the autopilot uses too). */
 export class BotBrain {
   private host: Host | null = null;
   private bots: Bot[] = [];
   private leader: NetId = 0;
-  private seq = 0;
+  private reader: SimReader | null = null;
+  readonly planner: Planner;
+  private readonly link: BodyLink & { id: NetId } = {
+    id: 0,
+    send: (cmd) => this.host?.setBotInput(this.link.id, cmd),
+    act: (a) => {
+      this.host?.botAct(this.link.id, a);
+    },
+  };
 
-  constructor(private readonly world: World) {}
+  constructor(private readonly world: WorldEx) {
+    this.planner = new Planner(world);
+  }
 
   attach(host: Host | null, leader: NetId): void {
     this.host = host;
     this.leader = leader;
     this.bots = [];
+    this.reader = host ? new SimReader(this.world, host.sim.ctx) : null;
   }
 
   setLeader(id: NetId): void {
     this.leader = id;
+    for (const b of this.bots) b.mind.leader = id;
   }
 
   get count(): number {
@@ -48,6 +982,13 @@ export class BotBrain {
   /** Ids of the bots in play. */
   ids(): NetId[] {
     return this.bots.map((b) => b.id);
+  }
+
+  /** What each bot is doing (tools, debugging). */
+  doing(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const b of this.bots) out[String(b.id)] = b.mind.doing;
+    return out;
   }
 
   /** Add or remove bots until there are `n` (0..3). */
@@ -62,73 +1003,29 @@ export class BotBrain {
     while (this.bots.length < n) {
       const i = this.bots.length;
       const p = host.addBot(NAMES[i] ?? 'Bot ' + (i + 1));
-      this.bots.push({ id: p.id, cmd: neutralInput(), lastX: p.x, lastZ: p.z, checkIn: 1, stuck: 0, side: i % 2 ? 1 : -1 });
+      const mind = new Mind(p.id, 'follow', i % 2 ? 1 : -1);
+      mind.leader = this.leader;
+      this.bots.push({ id: p.id, mind });
     }
   }
 
-  /** Once per host tick, before host.tick(). */
+  /** Once per host tick, before host.tick(): every bot decides and sends its command. */
   tick(dt: number): void {
-    const host = this.host;
-    if (!host || this.bots.length === 0) return;
-    const ctx = host.sim.ctx;
-    const lead = ctx.get<PlayerEnt>(this.leader);
-    for (let k = 0; k < this.bots.length; k++) {
-      const b = this.bots[k];
-      const p = ctx.get<PlayerEnt>(b.id);
-      if (!p) continue;
-      const c = b.cmd;
-      c.seq = ++this.seq;
-      c.mx = 0;
-      c.mz = 0;
-      c.b = 0;
-      c.focus = 0;
-      if (!lead || p.life !== 'alive') {
-        host.setBotInput(b.id, c);
-        continue;
-      }
-      // a spot beside and a little behind the leader, one per bot
-      const ly = lead.yaw;
-      const back = 2.6 + k * 1.2;
-      const tx = lead.x + Math.sin(ly) * back + Math.cos(ly) * b.side * (1.6 + k * 0.4);
-      const tz = lead.z + Math.cos(ly) * back - Math.sin(ly) * b.side * (1.6 + k * 0.4);
-      const dx = tx - p.x, dz = tz - p.z;
-      const d = Math.hypot(dx, dz);
-      const dl = Math.hypot(lead.x - p.x, lead.z - p.z);
-      let yaw = p.yaw;
-      if (d > 1.2) {
-        // yaw that faces (dx, dz): 0 looks north (-Z), positive turns left
-        let want = Math.atan2(-dx, -dz);
-        // look ahead: if the way is blocked, try either side
-        const probe = (a: number) => this.world.walkable(p.x - Math.sin(a) * 2.2, p.z - Math.cos(a) * 2.2);
-        if (!probe(want)) {
-          for (const off of [0.6, -0.6, 1.2, -1.2, 1.8, -1.8]) {
-            if (probe(want + off * b.side)) {
-              want += off * b.side;
-              break;
-            }
-          }
-        }
-        yaw = want;
-        c.mz = d > 3 ? 1 : 0.55;
-        if (dl > 22 && p.stamina > 0.3) c.b |= BTN.SPRINT;
-      } else {
-        // arrived: face the way the leader looks
-        yaw = p.yaw + wrapAngle(ly - p.yaw) * 0.05;
-      }
-      // stuck: no progress for a second while trying to walk -> hop and veer
-      b.checkIn -= dt;
-      if (b.checkIn <= 0) {
-        const moved = Math.hypot(p.x - b.lastX, p.z - b.lastZ);
-        b.stuck = c.mz > 0 && moved < 0.4 ? b.stuck + 1 : 0;
-        b.lastX = p.x;
-        b.lastZ = p.z;
-        b.checkIn = 1;
-        if (b.stuck >= 2) b.side = -b.side;
-      }
-      if (b.stuck > 0 && b.checkIn > 0.95) c.b |= BTN.JUMP;
-      c.yaw = wrapAngle(yaw);
-      c.pitch = 0;
-      host.setBotInput(b.id, c);
+    const host = this.host, r = this.reader;
+    if (!host || !r || this.bots.length === 0) return;
+    this.planner.fires = litFires(r, this.planner.fires);
+    for (const b of this.bots) {
+      this.link.id = b.id;
+      b.mind.tick(r, this.planner, dt, this.link);
     }
   }
 }
+
+/** The lit fires as x, z pairs (for the planner's keep-out rings). */
+export function litFires(r: Reader, out: number[]): number[] {
+  out.length = 0;
+  for (const f of r.list('fire')) if (f.lit || f.embers > 0) out.push(f.x, f.z);
+  return out;
+}
+
+

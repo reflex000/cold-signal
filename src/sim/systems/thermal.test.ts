@@ -3,6 +3,7 @@ import { makeFire } from '../entities';
 import { Sim } from '../sim';
 import { cmd } from '../testkit';
 import { createTestWorld, TEST_FLOOR, TEST_LEE } from '../testworld';
+import { LONG_TEST_MS } from '../timing';
 import { BTN, type FireEnt, type InputCmd, type PlayerEnt } from '../types';
 import { woodOf } from './fire';
 import { FOOD_KEY, HOT_KEY } from './items';
@@ -97,7 +98,7 @@ describe('thermal: the pace of the cold (DESIGN section 1)', () => {
     expect(times.moderate).toBeLessThan(420);
     expect(times['clear night']).toBeGreaterThan(times.moderate * 0.8);
     expect(times['clear day']).toBe(Infinity);
-  });
+  }, LONG_TEST_MS); // three traces of up to 20 game minutes: long, not a cost test
 
   it('next to a good fire, 33 back to 37 in about 2 minutes; less upwind, more downwind', () => {
     const run = (side: 'cross' | 'up' | 'down') => {

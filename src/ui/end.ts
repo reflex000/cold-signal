@@ -3,11 +3,14 @@
 import type { HurtCause } from '../sim/types';
 import { type Ctx, cls, fmtHour, fmtSpan, fmtTemp, h, txt } from './dom';
 import type { Nav, NavItem, Scope } from './nav';
-import { CREDITS, DEATH } from './text';
+import { CREDITS, DEATH, LOST } from './text';
+
+/** 'lost' is the end of a co-op game: every human on the mountain is dead at once (stage 'lost'). */
+export type EndKind = 'dead' | 'won' | 'lost';
 
 export interface EndApi {
   el: HTMLElement;
-  show(kind: 'dead' | 'won' | null, cause?: HurtCause | 'unknown'): void;
+  show(kind: EndKind | null, cause?: HurtCause | 'unknown'): void;
 }
 
 export function createEnd(ctx: Ctx, nav: Nav): EndApi {
@@ -16,7 +19,14 @@ export function createEnd(ctx: Ctx, nav: Nav): EndApi {
   h('div', 'end-shade', el);
   const box = h('div', 'end', el);
   const scope: Scope = { items: [], sel: null };
-  let kind: 'dead' | 'won' | null = null;
+  let kind: EndKind | null = null;
+
+  function partsIn(): number {
+    let n = 0;
+    const parts = view.objective.parts;
+    for (const k in parts) if (parts[k as keyof typeof parts] === 'installed') n++;
+    return n;
+  }
 
   function stat(parent: HTMLElement, value: string, label: string): void {
     const d = h('div', '', parent);
@@ -24,14 +34,24 @@ export function createEnd(ctx: Ctx, nav: Nav): EndApi {
     h('span', '', d, label);
   }
 
-  function build(k: 'dead' | 'won', cause: HurtCause | 'unknown'): void {
+  function build(k: EndKind, cause: HurtCause | 'unknown'): void {
     box.textContent = '';
     scope.items.length = 0;
     scope.sel = null;
     const env = view.env, s = view.stats;
     const km = s.distance >= 1000 ? (s.distance / 1000).toFixed(1) + ' km' : Math.round(s.distance) + ' m';
     const coldest = Number.isFinite(s.coldest) && s.coldest > 0 ? fmtTemp(s.coldest) + '°' : '—';
-    if (k === 'dead') {
+    if (k === 'lost') {
+      h('div', 'end-pre', box, `Day ${env.day + 1}   ${fmtHour(env.clock)}`);
+      h('h1', 'end-t', box, LOST.title);
+      h('div', 'end-rule', box);
+      h('p', 'end-l', box, LOST.line);
+      const st = h('div', 'end-s', box);
+      stat(st, fmtSpan(env.t), 'On the mountain');
+      stat(st, String(partsIn()), 'Parts installed');
+      stat(st, km, 'Walked');
+      stat(st, String(s.revives), 'Revives');
+    } else if (k === 'dead') {
       const d = DEATH[cause] ?? DEATH.unknown;
       h('div', 'end-pre', box, `Day ${env.day + 1}   ${fmtHour(env.clock)}`);
       h('h1', 'end-t', box, d.title);
@@ -71,6 +91,8 @@ export function createEnd(ctx: Ctx, nav: Nav): EndApi {
       item('Respawn', 'respawn', () => game.actions.respawn());
       item('Quit to title', 'quit', () => game.actions.quitToTitle());
     } else {
+      // won or lost: the run is over (the save is gone); there is nothing to go back to
+
       item('New game', 'new', () => game.actions.newGame());
       item('Quit to title', 'quit', () => game.actions.quitToTitle());
     }
@@ -83,7 +105,7 @@ export function createEnd(ctx: Ctx, nav: Nav): EndApi {
       kind = k;
       if (k) {
         build(k, cause);
-        cls(el, 'dd', k === 'dead');
+        cls(el, 'dd', k === 'dead' || k === 'lost');
         cls(el, 'wn', k === 'won');
         cls(el, 'on', true);
         nav.open(scope, scope.items[0]);

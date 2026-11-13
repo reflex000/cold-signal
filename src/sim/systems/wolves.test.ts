@@ -6,6 +6,7 @@ import { EYE_STAND } from '../move';
 import { Sim } from '../sim';
 import { cmd, jsonIssues, scriptCmd } from '../testkit';
 import { createTestWorld } from '../testworld';
+import { LONG_TEST_MS, slowdown } from '../timing';
 import { BTN, type FireEnt, type FlareEnt, type InputCmd, type PlayerEnt, type SimEvent, type WolfEnt } from '../types';
 import { SYSTEMS } from './index';
 import {
@@ -490,10 +491,16 @@ describe('wolves: cost', () => {
       r.sim.step();
     };
     for (let i = 0; i < 300; i++) tick();
-    acc = 0;
-    calls = 0;
-    for (let i = 0; i < 1500; i++) tick();
-    const ms = acc / calls;
-    expect(ms, `${ms.toFixed(4)} ms per tick`).toBeLessThan(0.2);
-  });
+    // best of five rounds of 300 ticks (only the wolves' share is timed); the budget follows the
+    // machine's slowdown measured on the reference workload in the same rounds (../timing.ts)
+    let ms = Infinity;
+    for (let round = 0; round < 5; round++) {
+      acc = 0;
+      calls = 0;
+      for (let i = 0; i < 300; i++) tick();
+      ms = Math.min(ms, acc / calls);
+    }
+    const slow = slowdown();
+    expect(ms, `${ms.toFixed(4)} ms per tick (machine ${slow.toFixed(2)}x slower than idle)`).toBeLessThan(0.2 * slow);
+  }, LONG_TEST_MS);
 });

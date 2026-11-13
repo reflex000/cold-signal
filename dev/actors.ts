@@ -357,6 +357,13 @@ async function main(): Promise<void> {
   script = (t) => {
     for (const s of scripts) s(t);
   };
+  // a frozen clock (?t=) freezes the figures too: play the scripts up to it first, like the contact sheet
+  const tFrozen = bench.param('t') !== null ? bench.num('t', 0) : 0;
+  for (let t = 0; t < tFrozen - 1e-6; t += 1 / 30) {
+    script(t);
+    view.set(current);
+    sys.update({ dt: 1 / 30, time: t, view });
+  }
   if (bench.param('joints') === '1') {
     // joint overlay: a small sphere on every bone joint of every figure (red: wolves, yellow: players)
     const dots = new THREE.InstancedMesh(new THREE.SphereGeometry(0.012, 6, 4), new THREE.MeshBasicNodeMaterial({ color: 0xff3322, depthTest: false }), 256);

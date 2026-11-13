@@ -11,7 +11,7 @@ one registration line in src/game/visuals.ts.
                          (KIT createPropMaterial + skin vertex stage), eye material (retro-reflective shine from data texel).
 - src/actors/bind.ts     chain tags in Part.st, paint class in Part.sl, bindGeometry -> aSkin + per-vertex classes, recolor.
 - src/actors/shape.ts    loft (rings -> smooth KIT part; fixed winding, closed loops, caps), noise helpers.
-- src/actors/player_model.ts  22-bone skeleton (A-pose), parka figure LOD 0/1/2 (~21k/6k/2k tris), slotGeometry (parka colour).
+- src/actors/player_model.ts  20-bone skeleton (A-pose), parka figure LOD 0/1/2 (22.9k/6.5k/3.2k tris; wolf 15.7k/3.7k/1.3k), slotGeometry (parka colour).
 - src/actors/player_anim.ts   PlayerAnimator: gait w/ planted feet + predicted landings, rest stepping, crouch, deep-snow
                          wading, jump/land, lean, look (pitch/yaw), breath, shiver, tools (rifle low/aim/recoil/bolt/reload,
                          axe carry/swing, flashlight, flare gun aim/fire/reload, radio hold/crank), acts (use, ignite, eat,
@@ -55,10 +55,23 @@ one registration line in src/game/visuals.ts.
 - Bench: ?sil=1 (black on white), ?side=1 (sheet side view), ?joints=1 (joint dots).
 - Real game: eye shine confirmed in the local flashlight beam (green-gold dot), FX pool beam on the snow.
 
-## Remaining (priority order)
-1. WebGL2 + --mobile 1 shots (bench + game).
-2. Perf check (draw calls / rows), LOD distances.
-3. Final report.
+## Session 2 (done)
+- WebGL2 + --mobile 1: bench and real game shot, skinning identical; scenario PASS with a clean console on both backends.
+- Perf (bench ?show=crowd, medium): 4 players + 16 wolves = 15 actor draws (44 calls in all), 324k tris, 0.68 ms CPU.
+  LOD: players 16 / 55 m, wolves 18 / 60 m (hysteresis), culled past 320 m, at most 40 rows.
+- Frame skips: index.ts feeds the animators the render-clock time since their last update (f.time delta), not f.dt
+  (?still=1 tool runs render only the last of CS.step(n) frames; hitches skip frames). The animators integrate at most
+  0.1 s, carry the feet along with any jump bigger than that time explains, take the entity's own velocity and turn
+  the body over the whole gap. Fixed the lunge in fig_02 (feet left 1.3 m behind). A frozen render clock (pause menu,
+  photo mode) freezes the figures. Pack spring sub-stepped.
+- Deep snow: the boots sink into the drift with the body (legs straight) instead of standing on the surface with
+  bent knees.
+- Bench: ?t= now plays the scripts up to t first (a frozen clock is a frozen figure, like the contact sheet).
+- Seen once: a pale wash over the local player's legs in third person (fig_05, near the wreck). Not reproduced at the
+  same spot; the normal and silhouette renders there are crisp, so probably an air layer, not the figure.
+
+## Remaining
+- Nothing blocking. Ideas: fur shells for close wolves; foot IK against logs/rocks (only the ground is probed).
 
 ## Decisions / API facts
 - GPU skinning from ONE shared RGBA32F bone texture (textureLoad as three's BatchNode), plain THREE.Mesh with `count`
@@ -77,6 +90,48 @@ one registration line in src/game/visuals.ts.
 - npx tsc --noEmit -p . 2>&1 | grep -E "src/actors|dev/actors"
 - node tools/shot.mjs "dev/actors.html?light=day&sheet=player&phases=0.5,1.3" --out act_sheet_p --w 2000 --h 1250
 - node tools/shot.mjs "dev/actors.html?light=day&sheet=wolf&phases=0.4,1.1" --out act_sheet_w --w 2000 --h 1000
-- node tools/shot.mjs "dev/actors.html?light=dusk&anim=walk&az=120&el=8&dist=3" --out act_walk   (single anim, orbit)
+- node tools/shot.mjs "dev/actors.html?light=dusk&anim=walk&az=120&el=8&dist=3" --out act_walk   (single anim, orbit;
+  add &t=1.5 for a fixed moment)
+- Real game: node tools/play.mjs figures.mjs [--backend webgl]. The scenario was kept outside the repo (session
+  scratchpad); it does: CS.go to open ground near poi('wreck'), host.addBot x2 + botAct equip flashlight/rifle,
+  setBotInput to walk/sprint, CS.sim.ctx.spawn 5 wolves (moods stalk/circle/howl/rest/roam), CS.game.thirdDev = true,
+  CS.env clock 22.5 + CS.act toggleLight, engine.get('actors').stats / debugFig(id) for checks.
 - add --backend webgl or --mobile 1; ?bind=1 shows bind pose; ?lod=2 forces LOD
-- Probe geometry in node: scratchpad inspect.mjs (Vite ssrLoadModule) - see session notes.
+- Probe geometry in node: load a module through Vite's ssrLoadModule (createServer middlewareMode) and call it.
+
+## Final report
+
+**Files** (all new): src/actors/index.ts, rig.ts, gpu.ts, bind.ts, shape.ts, player_model.ts, player_anim.ts,
+items.ts, wolf_model.ts, wolf_anim.ts; dev/actors.html, dev/actors.ts; one line in src/game/visuals.ts (line 97,
+after FX's).
+
+**Public API**: `createActorsSystem(engine, world): ActorsSystem`, name 'actors'. Beyond GfxSystem it has
+`point(id, bone | 'muzzle' | 'lamp', out)`, `stats` {players, wolves, rows, draws}, `forceLod`, `bindPose`,
+`localBeam` (first-person flashlight beam, on by default), `setSilhouette(on)` and `debugFig(id)`. For a future
+first-person engineer, items.ts exports getItem, itemGeometry, ITEM_POINTS, ITEM_HAND and gripBind.
+
+**How**: procedural animation (FK spine and head, two-bone IK limbs, planted feet with predicted landings, pose
+blending). The poses go as 3x4 world matrices into ONE shared RGBA32F bone texture. Plain Meshes are drawn with
+`count` instances, one draw per (kind, colour, LOD) bucket, and skinned in a TSL positionNode. I chose this over
+SkinnedMesh because it gives one draw per bucket instead of one per figure, and the same path on WebGPU and WebGL2.
+The material is KIT's createPropMaterial with only the position stage replaced.
+
+**Light**: flashlights go through FX's light pool (priority 6 local, 2 remote); an own capped SpotLight is used
+only if FX is absent. Wolf eye shine is read from fx.lights.active.
+
+**Markers**: muted at run time for player/wolf by wrapping markers.update with a filtered view. GAME's file is
+untouched.
+
+**Contracts**: no changes.
+
+**Checked**: bench and real game on WebGPU, WebGL2 and `--mobile 1`; scenario PASS, clean console. 4 players +
+16 wolves (medium): 15 actor draws, 324k triangles, 0.68 ms CPU.
+
+**Unfinished / unsure**:
+- Fur is shading on a lofted volume only (no shells).
+- Frame skips (hitches; CS.step(n) renders once) are absorbed by carrying the feet along. A frozen render clock
+  freezes the figures.
+- In deep snow the boots sink into the drift; this assumes the snow surface is drawn at the sim's ground height.
+- The sim's 2.6 m/s walk is past the walk-run transition, so the gait blends into a light jog from 2.1 m/s.
+- I saw a pale wash over the local legs in third person once (fig_05). It did not reproduce, and the silhouette
+  there is intact, so I suspect an air layer.

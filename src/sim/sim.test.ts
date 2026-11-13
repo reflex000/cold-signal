@@ -6,6 +6,7 @@ import { stormAt, visibilityFor, VIS_CLEAR, WHITEOUT, WIND_MAX, WIND_MIN } from 
 import { SYSTEMS } from './systems/index';
 import { cmd, jsonIssues, scriptCmd } from './testkit';
 import { createTestWorld } from './testworld';
+import { cost, LONG_TEST_MS } from './timing';
 import { BTN, DT, type Action, type PlayerEnt, type SimEvent } from './types';
 
 const world = createTestWorld();
@@ -327,7 +328,7 @@ describe('env system', () => {
         expect(b - a).toBeLessThanOrEqual(240);
       }
     }
-  });
+  }, LONG_TEST_MS); // 270k ticks: a long trace, not a cost test
 
   it('derives wind, snow, visibility, temperature, cloud and aurora from the storm and the hour', () => {
     const sim = new Sim(world, { seed: 5, debug: true });
@@ -425,13 +426,11 @@ describe('performance', () => {
       sim.step();
     };
     for (let i = 0; i < 300; i++) tick(); // warm up the JIT
-    const n = 1500;
-    const t0 = performance.now();
-    for (let i = 0; i < n; i++) tick();
-    const ms = (performance.now() - t0) / n;
+    // best of five rounds of 300 ticks; the budget follows the machine's measured slowdown (timing.ts)
+    const { ms, slow } = cost(tick, 300, 5);
     expect(sim.state.ents.length).toBe(616);
-    expect(ms, `${ms.toFixed(4)} ms per tick`).toBeLessThan(0.5);
-  });
+    expect(ms, `${ms.toFixed(4)} ms per tick (machine ${slow.toFixed(2)}x slower than idle)`).toBeLessThan(0.5 * slow);
+  }, LONG_TEST_MS);
 });
 
 // A player entity in the state is the same object the context hands out.

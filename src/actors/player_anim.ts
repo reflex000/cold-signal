@@ -243,7 +243,9 @@ export class PlayerAnimator {
 
   update(e: PlayerEnt, ctx: AnimCtx): void {
     if (!this.init) this.reset(e, ctx);
-    const dt = clamp(ctx.dt, 0, 0.1);
+    // the time since the last update; the animation integrates at most 0.1 s of it
+    const gap = Math.max(0, ctx.dt);
+    const dt = Math.min(gap, 0.1);
     if (Math.hypot(e.x - this.lastX, e.z - this.lastZ) > 4) this.reset(e, ctx);
 
     // ---------------- state weights ----------------
@@ -251,17 +253,31 @@ export class PlayerAnimator {
     const upright = !down && !dead;
     // ground actually covered this frame: the gait advances by distance, so the feet keep up with the
     // body while it speeds up or slows down
-    this.moved = Math.min(0.5, Math.hypot(e.x - this.lastX, e.z - this.lastZ));
-    // velocity from the motion actually drawn (an interpolated remote player's snapshot velocity can
-    // disagree with its position: blocked by a tree, a late snapshot), the entity's own as a hint
-    if (dt > 1e-4) {
-      const mvx = (e.x - this.lastX) / dt, mvz = (e.z - this.lastZ) / dt;
+    const jx = e.x - this.lastX, jz = e.z - this.lastZ;
+    this.lastX = e.x;
+    this.lastZ = e.z;
+    this.moved = Math.hypot(jx, jz);
+    // more ground than this update's time explains (frames skipped by a hitch or a tool, a late snapshot):
+    // the excess carries the feet along with the body, which keeps the stride instead of leaving the
+    // planted feet behind; the entity's own velocity stands in for the drawn motion
+    const ev = Math.hypot(e.vx, e.vz);
+    const absorb = Math.max(ev, this.spd) * dt + 0.06;
+    const skip = this.moved > Math.max(0.3, absorb * 1.5);
+    if (skip) {
+      const k = 1 - absorb / this.moved;
+      this.carryFeet(jx * k, jz * k, e.y, ctx);
+      this.moved = absorb;
+      this.velX = e.vx;
+      this.velZ = e.vz;
+      this.spd = ev;
+    } else if (gap > 1e-4) {
+      // velocity from the motion actually drawn (an interpolated remote player's snapshot velocity can
+      // disagree with its position: blocked by a tree, a late snapshot), the entity's own as a hint
+      const mvx = jx / gap, mvz = jz / gap;
       const hint = Math.abs(e.vx) + Math.abs(e.vz) > 1e-4 && Math.hypot(mvx, mvz) < 0.05 ? 0.25 : 0;
       this.velX = damp(this.velX, mvx + (e.vx - mvx) * hint, 12, dt);
       this.velZ = damp(this.velZ, mvz + (e.vz - mvz) * hint, 12, dt);
     }
-    this.lastX = e.x;
-    this.lastZ = e.z;
     const speed = Math.hypot(this.velX, this.velZ);
     this.spd = damp(this.spd, speed, 10, dt);
     const onGround = e.onGround || e.swim;
@@ -328,13 +344,14 @@ export class PlayerAnimator {
         if (Math.abs(d) < 0.05) this.turning = false;
       } else target = this.bodyYaw;
     } else target = this.bodyYaw;
-    this.bodyYaw = dampAngle(this.bodyYaw, target, speed > 0.3 ? 7 : 5, dt);
+    // after a skip the body has had the whole gap to turn
+    this.bodyYaw = dampAngle(this.bodyYaw, target, speed > 0.3 ? 7 : 5, skip ? gap : dt);
 
     // ---------------- gait ----------------
     // stride and stance sized to the leg: a stance foot travels duty * 2 * stepLen past the hips, which must
     // stay within about +-0.4 m or the hips dive at every double support
     const stepLen = clamp(0.32 + 0.17 * this.spd, 0.4, 1.35) * (1 - 0.25 * this.wCrouch) * (1 - 0.22 * this.wDeep);
-    if (moving) this.phase = (this.phase + Math.max(this.moved, this.spd * dt * 0.5) / (2 * stepLen)) % 1;
+    if (moving) this.phase = (this.phase + Math.min(0.5 * stepLen, Math.max(this.moved, this.spd * dt * 0.5)) / (2 * stepLen)) % 1;
     const duty = lerp(lerp(0.6, 0.55, smooth(1.2, 2.4, this.spd)), 0.36, this.wRun);
     this.updateFeet(e, ctx, dt, moving, stepLen, duty);
 
@@ -371,6 +388,17 @@ export class PlayerAnimator {
 
   private wasMoving = false;
   private moved = 0;
+
+  /** Move the feet (planted, swinging, landing) along with a jump of the body. */
+  private carryFeet(dx: number, dz: number, y: number, ctx: AnimCtx): void {
+    for (const f of this.feet) {
+      for (const p of [f.pos, f.from, f.to]) {
+        p.x += dx;
+        p.z += dz;
+        p.y = this.groundY(ctx, p.x, p.z, y);
+      }
+    }
+  }
 
   private updateFeet(e: PlayerEnt, ctx: AnimCtx, dt: number, moving: boolean, stepLen: number, duty: number): void {
     const vx = this.velX, vz = this.velZ;
@@ -411,6 +439,8 @@ export class PlayerAnimator {
             this.phase = (duty - (i === 0 ? 0 : 0.5) + 1.0001) % 1;
             continue;
           }
+          // the body turned away from a planted foot (setting off sideways): it pivots on the heel
+          if (Math.abs(wrap(this.bodyYaw - f.yaw)) > 0.4) f.yaw = dampAngle(f.yaw, this.bodyYaw, 8, dt);
           if (d > 0.46) {
             f.pos.x = e.x + (dx / d) * 0.46;
             f.pos.z = e.z + (dz / d) * 0.46;
@@ -526,7 +556,7 @@ export class PlayerAnimator {
     if (this.wAir < 0.5 && swim < 0.5) {
       // a foot below the body (downhill, a step): the pelvis drops so it still reaches
       const low = Math.min(f0.pos.y - (f0.planted ? 0 : 0.05), f1.pos.y - (f1.planted ? 0 : 0.05)) - e.y;
-      h += clamp(low + this.sink, -0.25, 0) * 0.85;
+      h += clamp(low, -0.25, 0) * 0.85;
     }
     if (this.wAir < 0.5 && swim < 0.5 && kneel < 0.5) {
       // the hips sink so both ankles stay within reach (long strides dip at double support)
@@ -536,7 +566,7 @@ export class PlayerAnimator {
         const hx = e.x + _right.x * side * 0.092, hz = e.z + _right.z * side * 0.092;
         const d = Math.hypot(f.pos.x - hx, f.pos.z - hz);
         const reach = LEG * 0.985;
-        const maxHip = f.pos.y + ANKLE_H + Math.sqrt(Math.max(0, reach * reach - d * d));
+        const maxHip = f.pos.y - this.sink + ANKLE_H + Math.sqrt(Math.max(0, reach * reach - d * d));
         const maxH = maxHip + 0.03 - rootY;
         // a little dip only: past it the trailing foot pushes off on its toes instead
         if (h > maxH) h = Math.max(h - 0.07, maxH);
@@ -595,8 +625,12 @@ export class PlayerAnimator {
 
     // ---- pack: lags a little behind the chest ----
     const chestUp = pose.p[PB.chest].y;
-    this.packVel += ((chestUp - this.packLag) * 120 - this.packVel * 14) * dt;
-    this.packLag += this.packVel * dt;
+    for (let left = dt; left > 1e-6; left -= 0.03) {
+      // sub-stepped: the spring is stiff for a long frame
+      const h = Math.min(left, 0.03);
+      this.packVel += ((chestUp - this.packLag) * 120 - this.packVel * 14) * h;
+      this.packLag += this.packVel * h;
+    }
     if (Math.abs(this.packLag - chestUp) > 0.3) {
       this.packLag = chestUp;
       this.packVel = 0;
@@ -943,7 +977,11 @@ export class PlayerAnimator {
       ankle.sub(_v4).applyQuaternion(_q2).add(_v4);
     }
     ankle.add(f.pos);
-    const pole = _v2.copy(_fwd).addScaledVector(_right, side * 0.15);
+    // deep snow: the boots go down into the drift with the body (the legs stay straight, the snow hides the
+    // boots) instead of standing on its surface with bent knees
+    ankle.y -= this.sink;
+    // the knee points where the hips face (a little toward the foot): never sideways off a turned foot
+    const pole = _v2.set(-Math.sin(this.bodyYaw), 0, -Math.cos(this.bodyYaw)).multiplyScalar(0.7).addScaledVector(_fwd, 0.3).addScaledVector(_right, side * 0.12);
     if (this.wRevive > 0.01) {
       // kneeling: the left knee down, its shin back along the snow; the right foot planted ahead
       const k = this.wRevive;

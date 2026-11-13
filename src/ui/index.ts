@@ -6,7 +6,7 @@ import type { HurtCause } from '../sim/types';
 import type { UiApi, UiGame } from './api';
 import { CSS } from './css';
 import { type Ctx, h, on } from './dom';
-import { createEnd } from './end';
+import { createEnd, type EndKind } from './end';
 import { createHud } from './hud';
 import { icon } from './icons';
 import { createInventory } from './inventory';
@@ -72,6 +72,12 @@ export function createUI(game: UiGame): UiApi {
     return 'unknown';
   }
 
+  /** The end card for a mode: a co-op game that is lost shows in mode 'dead' (Mode has no 'lost'). */
+  function endKind(m: Mode | ''): EndKind | null {
+    if (m === 'dead') return view.objective.stage === 'lost' ? 'lost' : 'dead';
+    return m === 'won' ? 'won' : null;
+  }
+
   function applyMode(m: Mode): void {
     if (m === mode) return;
     const prev = mode;
@@ -82,7 +88,7 @@ export function createUI(game: UiGame): UiApi {
     hud.show(m === 'play');
     touch?.show(m === 'play');
     inv.show(m === 'inventory');
-    end.show(m === 'dead' ? 'dead' : m === 'won' ? 'won' : null, causeOfDeath());
+    end.show(endKind(m), causeOfDeath());
     title.show(m === 'title');
     if (m === 'pause') menu.open('pause');
     else if (menu.isOpen() && (prev === 'pause' || m !== 'title')) menu.close();
@@ -142,6 +148,8 @@ export function createUI(game: UiGame): UiApi {
   return {
     update(dt) {
       if (view.mode !== mode) applyMode(view.mode);
+      // the game can be lost while the death card is up (the last teammate dies): swap the card
+      if (mode === 'dead') end.show(endKind(mode), causeOfDeath());
       nav.update(dt);
       hud.update(dt);
       touch?.update(dt);

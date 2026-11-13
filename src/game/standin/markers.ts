@@ -1,17 +1,20 @@
-// STAND-IN for the entity visuals (actors, fx, item models arrive in later milestones): plain
-// coloured shapes for every entity in the view so everything can be seen and walked to.
-// Pickups, crates, wood, heavy logs, devices, campfires and their flames, flares, other players
-// (parka colour by slot), wolves, the helicopter. One instanced mesh per shape, rewritten every
-// frame from view.list(kind) (no allocation). A small fixed pool of point lights follows the
-// nearest flames (a fixed count, so the lighting never recompiles).
+// STAND-IN for the entity visuals nobody else draws yet: plain coloured shapes so everything can
+// be seen and walked to. Pickups, crates, wood, heavy logs, notes, campfire stones, flares,
+// players, wolves and the helicopter. One instanced mesh per shape, rewritten every frame from
+// view.list(kind) (no allocation).
+// Others take over kinds at run time by wrapping update() with a filtered view (keep `update` a
+// plain assignable property): FX hides fires and flares (and lights them from its own pool),
+// FIGURES hides players and wolves. STRUCTURES draws the door, panel, generator, bed and beacon
+// devices and the locker and cupboard crates as parts of its buildings, so they are skipped here.
+// No lights: an idle point light costs every lit pixel (fires and flares are FX's pool).
 // Owner: GAME.
 import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
 import { U } from '../../gfx/shared';
-import type { Frame, GfxSystem, Quality } from '../../gfx/api';
+import type { Frame, GfxSystem } from '../../gfx/api';
 import type { CsEngine } from '../../gfx/engine';
 import type { CrateEnt, DeviceEnt, FireEnt, ItemId, LogEnt, PickupEnt, PlayerEnt, WoodEnt } from '../../sim/types';
-import type { View, ViewEnt } from '../view';
+import type { ViewEnt } from '../view';
 
 type RGB = [number, number, number];
 const PARKA: RGB[] = [[0.5, 0.12, 0.05], [0.07, 0.14, 0.36], [0.2, 0.24, 0.09], [0.55, 0.34, 0.05]];
@@ -44,12 +47,12 @@ const CRATE_LOOK: Record<CrateEnt['type'], { s: [number, number, number]; c: RGB
   toolbox: { s: [0.52, 0.26, 0.24], c: [0.52, 0.1, 0.05] },
 };
 
-const DEVICE_LOOK: Record<DeviceEnt['type'], { s: [number, number, number]; y: number; c: RGB }> = {
-  panel: { s: [0.7, 0.9, 0.25], y: 0.7, c: [0.22, 0.24, 0.23] },
-  generator: { s: [1.1, 0.8, 0.65], y: 0, c: [0.2, 0.25, 0.16] },
-  door: { s: [0.9, 2.0, 0.07], y: 0, c: [0.2, 0.14, 0.09] },
-  beacon: { s: [0.25, 0.4, 0.25], y: 0, c: [0.5, 0.08, 0.05] },
-  bed: { s: [0.9, 0.45, 2.0], y: 0, c: [0.16, 0.17, 0.2] },
+/** Devices STRUCTURES draws as parts of its buildings (the driver moves the door, crank, lamps). */
+const BUILT_IN_DEVICES: ReadonlySet<DeviceEnt['type']> = new Set(['door', 'panel', 'generator', 'bed', 'beacon']);
+/** Crates that are furniture of STRUCTURES' buildings (the driver swings their doors). */
+const BUILT_IN_CRATES: ReadonlySet<CrateEnt['type']> = new Set(['locker', 'cupboard']);
+
+const DEVICE_LOOK: Partial<Record<DeviceEnt['type'], { s: [number, number, number]; y: number; c: RGB }>> = {
   note: { s: [0.22, 0.01, 0.3], y: 0.02, c: [0.75, 0.72, 0.62] },
 };
 
@@ -180,45 +183,15 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
   for (const p of all) group.add(p.mesh);
   scene.add(group);
 
-  // a fixed pool of point lights: the nearest flames get them
-  const LIGHTS = 3;
-  const lights: THREE.PointLight[] = [];
-  for (let i = 0; i < LIGHTS; i++) {
-    const l = new THREE.PointLight(0xff8a3c, 0, 22, 2);
-    l.castShadow = false;
-    l.name = 'standin-firelight-' + i;
-    lights.push(l);
-    group.add(l);
-  }
-  let maxLights = 2;
-  const cand: { x: number; y: number; z: number; d: number; k: number; c: RGB }[] = [];
-  for (let i = 0; i < 32; i++) cand.push({ x: 0, y: 0, z: 0, d: 0, k: 0, c: [1, 0.5, 0.2] });
-  let nc = 0;
   const FIRE: RGB = [1.0, 0.42, 0.12];
   const FLARE: RGB = [1.0, 0.12, 0.06];
 
-  function light(x: number, y: number, z: number, k: number, c: RGB, view: View): void {
-    if (nc >= cand.length || k <= 0) return;
-    const cam = view.camera;
-    const o = cand[nc++];
-    o.x = x;
-    o.y = y;
-    o.z = z;
-    o.k = k;
-    o.c = c;
-    o.d = (x - cam.x) ** 2 + (y - cam.y) ** 2 + (z - cam.z) ** 2;
-  }
-
   return {
     name: 'markers',
-    setQuality(q: Quality): void {
-      maxLights = Math.max(1, Math.min(LIGHTS, q.maxLights));
-    },
     update(f: Frame): void {
       const view = f.view;
       const t = f.time;
       for (const p of all) p.n = 0;
-      nc = 0;
       // small things are not drawn far away (sub-pixel specks): metres, squared
       const cx = view.camera.x, cz = view.camera.z;
       const beyond = (e: { x: number; z: number }, r: number) => (e.x - cx) * (e.x - cx) + (e.z - cz) * (e.z - cz) > r * r;
@@ -237,7 +210,7 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
         } else add(items, e.x, e.y - sink, e.z, e.yaw, 0, 0, look.s[0], look.s[1], look.s[2], look.c);
       }
       for (const e of view.list('crate') as ViewEnt<CrateEnt>[]) {
-        if (beyond(e, 250)) continue;
+        if (BUILT_IN_CRATES.has(e.type) || beyond(e, 250)) continue;
         const look = CRATE_LOOK[e.type] ?? CRATE_LOOK.crate;
         add(boxes, e.x, e.y, e.z, e.yaw, 0, 0, look.s[0], look.s[1], look.s[2], look.c, e.open ? 0.55 : 1);
       }
@@ -254,13 +227,10 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
         add(cyls, e.x, e.y + 0.22, e.z, e.yaw + Math.PI / 2, 0, 0, Math.max(1, e.len), 0.22, 0.22, [0.23, 0.17, 0.11]);
       }
       for (const e of view.list('device') as ViewEnt<DeviceEnt>[]) {
-        if (beyond(e, 250)) continue;
-        const look = DEVICE_LOOK[e.type] ?? DEVICE_LOOK.panel;
+        if (BUILT_IN_DEVICES.has(e.type) || beyond(e, 250)) continue;
+        const look = DEVICE_LOOK[e.type];
+        if (!look) continue;
         add(boxes, e.x, e.y + look.y, e.z, e.yaw, 0, 0, look.s[0], look.s[1], look.s[2], look.c);
-        if (e.type === 'beacon' && e.on) {
-          const k = 20 * (0.5 + 0.5 * Math.sin(t * 6));
-          add(sparks, e.x, e.y + 0.48, e.z, 0, 0, 0, 0.06, 0.06, 0.06, [1, 0.1, 0.05], k);
-        }
       }
       for (const e of view.list('fire') as ViewEnt<FireEnt>[]) {
         if (e.type === 'campfire') {
@@ -281,13 +251,11 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
           add(flames, e.x, e.y + base, e.z, t * 0.7, 0, 0, 0.5 * (0.6 + heat * 0.6), h * 1.15, 0.5 * (0.6 + heat * 0.6), FIRE, 10 * heat);
           add(flames, e.x, e.y + base, e.z, -t * 1.3, 0, 0, 0.26, h * 1.45, 0.26, [1, 0.62, 0.25], 12 * heat);
         } else add(sparks, e.x, e.y + base + 0.03, e.z, 0, 0, 0, 0.18, 0.04, 0.18, FIRE, 3);
-        light(e.x, e.y + base + 0.5, e.z, 13 * heat * fl, FIRE, view);
       }
       for (const e of view.list('flare')) {
         const burning = e.life > 0;
         const fl = 0.8 + 0.2 * Math.sin(t * 23 + e.id);
         add(sparks, e.x, e.y + 0.05, e.z, 0, 0, 0, 0.07, 0.07, 0.07, FLARE, burning ? 60 * fl : 0.5);
-        if (burning) light(e.x, e.y + 0.4, e.z, 30 * fl, FLARE, view);
       }
       const third = view.camera.third > 0.3;
       for (const e of view.list('player') as ViewEnt<PlayerEnt>[]) {
@@ -320,36 +288,8 @@ export function createStandinMarkers(engine: CsEngine): GfxSystem {
       for (const e of view.list('heli')) {
         add(boxes, e.x, e.y, e.z, e.yaw, 0, 0, 2.6, 2.6, 11, [0.1, 0.11, 0.12]);
         add(cyls, e.x, e.y + 2.8, e.z, t * 20, 0, 0, 6.5, 0.04, 0.2, [0.05, 0.05, 0.05]);
-        light(e.x, e.y - 0.2, e.z, 25, [1, 1, 0.95], view);
       }
       for (const p of all) done(p);
-
-      // lights: the brightest nearby flames
-      for (let i = 0; i < LIGHTS; i++) {
-        const l = lights[i];
-        let best = -1;
-        let bs = Infinity;
-        if (i < maxLights) {
-          for (let k = 0; k < nc; k++) {
-            const o = cand[k];
-            if (o.k <= 0) continue;
-            const s = o.d / o.k;
-            if (s < bs) {
-              bs = s;
-              best = k;
-            }
-          }
-        }
-        if (best < 0 || cand[best].d > 120 * 120) {
-          l.intensity = 0;
-          continue;
-        }
-        const o = cand[best];
-        l.position.set(o.x, o.y, o.z);
-        l.color.setRGB(o.c[0], o.c[1] * 1.3, o.c[2] * 1.8);
-        l.intensity = o.k;
-        o.k = 0; // taken
-      }
     },
     dispose(): void {
       scene.remove(group);
