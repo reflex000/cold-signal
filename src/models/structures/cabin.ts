@@ -16,7 +16,8 @@ import { register } from '../registry';
 import { BLUEPRINTS } from '../../world/blueprints';
 import { beam, casing, drift, icicles, mergeAll, roomLight, sash, sheet, snowHeap, type Aperture } from './lib';
 
-const LOG_R = 0.125, COURSE = 0.225;
+// courses closer than a log's diameter: neighbours overlap, no daylight between them
+const LOG_R = 0.125, COURSE = 0.218;
 const WALL_X = 2.9, WALL_Z = 2.4, WALL_TOP = 2.6;
 const RIDGE_Y = 4.1, EAVE_BACK_Z = -2.95;
 const roofY = (z: number): number => (z <= 0 ? RIDGE_Y - (1.48 / 2.5) * -z : z <= 2.55 ? RIDGE_Y - (1.48 / 2.5) * z : 2.59 - (z - 2.55) * Math.tan(15 * Math.PI / 180));
@@ -36,7 +37,7 @@ register(
     const wallLog = (a: V3, c: V3, rr = LOG_R): Part => {
       const len = Math.hypot(c[0] - a[0], c[2] - a[2]);
       logInk();
-      const p = b.log(len, rr * r.range(0.93, 1.07), { r2: rr * r.range(0.86, 0.95), sides: 8, rows: Math.max(2, Math.round(len / 1.4)), ends: ['saw', 'saw'], bend: r.range(0, 0.012), gnarl: 0.006, peel: 0.97, knots: r.int(0, 2), bark: logBark, deadwood: weathered, wood: mixRGB(PAL.heartwood, PAL.timberDark, 0.45) });
+      const p = b.log(len, rr * r.range(0.97, 1.06), { r2: rr * r.range(0.94, 0.99), sides: 8, rows: Math.max(2, Math.round(len / 1.4)), ends: ['saw', 'saw'], bend: r.range(0, 0.012), gnarl: 0.006, peel: 0.97, knots: r.int(0, 2), bark: logBark, deadwood: weathered, wood: mixRGB(PAL.heartwood, PAL.timberDark, 0.45) });
       p.rotZ(Math.PI / 2).rotY(Math.atan2(-(c[2] - a[2]), c[0] - a[0])).move((a[0] + c[0]) / 2, a[1], (a[2] + c[2]) / 2);
       return p;
     };
@@ -82,22 +83,22 @@ register(
     b.ink({ color: hex(0x9b978b), mat: MAT.ROCK, wear: 0.3, rough: 0.95, snow: 1, vary: 0.06 });
     const chink = b.group(() => { for (let k = 0; k < courses - 1; k++) {
       const y = 0.13 + (k + 0.5) * COURSE;
-      b.box(WALL_X * 2 - 0.1, 0.035, 0.16, { bevel: 0 }).move(0, y, -WALL_Z);
+      b.box(WALL_X * 2 - 0.1, 0.06, 0.17, { bevel: 0 }).move(0, y, -WALL_Z);
       let x0 = -WALL_X + 0.05;
       for (const [g0, g1] of gaps('front', y).sort((a, c) => a[0] - c[0])) {
-        if (g0 - x0 > 0.05) b.box(g0 - x0, 0.035, 0.16, { bevel: 0 }).move((x0 + g0) / 2, y, WALL_Z);
+        if (g0 - x0 > 0.05) b.box(g0 - x0, 0.06, 0.17, { bevel: 0 }).move((x0 + g0) / 2, y, WALL_Z);
         x0 = g1;
       }
-      b.box(WALL_X - 0.05 - x0, 0.035, 0.16, { bevel: 0 }).move((x0 + WALL_X - 0.05) / 2, y + 0, WALL_Z);
+      b.box(WALL_X - 0.05 - x0, 0.06, 0.17, { bevel: 0 }).move((x0 + WALL_X - 0.05) / 2, y + 0, WALL_Z);
       const ys = y + COURSE / 2;
       if (ys < WALL_TOP) {
-        b.box(0.16, 0.035, WALL_Z * 2 - 0.1, { bevel: 0 }).move(-WALL_X, ys, 0);
+        b.box(0.17, 0.06, WALL_Z * 2 - 0.1, { bevel: 0 }).move(-WALL_X, ys, 0);
         let z0 = -WALL_Z + 0.05;
         for (const [g0, g1] of gaps('east', ys)) {
-          if (g0 - z0 > 0.05) b.box(0.16, 0.035, g0 - z0, { bevel: 0 }).move(WALL_X, ys, (z0 + g0) / 2);
+          if (g0 - z0 > 0.05) b.box(0.17, 0.06, g0 - z0, { bevel: 0 }).move(WALL_X, ys, (z0 + g0) / 2);
           z0 = g1;
         }
-        b.box(0.16, 0.035, WALL_Z - 0.05 - z0, { bevel: 0 }).move(WALL_X, ys, (z0 + WALL_Z - 0.05) / 2);
+        b.box(0.17, 0.06, WALL_Z - 0.05 - z0, { bevel: 0 }).move(WALL_X, ys, (z0 + WALL_Z - 0.05) / 2);
       }
     } });
     mergeAll(chink.parts);
@@ -160,9 +161,9 @@ register(
         const top = Math.min(roofY(z), roofY(z + 0.2)) - 0.05;
         if (top <= WALL_TOP + 0.05) continue;
         const h = top - WALL_TOP + 0.05;
-        b.plank(h, 0.19, 0.025, { straight: true }).rotY(Math.PI / 2).move(sx * (WALL_X + 0.02), WALL_TOP + h / 2 - 0.02, z + 0.1);
+        b.plank(h, 0.215, 0.025, { straight: true }).rotY(Math.PI / 2).move(sx * (WALL_X + 0.02), WALL_TOP + h / 2 - 0.02, z + 0.1);
       }
-      for (let z = -2.25; z < 2.3; z += 0.4) {
+      for (let z = -2.25; z < 2.3; z += 0.2) {
         const top = roofY(z) - 0.06;
         if (top <= WALL_TOP + 0.1) continue;
         b.plank(top - WALL_TOP, 0.05, 0.02, { straight: true }).rotY(Math.PI / 2).move(sx * (WALL_X + 0.045), (top + WALL_TOP) / 2, z);
@@ -309,7 +310,7 @@ register(
         for (const dz of [-1, 1]) b.box(0.035, 0.5, 0.035, { bevel: 0.005 }).move(-0.18, 0.7, dz * 0.18);
         b.box(0.03, 0.12, 0.4, { bevel: 0.005 }).move(-0.18, 0.88, 0);
         b.box(0.03, 0.08, 0.4, { bevel: 0.005 }).move(-0.18, 0.66, 0);
-      }).rotY(0.25).move(x0 - 0.08, SY, tb.z - 0.05);
+      }).rotY(0.12).move(x0 + 0.13, SY, tb.z - 0.05); // tucked under: chairs have no collider
       // the lantern hanging over the table, a tin plate and mug
       b.ink({ color: PAL.iron, mat: MAT.METAL, wear: 0.6, snow: 0 });
       const lx = tb.x + 0.25, lz = tb.z + 0.1, ly = 2.3;

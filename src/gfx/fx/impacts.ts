@@ -198,11 +198,14 @@ export class ImpactFx {
     const b = Math.max(0.35, ctx.budget);
     switch (kind) {
       case 'muzzle': {
-        // the flash: a white-yellow core and short tongues along the bore, two frames long
+        // the flash: a white-yellow core and short tongues along the bore, two frames long; seen
+        // from the shooter's own eye (a metre away) the core is small, or it fills the picture
+        const cam = ctx.camera.position;
+        const near = Math.min(1, Math.max(0.3, Math.hypot(x - cam.x, y - cam.y, z - cam.z) / 3));
         const s0 = ctx.glow.spec();
         s0.x = x; s0.y = y; s0.z = z;
-        s0.life = 0.05; s0.s0 = 0.07; s0.s1 = 0.1;
-        s0.op = 180 * k; s0.r = 1; s0.g = 0.72; s0.b = 0.38;
+        s0.life = 0.05; s0.s0 = 0.07 * near; s0.s1 = 0.1 * near;
+        s0.op = 180 * k * near; s0.r = 1; s0.g = 0.62; s0.b = 0.28;
         s0.fin = 0.001; s0.fout = 0.9;
         ctx.glow.emit(s0);
         for (let i = 0; i < 6; i++) {
@@ -220,8 +223,8 @@ export class ImpactFx {
         const iy = Math.max(0.05, Math.abs(dy) + 0.02);
         for (let i = 0; i < 3; i++) {
           _t.x = x; _t.y = y; _t.z = z;
-          _t.h = 0.16 + R.next() * 0.1;
-          _t.w = 0.03 + R.next() * 0.02;
+          _t.h = (0.16 + R.next() * 0.1) * (0.5 + 0.5 * near);
+          _t.w = (0.03 + R.next() * 0.02) * (0.6 + 0.4 * near);
           _t.lx = (dx / iy) * (dy < 0 ? -1 : 1);
           _t.lz = (dz / iy) * (dy < 0 ? -1 : 1);
           _t.seed = R.next() * 10;

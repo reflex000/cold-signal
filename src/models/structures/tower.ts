@@ -247,12 +247,13 @@ register(
         const m = (a + c) / 2;
         if (gaps.some(([g0, g1]) => m > g0 - 0.3 && m < g1 + 0.3)) continue;
         const x = x0 + ((x1 - x0) * m) / len, z = z0 + ((z1 - z0) * m) / len;
-        const top = roofY(z) - 0.02;
+        // up to the underside of the roof sheets (they sit 0.07 over the purlin line): no eave gap
+        const top = roofY(z) + 0.07;
         b.ink({ color: galv, mat: MAT.METAL, wear: 0.62, rough: 0.5, snow: 1, vary: 0.06 });
         const sh = sheet(b, c - a, top, { kind: 'wave', pitch: 0.076, depth: 0.017 });
         sh.rotY(yaw).move(x + nx * 0.065, top / 2, z + nz * 0.065);
         sh.each((q) => { q.wear = 0.55 + 0.4 * Math.max(0, fbm3(S + Math.round(s * 10), q.x * 2, q.y * 1.5, q.z * 2, 2)) + 0.3 * Math.max(0, 0.4 - q.y); });
-        b.ink({ color: mixRGB(PAL.plywood, PAL.timber, 0.25), mat: MAT.WOOD, wear: 0.5, snow: 0 });
+        b.ink({ color: mixRGB(PAL.plywood, PAL.timber, 0.25), mat: MAT.WOOD, wear: 0.5, snow: 0, detailScale: 2.5, grain: 'x' });
         b.box(c - a, top - FY, 0.012, { bevel: 0.002 }).rotY(yaw).move(x - nx * 0.05, (top + FY) / 2, z - nz * 0.05);
       }
     };
@@ -264,11 +265,11 @@ register(
     for (const sx of [-1, 1]) {
       b.ink({ color: galv, mat: MAT.METAL, wear: 0.62, rough: 0.5, snow: 1 });
       const w = WX - door.w / 2 - 0.62;
-      const sh = sheet(b, 0.62 - 0.07, roofY(WZ) - 0.02, { kind: 'wave', pitch: 0.076, depth: 0.017 });
-      sh.move(sx * (door.w / 2 + 0.31), (roofY(WZ) - 0.02) / 2, WZ + 0.065);
+      const sh = sheet(b, 0.62 - 0.07, roofY(WZ) + 0.07, { kind: 'wave', pitch: 0.076, depth: 0.017 });
+      sh.move(sx * (door.w / 2 + 0.31), (roofY(WZ) + 0.07) / 2, WZ + 0.065);
       void w;
-      b.ink({ color: mixRGB(PAL.plywood, PAL.timber, 0.25), mat: MAT.WOOD, wear: 0.5, snow: 0 });
-      b.box(0.55, roofY(WZ) - FY - 0.02, 0.012, { bevel: 0.002 }).move(sx * (door.w / 2 + 0.3), (roofY(WZ) + FY) / 2, WZ - 0.05);
+      b.ink({ color: mixRGB(PAL.plywood, PAL.timber, 0.25), mat: MAT.WOOD, wear: 0.5, snow: 0, detailScale: 2.5, grain: 'x' });
+      b.box(0.55, roofY(WZ) - FY + 0.07, 0.012, { bevel: 0.002 }).move(sx * (door.w / 2 + 0.3), (roofY(WZ) + 0.07 + FY) / 2, WZ - 0.05);
     }
     // the side window (east), wired glass
     b.group(() => sash(b, 0.55, 0.42, { cols: 1, rows: 1, frame: hex(0x5b6063), glassTint: hex(0x8a9a9a) })).rotY(Math.PI / 2).move(WX + 0.07, 1.6, 0.55);
@@ -298,7 +299,8 @@ register(
     for (let x = -1.65; x < 1.65; x += 0.72) {
       b.ink({ color: galv, mat: MAT.METAL, wear: 0.65, rough: 0.5, snow: 1, vary: 0.06 });
       const sh = sheet(b, 0.76, 4.5, { kind: 'wave', pitch: 0.076, depth: 0.017 });
-      sh.rotX(-Math.PI / 2).rotX(tilt).move(x + 0.38, roofY(0) + 0.085, 0);
+      // high over the door, falling to the back (+Z end up)
+      sh.rotX(-Math.PI / 2).rotX(-tilt).move(x + 0.38, roofY(0) + 0.085, 0);
       sh.each((q) => { q.wear = 0.6 + 0.35 * Math.max(0, fbm3(S + Math.round(x * 10), q.x * 2, 0, q.z * 1.2, 2)); });
     }
     icicles(b, [-1.65, roofY(-2.25) + 0.05, -2.27], [1.65, roofY(-2.25) + 0.05, -2.27], { every: 0.12, len: [0.03, 0.35] });

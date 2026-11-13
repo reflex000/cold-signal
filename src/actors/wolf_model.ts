@@ -1,4 +1,4 @@
-// THE WOLF: a large grey timber wolf in winter coat, built in code with the KIT Builder (fur
+﻿// THE WOLF: a large grey timber wolf in winter coat, built in code with the KIT Builder (fur
 // material) and skinned to a 32-bone skeleton: spine, neck, head with a jaw that opens, ears, a
 // four-bone tail, and legs with shoulder blades (front) and the dog's three-segment hind leg.
 // The coat's shaggy outline is in the geometry (tufted rings: neck ruff, cheeks, belly fringe,
@@ -10,7 +10,7 @@
 // Model space: metres, Y up, the wolf faces -Z, standing on y = 0. Shoulder height ~0.8 m.
 import * as THREE from 'three/webgpu';
 import { Builder, MAT, hex, mixRGB, type RGB, type V3 } from '../models/kit';
-import { bindGeometry, klass, recolor, tag, type ChainSpec, type SkinOut } from './bind';
+import { bindGeometry, klass, planeWeights, recolor, tag, type ChainSpec, type SkinOut } from './bind';
 import { SkelDef } from './rig';
 import { frame, hash, loft, noise2, norm, smooth, sub, type Ring } from './shape';
 
@@ -29,24 +29,31 @@ const KNEE_L: V3 = [-0.09, 0.46, 0.29];
 const HOCK_L: V3 = [-0.085, 0.22, 0.47];
 const HPAW_L: V3 = [-0.08, 0.035, 0.43];
 const HTIP_L: V3 = [-0.08, 0.012, 0.375];
-const HEAD_AT: V3 = [0, 0.96, -0.62];
-const NOSE: V3 = [0, 0.905, -0.92];
+// The head is carried low and forward on a neck ~30 degrees above level, the muzzle long and
+// sloping a little down to the nose; the tail hangs, a hand behind the hocks.
+const HEAD_AT: V3 = [0, 0.885, -0.6];
+const HEAD0: V3 = [0, 0.925, -0.565];
+const HEAD_DIR = norm([0, -0.085, -0.355]);
+const HEAD_LEN = 0.365;
+const along = (s: number, dy = 0): V3 => [HEAD0[0] + HEAD_DIR[0] * s, HEAD0[1] + HEAD_DIR[1] * s + dy, HEAD0[2] + HEAD_DIR[2] * s];
+const NOSE: V3 = along(HEAD_LEN - 0.005);
+const TAIL_PATH: V3[] = [[0, 0.725, 0.55], [0, 0.63, 0.635], [0, 0.52, 0.69], [0, 0.41, 0.725], [0, 0.3, 0.745]];
 
 export const WOLF_SKEL = new SkelDef([
   { name: 'pelvis', parent: null, at: [0, 0.74, 0.4] },
   { name: 'spine1', parent: 'pelvis', at: [0, 0.76, 0.18] },
   { name: 'spine2', parent: 'spine1', at: [0, 0.77, -0.04] },
   { name: 'chest', parent: 'spine2', at: [0, 0.76, -0.24] },
-  { name: 'neck1', parent: 'chest', at: [0, 0.78, -0.38] },
-  { name: 'neck2', parent: 'neck1', at: [0, 0.88, -0.52] },
+  { name: 'neck1', parent: 'chest', at: [0, 0.77, -0.37] },
+  { name: 'neck2', parent: 'neck1', at: [0, 0.83, -0.5] },
   { name: 'head', parent: 'neck2', at: HEAD_AT, tail: NOSE },
-  { name: 'jaw', parent: 'head', at: [0, 0.935, -0.66], tail: [0, 0.885, -0.885] },
-  { name: 'earL', parent: 'head', at: [-0.05, 1.035, -0.645], tail: [-0.068, 1.135, -0.655] },
-  { name: 'earR', parent: 'head', at: [0.05, 1.035, -0.645], tail: [0.068, 1.135, -0.655] },
-  { name: 'tail1', parent: 'pelvis', at: [0, 0.73, 0.55] },
-  { name: 'tail2', parent: 'tail1', at: [0, 0.65, 0.66] },
-  { name: 'tail3', parent: 'tail2', at: [0, 0.55, 0.75] },
-  { name: 'tail4', parent: 'tail3', at: [0, 0.45, 0.82], tail: [0, 0.35, 0.87] },
+  { name: 'jaw', parent: 'head', at: along(0.09, -0.05), tail: along(0.33, -0.045) },
+  { name: 'earL', parent: 'head', at: [-0.048, 0.975, -0.612], tail: [-0.062, 1.095, -0.622] },
+  { name: 'earR', parent: 'head', at: [0.048, 0.975, -0.612], tail: [0.062, 1.095, -0.622] },
+  { name: 'tail1', parent: 'pelvis', at: TAIL_PATH[0] },
+  { name: 'tail2', parent: 'tail1', at: TAIL_PATH[1] },
+  { name: 'tail3', parent: 'tail2', at: TAIL_PATH[2] },
+  { name: 'tail4', parent: 'tail3', at: TAIL_PATH[3], tail: TAIL_PATH[4] },
   { name: 'scapL', parent: 'chest', at: [-0.065, 0.79, -0.24], tail: SHOULDER_L },
   { name: 'fUpL', parent: 'scapL', at: SHOULDER_L, tail: ELBOW_L },
   { name: 'fLowL', parent: 'fUpL', at: ELBOW_L, tail: WRIST_L },
@@ -82,22 +89,20 @@ export const WB = {
 // Head outline (shared by the mesh and the eyes, so the eyes sit on the skull)
 // ------------------------------------------------------------------------------------------
 
-const HEAD0: V3 = [0, 0.99, -0.585];
-const HEAD_DIR = norm(sub([0, 0.918, -0.918], HEAD0));
-const HEAD_LEN = 0.342;
 /** Head ring at arc length s from the back of the skull: half width, half height above / below. */
 function headSize(s: number): [number, number, number] {
-  //        s     hw     hT     hB
+  // a broad crown with fur at the cheeks, a long narrow muzzle
+  //        s      hw     hT     hB
   const T = [
-    [0.0, 0.04, 0.045, 0.045],
-    [0.03, 0.074, 0.064, 0.07],
-    [0.075, 0.084, 0.068, 0.076],
-    [0.12, 0.066, 0.054, 0.066],
-    [0.16, 0.052, 0.045, 0.058],
-    [0.21, 0.041, 0.038, 0.046],
-    [0.27, 0.034, 0.032, 0.036],
-    [0.31, 0.029, 0.027, 0.03],
-    [0.342, 0.012, 0.012, 0.012],
+    [0.0, 0.045, 0.05, 0.05],
+    [0.03, 0.08, 0.068, 0.074],
+    [0.07, 0.092, 0.072, 0.082],
+    [0.115, 0.07, 0.058, 0.068],
+    [0.155, 0.049, 0.048, 0.058],
+    [0.2, 0.037, 0.042, 0.049],
+    [0.26, 0.031, 0.038, 0.042],
+    [0.32, 0.027, 0.032, 0.034],
+    [0.365, 0.012, 0.012, 0.012],
   ];
   if (s <= 0) return [T[0][1], T[0][2], T[0][3]];
   for (let i = 1; i < T.length; i++) {
@@ -110,7 +115,7 @@ function headSize(s: number): [number, number, number] {
   const l = T[T.length - 1];
   return [l[1], l[2], l[3]];
 }
-const EYE_S = 0.142;
+const EYE_S = 0.132;
 const EYE_A = 0.62; // angle up from the side
 /** Eye centre (bind, model space) on side -1 / 1, and the direction it looks. */
 export function eyeBind(side: number): { at: V3; dir: V3 } {
@@ -134,25 +139,7 @@ const C = {
 } as const;
 
 function plain(bones: number[], blend: number, x: number, y: number, z: number, out: SkinOut): void {
-  const B = S.bind, T = S.tail;
-  let seg = 0, nearK = -1, nearS = Infinity;
-  for (let k = 1; k < bones.length; k++) {
-    const b = bones[k];
-    let ax = T[b * 3] - B[b * 3], ay = T[b * 3 + 1] - B[b * 3 + 1], az = T[b * 3 + 2] - B[b * 3 + 2];
-    const l = Math.hypot(ax, ay, az) || 1;
-    ax /= l; ay /= l; az /= l;
-    const s = (x - B[b * 3]) * ax + (y - B[b * 3 + 1]) * ay + (z - B[b * 3 + 2]) * az;
-    if (s > 0) seg = k;
-    if (Math.abs(s) < Math.abs(nearS)) { nearS = s; nearK = k; }
-  }
-  if (nearK > 0 && Math.abs(nearS) < blend) {
-    out.b0 = bones[nearK];
-    out.b1 = bones[nearK - 1];
-    out.w0 = smooth(-blend, blend, nearS);
-    return;
-  }
-  out.b0 = out.b1 = bones[seg];
-  out.w0 = 1;
+  planeWeights(S, bones, blend, x, y, z, out);
 }
 
 const BODY_BONES = [WB.pelvis, WB.spine1, WB.spine2, WB.chest];
@@ -161,12 +148,13 @@ function bodyFn(x: number, y: number, z: number, out: SkinOut): void {
   plain(BODY_BONES, 0.09, x, y, z, out);
   const side = x < 0 ? -1 : 1;
   const ax = Math.abs(x);
-  // haunch: below the spine, outside, around the hip joint
+  // haunch: below the spine, outside, around the hip joint. Kept small: a thigh folds right up to sit
+  // or lie down, and skin that follows it far drags the rump out into a sheet.
   const dh = Math.hypot(ax - 0.085, (y - 0.62) * 0.8, z - 0.38);
-  const wh = smooth(0.2, 0.06, dh) * smooth(0.02, 0.08, ax) * smooth(0.74, 0.6, y) * 0.75;
+  const wh = smooth(0.15, 0.05, dh) * smooth(0.02, 0.08, ax) * smooth(0.72, 0.6, y) * 0.35;
   // shoulder: the point of the shoulder and the upper arm's top
   const ds = Math.hypot(ax - 0.09, (y - 0.56) * 0.9, z + 0.3);
-  const ws = smooth(0.17, 0.05, ds) * smooth(0.02, 0.08, ax) * smooth(0.72, 0.56, y) * 0.7;
+  const ws = smooth(0.14, 0.05, ds) * smooth(0.02, 0.08, ax) * smooth(0.7, 0.56, y) * 0.4;
   if (wh > 0.02 || ws > 0.02) {
     const leg = wh > ws ? (side < 0 ? WB.thighL : WB.thighR) : side < 0 ? WB.fUpL : WB.fUpR;
     const w = Math.max(wh, ws);
@@ -195,11 +183,14 @@ CHAINS[C.JAW] = { bones: [WB.jaw] };
 CHAINS[C.CHEEK] = { bones: [WB.head], fn: cheekFn };
 CHAINS[C.EAR_L] = { bones: [WB.earL] };
 CHAINS[C.EAR_R] = { bones: [WB.earR] };
-CHAINS[C.TAIL] = { bones: [WB.pelvis, WB.tail1, WB.tail2, WB.tail3, WB.tail4], blend: 0.05 };
-CHAINS[C.FRONT_L] = { bones: [WB.scapL, WB.fUpL, WB.fLowL, WB.fFootL, WB.fToeL], blend: 0.035 };
-CHAINS[C.FRONT_R] = { bones: [WB.scapR, WB.fUpR, WB.fLowR, WB.fFootR, WB.fToeR], blend: 0.035 };
-CHAINS[C.HIND_L] = { bones: [WB.pelvis, WB.thighL, WB.shankL, WB.metaL, WB.toeL], blend: 0.04 };
-CHAINS[C.HIND_R] = { bones: [WB.pelvis, WB.thighR, WB.shankR, WB.metaR, WB.toeR], blend: 0.04 };
+CHAINS[C.TAIL] = { bones: [WB.pelvis, WB.tail1, WB.tail2, WB.tail3, WB.tail4], blend: 0.075 };
+// Legs bind from the shoulder / hip joint down, with no blend into the body above it: a leg folds
+// ~90 degrees to sit or lie, and a fat ring blended across that joint collapses into a flat sheet.
+// The leg's top is a dome on the joint (a ball joint) under the body's own skin.
+CHAINS[C.FRONT_L] = { bones: [WB.fUpL, WB.fLowL, WB.fFootL, WB.fToeL], blend: 0.035 };
+CHAINS[C.FRONT_R] = { bones: [WB.fUpR, WB.fLowR, WB.fFootR, WB.fToeR], blend: 0.035 };
+CHAINS[C.HIND_L] = { bones: [WB.thighL, WB.shankL, WB.metaL, WB.toeL], blend: 0.04 };
+CHAINS[C.HIND_R] = { bones: [WB.thighR, WB.shankR, WB.metaR, WB.toeR], blend: 0.04 };
 CHAINS[C.PAW_FL] = { bones: [WB.fToeL] };
 CHAINS[C.PAW_FR] = { bones: [WB.fToeR] };
 CHAINS[C.PAW_HL] = { bones: [WB.toeL] };
@@ -218,7 +209,7 @@ const coat = (flank: number, saddle: number, belly: number, legs: number, face: 
 });
 /** Grey (most), dark, pale, brown-grey. */
 export const WOLF_COATS: Coat[] = [
-  coat(0x857e72, 0x3a3631, 0xcfc6b4, 0xa89a84, 0xc2b8a6, 0x5e564c, 0x181614),
+  coat(0x857e72, 0x3a3631, 0xbcb2a0, 0xa89a84, 0xb8ae9c, 0x5e564c, 0x181614),
   coat(0x4e4a45, 0x211f1d, 0x8e877b, 0x6e655a, 0x8a8276, 0x2e2a26, 0x121110),
   coat(0xb8b2a6, 0x7c766c, 0xe0dbd0, 0xc9bfae, 0xd6cfc2, 0x8a8278, 0x34302c),
   coat(0x86735e, 0x3b3026, 0xcbbca2, 0xa88c6c, 0xbfae94, 0x5a4a3a, 0x1a1512),
@@ -234,38 +225,51 @@ export interface WolfMesh {
   tris: number;
 }
 
-/** Spiky clump noise for fur outlines, 0..1. */
+/**
+ * Scale on the fur's detail coordinates: the KIT fur shading draws strands ~4 mm across, which alias
+ * into wood-grain lines at a few metres; finer strands average into a soft coat and still show close up.
+ */
+const FUR_FINE = 2.6;
+
+/**
+ * Soft fur volume, 0..1: smooth, rounded lobes of coat (no spikes: a low-poly spike reads as a crease in
+ * card, not as hair). Periodic in the ring angle a.
+ */
 function tuft(a: number, s: number, seed: number, freqA: number, freqS: number): number {
-  const n = noise2(a * freqA, s * freqS, seed, Math.round(freqA * Math.PI * 2) || 0);
-  const c = Math.max(0, hash(Math.floor(a * freqA * 1.7), Math.floor(s * freqS * 1.3), seed + 9));
-  return Math.max(0, n) * 0.6 + c * c * 0.6;
+  const p = Math.max(1, Math.round(freqA * Math.PI * 2));
+  const fa = p / (Math.PI * 2);
+  const n = noise2(a * fa, s * freqS, seed, p) * 0.65 + noise2(a * fa * 2, s * freqS * 2, seed + 5, p * 2) * 0.35;
+  return n * 0.5 + 0.5;
 }
 
 export function buildWolfMesh(lod: number): WolfMesh {
   const b = new Builder(0x3011 + lod);
-  const N = lod === 0 ? 26 : lod === 1 ? 14 : 8;
+  const N = lod === 0 ? 30 : lod === 1 ? 16 : 8;
   const NL = lod === 0 ? 12 : lod === 1 ? 8 : 5;
-  const step = lod === 0 ? 0.022 : lod === 1 ? 0.05 : 0.12;
+  const step = lod === 0 ? 0.018 : lod === 1 ? 0.045 : 0.11;
   const fur = lod === 0 ? 1 : lod === 1 ? 0.6 : 0;
   const grey = hex(0x857e72);
-  b.ink({ color: grey, mat: MAT.FUR, wear: 0.15, snow: 0.55, vary: 0 });
+  // frost on the coat stays light: a full snow cap would hide the saddle. The fur's strands (KIT fur
+  // shading runs them along the part's grain axis) lie along the body: grain 'z' on body and head.
+  b.ink({ color: grey, mat: MAT.FUR, wear: 0.15, snow: 0.26, vary: 0, grain: 'z', detailScale: FUR_FINE });
 
   // ---------------- body ----------------
   {
+    // a deep, narrow chest, a level back (top line ~0.785 from withers to hips), the tuck-up
     //        z      cy     hw     hT     hB
     const T = [
-      [0.605, 0.7, 0.05, 0.045, 0.055],
-      [0.56, 0.69, 0.103, 0.083, 0.103],
-      [0.49, 0.675, 0.13, 0.1, 0.135],
-      [0.4, 0.67, 0.14, 0.11, 0.15],
-      [0.3, 0.675, 0.128, 0.1, 0.13],
-      [0.18, 0.69, 0.11, 0.085, 0.1],
-      [0.06, 0.672, 0.12, 0.104, 0.148],
-      [-0.06, 0.648, 0.131, 0.128, 0.193],
-      [-0.18, 0.637, 0.138, 0.144, 0.213],
-      [-0.28, 0.646, 0.134, 0.14, 0.2],
-      [-0.36, 0.67, 0.12, 0.124, 0.17],
-      [-0.42, 0.705, 0.088, 0.098, 0.118],
+      [0.6, 0.705, 0.048, 0.045, 0.055],
+      [0.555, 0.695, 0.092, 0.084, 0.1],
+      [0.49, 0.68, 0.11, 0.104, 0.13],
+      [0.4, 0.675, 0.124, 0.11, 0.14],
+      [0.3, 0.68, 0.115, 0.105, 0.124],
+      [0.18, 0.69, 0.1, 0.095, 0.098],
+      [0.06, 0.672, 0.108, 0.113, 0.15],
+      [-0.06, 0.646, 0.115, 0.138, 0.196],
+      [-0.18, 0.636, 0.12, 0.149, 0.212],
+      [-0.28, 0.645, 0.117, 0.142, 0.198],
+      [-0.36, 0.67, 0.104, 0.12, 0.166],
+      [-0.42, 0.7, 0.076, 0.094, 0.114],
     ];
     const at = (z: number): number[] => {
       for (let i = 1; i < T.length; i++) {
@@ -295,10 +299,10 @@ export function buildWolfMesh(lod: number): WolfMesh {
           let u = hw * Math.sign(c) * Math.pow(Math.abs(c), 2 / e);
           let v = (s > 0 ? hT : hB) * Math.sign(s) * Math.pow(Math.abs(s), 2 / e);
           if (fur > 0) {
-            // guard hair: tufts, longer along the back (the cape) and in the belly fringe
+            // the coat's volume: soft lobes, fuller along the back (the cape) and the belly fringe
             const back = smooth(0.3, 0.95, s), belly = smooth(-0.6, -0.95, s) * smooth(0.25, -0.1, z);
-            const amp = 0.012 + 0.012 * back + 0.02 * belly;
-            const r = 1 + (tuft(a, z, 3, 3.2, 14) * amp * fur) / Math.max(0.08, Math.hypot(u, v));
+            const amp = 0.005 + 0.004 * back + 0.008 * belly;
+            const r = 1 + (tuft(a, z, 3, 2.2, 7) * amp * fur) / Math.max(0.08, Math.hypot(u, v));
             u *= r;
             v *= r;
           }
@@ -313,7 +317,7 @@ export function buildWolfMesh(lod: number): WolfMesh {
 
   // ---------------- neck (with the winter ruff) ----------------
   {
-    const p0: V3 = [0, 0.72, -0.35], p1: V3 = [0, 0.955, -0.6];
+    const p0: V3 = [0, 0.705, -0.34], p1: V3 = [0, 0.9, -0.585];
     const dir = norm(sub(p1, p0));
     const len = Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]);
     const f = frame(dir, [1, 0, 0]);
@@ -322,16 +326,17 @@ export function buildWolfMesh(lod: number): WolfMesh {
     for (let k = 0; k <= n; k++) {
       const t = k / n;
       const c: V3 = [p0[0] + dir[0] * len * t, p0[1] + dir[1] * len * t, p0[2] + dir[2] * len * t];
-      const hw = 0.118 - 0.034 * t + 0.012 * Math.sin(t * Math.PI);
-      const hT = 0.125 - 0.04 * t; // the mane
-      const hB = 0.13 - 0.04 * t + 0.015 * Math.sin(t * Math.PI); // the throat ruff
+      // winter: a thick neck, the mane over the nape, the ruff round the throat and up to the cheeks
+      const hw = 0.104 - 0.018 * t + 0.012 * Math.sin(t * Math.PI);
+      const hT = 0.114 - 0.03 * t; // the mane
+      const hB = 0.12 - 0.024 * t + 0.016 * Math.sin(t * Math.PI); // the throat ruff
       rings.push({
         c, x: f.x, y: f.y,
         pt: (a) => {
           const cs = Math.cos(a), sn = Math.sin(a);
           let u = hw * cs, v = (sn > 0 ? hT : hB) * sn;
           if (fur > 0) {
-            const r = 1 + (tuft(a, t, 5, 3.5, 9) * 0.03 * fur) / Math.max(0.07, Math.hypot(u, v));
+            const r = 1 + (tuft(a, t, 5, 2.5, 4) * 0.012 * fur) / Math.max(0.07, Math.hypot(u, v));
             u *= r;
             v *= r;
           }
@@ -346,6 +351,7 @@ export function buildWolfMesh(lod: number): WolfMesh {
 
   // ---------------- head: skull and upper muzzle ----------------
   const hf = frame(HEAD_DIR, [1, 0, 0]);
+  b.ink({ color: grey, mat: MAT.FUR, wear: 0.15, snow: 0.1, vary: 0, grain: 'z', detailScale: FUR_FINE });
   {
     const rings: Ring[] = [];
     const n = Math.max(4, Math.round(HEAD_LEN / (step * 0.6)));
@@ -358,13 +364,13 @@ export function buildWolfMesh(lod: number): WolfMesh {
         c, x: hf.x, y: hf.y,
         pt: (a) => {
           const cs = Math.cos(a), sn = Math.sin(a);
-          // the muzzle's underside is flat: the upper lip line
+          // the muzzle's underside flattens a little toward the upper lip line
           const flat = smooth(0.12, 0.2, s);
-          let v = (sn > 0 ? hT : hB * (1 - 0.35 * flat)) * sn;
+          let v = (sn > 0 ? hT : hB * (1 - 0.18 * flat)) * sn;
           let u = hw * cs * (1 + cheek * 0.25 * Math.max(0, -sn + 0.3));
-          if (sn < 0 && flat > 0) v = Math.max(v, -hB * 0.65);
+          if (sn < 0 && flat > 0) v = Math.max(v, -hB * 0.8);
           if (fur > 0 && s < 0.13) {
-            const r = 1 + (tuft(a, s, 7, 4, 30) * 0.012 * fur * (1 + cheek * 1.5)) / Math.max(0.04, Math.hypot(u, v));
+            const r = 1 + (tuft(a, s, 7, 2.5, 12) * 0.008 * fur * (1 + cheek * 1.5)) / Math.max(0.04, Math.hypot(u, v));
             u *= r;
             v *= r;
           }
@@ -383,8 +389,8 @@ export function buildWolfMesh(lod: number): WolfMesh {
     });
     // nose leather
     b.ink({ color: hex(0x151312), mat: MAT.RUBBER, rough: 0.45, wear: 0.1, snow: 0.0, vary: 0 });
-    const ns = b.sphere([0.024, 0.02, 0.022], { sides: lod === 0 ? 10 : 6, rings: lod === 0 ? 6 : 4 });
-    const np: V3 = [HEAD0[0] + HEAD_DIR[0] * 0.33, HEAD0[1] + HEAD_DIR[1] * 0.33 + 0.012, HEAD0[2] + HEAD_DIR[2] * 0.33];
+    const ns = b.sphere([0.021, 0.017, 0.02], { sides: lod === 0 ? 10 : 6, rings: lod === 0 ? 6 : 4 });
+    const np: V3 = along(0.352, 0.01);
     ns.move(np[0], np[1], np[2]);
     tag(ns, C.HEAD);
     klass(ns, K.NOSE);
@@ -393,17 +399,17 @@ export function buildWolfMesh(lod: number): WolfMesh {
   // ---------------- lower jaw, cheeks, teeth ----------------
   {
     const rings: Ring[] = [];
-    const j0 = 0.12, j1 = 0.315;
+    const j0 = 0.12, j1 = 0.338;
     const n = Math.max(3, Math.round((j1 - j0) / (step * 0.6)));
     for (let k = 0; k <= n; k++) {
       const s = j0 + ((j1 - j0) * k) / n;
       const t = (s - j0) / (j1 - j0);
       const [hw] = headSize(s);
-      const c: V3 = [HEAD0[0] + HEAD_DIR[0] * s, HEAD0[1] + HEAD_DIR[1] * s - 0.048 + t * 0.008, HEAD0[2] + HEAD_DIR[2] * s];
+      const c: V3 = along(s, -0.044 + t * 0.01);
       const w = hw * 0.78, h = 0.022 - 0.006 * t;
       rings.push({ c, x: hf.x, y: hf.y, pt: (a) => [w * Math.cos(a), h * Math.sin(a) * (Math.sin(a) > 0 ? 0.7 : 1)] });
     }
-    b.ink({ color: grey, mat: MAT.FUR, wear: 0.15, snow: 0.3, vary: 0 });
+    b.ink({ color: grey, mat: MAT.FUR, wear: 0.15, snow: 0.1, vary: 0, grain: 'z', detailScale: FUR_FINE });
     const jaw = loft(b, rings, Math.max(6, N - 6), { capStart: true, capEnd: true, bulge: 0.5 });
     tag(jaw, C.JAW);
     klass(jaw, K.HEAD);
@@ -418,12 +424,13 @@ export function buildWolfMesh(lod: number): WolfMesh {
         const faces: number[][] = [];
         const cols = 5;
         for (let i = 0; i <= cols; i++) {
-          const s = 0.14 + (0.17 * i) / cols;
+          const s = 0.15 + (0.18 * i) / cols;
           const [hw] = headSize(s);
           const base: V3 = [HEAD0[0] + HEAD_DIR[0] * s, HEAD0[1] + HEAD_DIR[1] * s, HEAD0[2] + HEAD_DIR[2] * s];
-          const x = side * hw * 0.8;
-          pts.push([base[0] + x, base[1] - 0.024, base[2]]);
-          pts.push([base[0] + x * 0.95, base[1] - 0.05, base[2]]);
+          // just inside the muzzle's outline: closed, only the lip line shows
+          const x = side * hw * 0.7;
+          pts.push([base[0] + x, base[1] - 0.026, base[2]]);
+          pts.push([base[0] + x * 0.95, base[1] - 0.046, base[2]]);
         }
         for (let i = 0; i < cols; i++) {
           const a = i * 2, c = i * 2 + 2;
@@ -438,7 +445,7 @@ export function buildWolfMesh(lod: number): WolfMesh {
       // canines and a row of incisors
       b.ink({ color: hex(0xd8d0bc), mat: MAT.PLASTIC, rough: 0.35, wear: 0.2, snow: 0, vary: 0 });
       for (const side of [-1, 1]) {
-        for (const [s, up] of [[0.27, true], [0.255, false]] as [number, boolean][]) {
+        for (const [s, up] of [[0.295, true], [0.28, false]] as [number, boolean][]) {
           const [hw] = headSize(s);
           const base: V3 = [HEAD0[0] + HEAD_DIR[0] * s + side * hw * 0.72, HEAD0[1] + HEAD_DIR[1] * s + (up ? -0.026 : -0.04), HEAD0[2] + HEAD_DIR[2] * s];
           const tooth = b.cone(0.0045, 0.02, { sides: 4 });
@@ -453,20 +460,21 @@ export function buildWolfMesh(lod: number): WolfMesh {
 
   // ---------------- ears ----------------
   for (const side of [-1, 1]) {
-    b.ink({ color: grey, mat: MAT.FUR, wear: 0.15, snow: 0.4, vary: 0 });
-    const ear = b.cone(0.03, 0.085, { sides: lod === 0 ? 5 : 3 });
-    ear.scale(1, 1, 0.42).warp((p) => {
+    // pointed, upright, set high on the crown, a little out
+    b.ink({ color: grey, mat: MAT.FUR, wear: 0.15, snow: 0.15, vary: 0, detailScale: FUR_FINE });
+    const ear = b.cone(0.039, 0.106, { sides: lod === 0 ? 6 : 3 });
+    ear.scale(1, 1, 0.45).warp((p) => {
       // cupped: the front face hollow
       if (p.z < 0) p.z *= 0.4;
     });
-    ear.rotZ(-side * 0.2).rotX(-0.15).move(side * 0.056, 1.075, -0.65);
+    ear.rotZ(-side * 0.17).rotX(-0.08).move(side * 0.052, 1.03, -0.616);
     tag(ear, side < 0 ? C.EAR_L : C.EAR_R);
     klass(ear, K.EAR);
   }
 
   // ---------------- tail ----------------
   {
-    const path: V3[] = [[0, 0.735, 0.54], [0, 0.65, 0.66], [0, 0.55, 0.75], [0, 0.45, 0.82], [0, 0.34, 0.875]];
+    const path: V3[] = TAIL_PATH.map((p, i) => (i === 0 ? [p[0], p[1] + 0.01, p[2] - 0.012] : p));
     const rings: Ring[] = [];
     const L: number[] = [0];
     for (let i = 1; i < path.length; i++) L.push(L[i - 1] + Math.hypot(path[i][1] - path[i - 1][1], path[i][2] - path[i - 1][2]));
@@ -482,13 +490,13 @@ export function buildWolfMesh(lod: number): WolfMesh {
       const d = norm(sub(c, a));
       const f = frame(d, [1, 0, 0]);
       const u = s / total;
-      // the brush: thick in the middle, pointed tip
-      const R = 0.045 + 0.03 * Math.sin(Math.min(1, u * 1.15) * Math.PI) * (1 - u * 0.3) - 0.03 * smooth(0.85, 1, u);
+      // the brush: thick and full down its length, a pointed black tip
+      const R = 0.036 + 0.034 * Math.sin(Math.min(1, u * 1.1) * Math.PI) * (1 - u * 0.3) - 0.022 * smooth(0.85, 1, u);
       rings.push({
         c: ctr, x: f.x, y: f.y,
         pt: (ang) => {
           let r = Math.max(0.006, R);
-          if (fur > 0) r *= 1 + tuft(ang, u, 11, 3, 10) * 0.35 * fur;
+          if (fur > 0) r *= 1 + (tuft(ang, u, 11, 2, 5) - 0.5) * 0.16 * fur;
           return [r * Math.cos(ang), r * Math.sin(ang)];
         },
       });
@@ -516,36 +524,39 @@ export function buildWolfMesh(lod: number): WolfMesh {
       const f = frame(d, [1, 0, 0]);
       rings.push({ c: ctr, x: f.x, y: f.y, pt: (ang) => { const r = radius(s, ang); return [r[0] * Math.cos(ang), r[1] * Math.sin(ang)]; } });
     }
-    const leg = loft(b, rings, NL, { capEnd: true, bulge: 0.5 });
+    const leg = loft(b, rings, NL, { capStart: true, capEnd: true, bulge: 0.6 });
     tag(leg, chain);
     klass(leg, cls);
   };
   for (const side of [-1, 1]) {
     const sx = (p: V3): V3 => [p[0] * -side, p[1], p[2]];
-    // front leg: shoulder -> elbow -> wrist -> paw
-    const top: V3 = sx([-0.08, 0.66, -0.31]);
+    // front leg: shoulder -> elbow -> wrist -> paw (the loft starts on the shoulder joint)
+    const top: V3 = sx([-0.093, 0.605, -0.33]);
     const fpath = [top, sx(SHOULDER_L), sx(ELBOW_L), sx(WRIST_L), sx(FPAW_L)];
     legLoft(fpath, (s, a) => {
-      const R = s < 0.12 ? 0.062 : s < 0.28 ? 0.062 - 0.02 * smooth(0.12, 0.28, s) : s < 0.55 ? 0.042 - 0.014 * smooth(0.28, 0.55, s) : 0.028 - 0.004 * smooth(0.55, 0.64, s);
+      // long and lean below the elbow
+      const R = s < 0.1 ? 0.055 : s < 0.24 ? 0.055 - 0.015 * smooth(0.1, 0.24, s) : s < 0.5 ? 0.04 - 0.013 * smooth(0.24, 0.5, s) : 0.027 - 0.003 * smooth(0.5, 0.6, s);
       // feathering: longer hair down the back of the forearm
       const back = Math.sin(a) < 0 ? 1 : 0;
-      const feather = back * smooth(0.3, 0.4, s) * smooth(0.6, 0.48, s) * 0.012 * fur * (1 + tuft(a, s, 13 + side, 2, 20));
+      const feather = back * smooth(0.3, 0.4, s) * smooth(0.6, 0.48, s) * 0.008 * fur * (0.6 + tuft(a, s, 13 + side, 1.5, 8));
       return [R + feather * 0.3, R * 1.08 + feather];
-    }, 0, 0.66, side < 0 ? C.FRONT_L : C.FRONT_R, K.FRONT);
-    // hind leg: hip -> knee -> hock -> paw, the big furred thigh
-    const htop: V3 = sx([-0.08, 0.76, 0.42]);
+    }, 0, 0.62, side < 0 ? C.FRONT_L : C.FRONT_R, K.FRONT);
+    // hind leg: hip -> knee -> hock -> paw, the big furred thigh (the loft starts on the hip joint)
+    const htop: V3 = sx([-0.084, 0.725, 0.405]);
     const hpath = [htop, sx(HIP_L), sx(KNEE_L), sx(HOCK_L), sx(HPAW_L)];
     legLoft(hpath, (s, a) => {
-      const R = s < 0.08 ? 0.09 : s < 0.34 ? 0.09 - 0.035 * smooth(0.08, 0.34, s) : s < 0.62 ? 0.052 - 0.022 * smooth(0.34, 0.62, s) : 0.028 - 0.004 * smooth(0.62, 0.85, s);
-      // trousers: shaggy at the back of the thigh
-      const pants = Math.sin(a) < 0.2 ? smooth(0.05, 0.15, s) * smooth(0.45, 0.3, s) * 0.016 * fur * (1 + tuft(a, s, 17 + side, 2.5, 16)) : 0;
+      // a heavy thigh down to the stifle, a lean gaskin to the hock, a thin metatarsus
+      const R = s < 0.05 ? 0.07 + 0.012 * smooth(0, 0.05, s) : s < 0.3 ? 0.082 - 0.02 * smooth(0.05, 0.3, s) : s < 0.45 ? 0.062 - 0.022 * smooth(0.3, 0.45, s) : s < 0.62 ? 0.04 - 0.014 * smooth(0.45, 0.62, s) : 0.024 - 0.003 * smooth(0.62, 0.85, s);
+      // trousers: fuller hair at the back of the thigh
+      const pants = Math.sin(a) < 0.2 ? smooth(0.05, 0.15, s) * smooth(0.45, 0.3, s) * 0.012 * fur * (0.6 + tuft(a, s, 17 + side, 1.5, 8)) : 0;
       return [R * 0.92 + pants * 0.3, R * 1.1 + pants];
-    }, 0, 0.86, side < 0 ? C.HIND_L : C.HIND_R, K.HIND);
+    }, 0, 0.82, side < 0 ? C.HIND_L : C.HIND_R, K.HIND);
     // paws
-    b.ink({ color: hex(0x6e6254), mat: MAT.FUR, wear: 0.3, snow: 0.7, vary: 0 });
+    b.ink({ color: hex(0x6e6254), mat: MAT.FUR, wear: 0.3, snow: 0.5, vary: 0, detailScale: FUR_FINE });
     for (const [paw, tip, chain] of [[sx(FPAW_L), sx(FTIP_L), side < 0 ? C.PAW_FL : C.PAW_FR], [sx(HPAW_L), sx(HTIP_L), side < 0 ? C.PAW_HL : C.PAW_HR]] as [V3, V3, number][]) {
-      const p = b.pillow(0.055, 0.038, 0.075, { round: 0.016, bulge: 0.004, seg: lod === 0 ? 2 : 1, ring: lod === 0 ? 2 : 1 });
-      p.move((paw[0] + tip[0]) / 2, 0.022, (paw[2] + tip[2]) / 2);
+      // big snowshoe paws
+      const p = b.pillow(0.082, 0.044, 0.112, { round: 0.022, bulge: 0.006, seg: lod === 0 ? 2 : 1, ring: lod === 0 ? 2 : 1 });
+      p.move((paw[0] + tip[0]) / 2, 0.022, (paw[2] + tip[2]) / 2 - 0.006);
       tag(p, chain);
       klass(p, K.PAW);
     }
@@ -571,20 +582,21 @@ export function coatGeometry(base: WolfMesh, coatIndex: number): THREE.BufferGeo
     const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
     const ny = nor[i * 3 + 1];
     const k = base.cls[i];
-    // per-hair grizzle: agouti banding as a hash over the surface
-    const g = 0.86 + 0.28 * (hash(Math.round(x * 300), Math.round(y * 300), Math.round(z * 300)) * 0.5 + 0.5);
+    // grizzle: soft patches of paler and darker guard hair (smooth: a per-vertex hash looks like crumpled card)
+    const g = 0.9 + 0.2 * (noise2(x * 31 + z * 17, y * 29 - z * 11, 3, 0) * 0.5 + 0.5);
     let col: RGB;
     switch (k) {
       case K.NOSE: col = hex(0x141211); break;
       case K.LIP: col = hex(0x15110e); break;
       case K.TEETH: col = hex(0xcfc6b0); break;
       case K.MOUTH: col = hex(0x3a1a18); break;
-      case K.PAW: col = mixRGB(c.legs, c.mask, 0.35); break;
+      case K.PAW: col = mixRGB(c.legs, c.belly, 0.25); break;
       case K.EAR: {
         // dark rims and backs, paler inside
-        const front = z < -0.652 ? 1 : 0;
-        col = front ? mixRGB(c.face, c.belly, 0.4) : mixRGB(c.saddle, c.dark, 0.35);
-        if (y > 1.12) col = c.dark;
+        // pale fur inside, the backs the saddle's grey, only the rims and tips dark
+        const front = z < -0.62 ? 1 : 0;
+        col = front ? mixRGB(c.face, c.belly, 0.5) : mixRGB(c.flank, c.saddle, 0.55);
+        if (y > 1.06) col = mixRGB(col, c.dark, 0.5);
         break;
       }
       case K.TAIL: {

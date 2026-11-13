@@ -28,13 +28,23 @@ one registration line in src/game/visuals.ts.
                          for player/wolf (wraps markers.update with a filtered view), point(id, name), forceLod, bindPose.
 - dev/actors.html/.ts    bench: ?anim= ?show= ?slot= ?sheet=player|wolf|1 ?phases= ?lod= ?bind=1 (+ bench params).
 
+## Session 1, later steps (done)
+- Polish: clumpy fur ruff + blunt edge clumps, wool wraps over the mouth (rime), shoulder caps sunk, thinner pockets,
+  lofted boots, bulkier trousers, visible baffles + weathering; webbing straps clear of the parka; goggle strap removed.
+- Wolf: broader skull/muzzle, bigger ears, haunch tucked, fur grain along the body (ink grain 'z'), light frost only,
+  tail carriage sign fixed (positive = raise), calmer carriage, howl sit at ~45 deg with the muzzle ~60 deg up.
+- Gait start fix (the foot furthest behind lifts first), planted feet clamped to 0.6 m reach, pelvis dips for reach,
+  shorter strides (0.32 + 0.18 v).
+- Bus events -> wolf animators (yelp flinch, growl snarl, bark, bite snap).
+- visuals.ts line 97 (after FX's line): createActorsSystem via dynamic import, try/catch warning like FX's.
+- Local first-person flashlight beam (api.localBeam, default on) through FX's pool (priority 6) or the own SpotLight.
+- Real game: scratchpad/figures.mjs (bots Mara/Ivo with flashlight/rifle, wolves via CS.sim.ctx.spawn, third person via
+  CS.game.thirdDev = true) PASSES with a clean console; markers muted (players/wolves) confirmed.
+
 ## Remaining (priority order)
-1. Polish pass from close-ups: player hood ruff (reads as a tyre), boots too long/flat, goggles; wolf head/muzzle too thin,
-   ears small, haunch blend, paws; howl sit too upright; gallop tail too high (carriage values); strafe step too wide.
-2. Bus events -> wolf animators (yelp/growl/bark/bite) in index.ts (bus.on('sim')).
-3. visuals.ts registration line (re-read the file first; put it after FX's line if present).
-4. Shots: WebGPU / WebGL2 (--backend webgl) / --mobile 1; real game via tools/play.mjs (bots, CS.act debug wolves).
-5. Perf check (draw calls / rows), LOD distances, fog (KIT material has fog = true).
+1. Re-check night eye shine in game; WebGL2 + --mobile 1 shots (bench + game).
+2. Perf check (draw calls / rows), LOD distances; maybe a shadow-only local body in first person (not required).
+3. Contact sheet re-shoot after the polish; final report.
 
 ## Decisions / API facts
 - GPU skinning from ONE shared RGBA32F bone texture (textureLoad as three's BatchNode), plain THREE.Mesh with `count`

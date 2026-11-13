@@ -256,9 +256,12 @@ export function particleLight(p: N, d: N, forward = 0.45): N {
     const x = clamp(dist.div(P.w), 0, 1);
     const x2 = x.mul(x);
     const win = clamp(float(1).sub(x2.mul(x2)), 0, 1);
-    const cosA = dot(L.div(dist).negate(), D.xyz);
+    const toL = L.div(dist);
+    const cosA = dot(toL.negate(), D.xyz);
     const cone = select(C.w.lessThan(-1.5), float(1), smoothstep(C.w, D.w, cosA));
-    acc = acc.add(C.xyz.mul(win.mul(win).mul(cone).div(d2)));
+    // forward scattering: a wisp between the eye and a fire or a beam lights up
+    const ph = hgPhase(dot(toL, d), g).mul(4 * Math.PI).mul(0.6).add(0.4);
+    acc = acc.add(C.xyz.mul(win.mul(win).mul(cone).mul(ph).div(d2)));
   }
   // A point source lights a wisp from all sides: a part of a facing surface's share.
   return amb.add(sun.add(moon).add(acc.mul(0.4)).mul(1 / Math.PI));
@@ -305,6 +308,7 @@ export class PuffPool extends ParticleSim {
   private geo: THREE.InstancedBufferGeometry;
   private order: number[] = [];
   private depth: Float32Array;
+  private farFirst: (a: number, b: number) => number;
 
   constructor(cap: number) {
     super(cap);
@@ -312,7 +316,8 @@ export class PuffPool extends ParticleSim {
     this.geo = geo;
     this.bufs = bufs;
     this.list = Object.values(bufs);
-    this.depth = new Float32Array(cap);
+    const depth = (this.depth = new Float32Array(cap));
+    this.farFirst = (a, b) => depth[b] - depth[a];
     this.mesh = new THREE.Mesh(geo, this.material());
     this.mesh.name = 'fx-puffs';
     this.mesh.frustumCulled = false;
@@ -391,8 +396,7 @@ export class PuffPool extends ParticleSim {
       order[i] = i;
       this.depth[i] = (this.px[i] - _cam.x) * _fwd.x + (this.py[i] - _cam.y) * _fwd.y + (this.pz[i] - _cam.z) * _fwd.z;
     }
-    const dep = this.depth;
-    order.sort((a, b) => dep[b] - dep[a]);
+    order.sort(this.farFirst);
     let w = 0;
     for (let k = 0; k < n; k++) {
       const i = order[k];

@@ -10,10 +10,13 @@
 //          w-sleep w-dead w-drag w-flee w-feed
 // The page sets window.DONE once its picture is on screen.
 import * as THREE from 'three/webgpu';
+import * as TSL from 'three/tsl';
 import type { Frame } from '../src/gfx/api';
 import type { View, ViewEnt } from '../src/game/view';
 import type { Entity, EntityKind, LogEnt, PlayerEnt, WolfEnt } from '../src/sim/types';
 import { createActorsSystem } from '../src/actors';
+import { PLAYER_SKEL } from '../src/actors/player_model';
+import { WOLF_SKEL } from '../src/actors/wolf_model';
 import { createBench } from './bench';
 
 const info = document.getElementById('info')!;
@@ -175,6 +178,13 @@ async function main(): Promise<void> {
   const forced = bench.param('lod');
   if (forced !== null) sys.forceLod = Number(forced);
   sys.bindPose = bench.param('bind') === '1';
+  if (bench.param('sil') === '1') {
+    // silhouettes: flat black figures on white, no ground
+    sys.setSilhouette(true);
+    bench.scene.backgroundNode = (TSL as any).vec3(2.2, 2.2, 2.2);
+    const g = bench.scene.getObjectByName('bench-ground');
+    if (g) g.visible = false;
+  }
   // the system reads the fake view through this wrapper (the bench's frames carry no view)
   let current: Entity[] = [];
   let script: ((t: number) => void) | null = null;
@@ -239,10 +249,11 @@ async function main(): Promise<void> {
         const e = s.ents[0] as PlayerEnt | WolfEnt;
         const isWolf = e.kind === 'wolf';
         const cy = isWolf ? 0.55 : 0.95;
+        const side = bench.param('side') === '1';
         const dist = (isWolf ? 3.2 : 3.4) * (s.anim.dist ? 1.15 : 1);
-        const az = e.yaw + (isWolf ? 70 : 35) * DEG;
+        const az = e.yaw + (side ? 90 : isWolf ? 70 : 35) * DEG;
         const c = new THREE.Vector3(e.x, (e.kind === 'player' ? Math.max(0, e.y) : e.y) + cy, e.z);
-        camera.position.set(c.x - Math.sin(az) * dist, c.y + 0.6, c.z - Math.cos(az) * dist);
+        camera.position.set(c.x - Math.sin(az) * dist, c.y + (side ? 0.05 : 0.6), c.z - Math.cos(az) * dist);
         camera.lookAt(c);
         bench.orbit.target.copy(c);
         for (let k = 0; k < 2; k++) engine.frame({ dt: 0, time: tile.t, view: undefined as unknown as View });
@@ -332,6 +343,27 @@ async function main(): Promise<void> {
   script = (t) => {
     for (const s of scripts) s(t);
   };
+  if (bench.param('joints') === '1') {
+    // joint overlay: a small sphere on every bone joint of every figure (red: wolves, yellow: players)
+    const dots = new THREE.InstancedMesh(new THREE.SphereGeometry(0.012, 6, 4), new THREE.MeshBasicNodeMaterial({ color: 0xff3322, depthTest: false }), 256);
+    dots.frustumCulled = false;
+    dots.renderOrder = 10;
+    bench.scene.add(dots);
+    const m4 = new THREE.Matrix4();
+    const pv = new THREE.Vector3();
+    bench.onFrame(() => {
+      let n = 0;
+      for (const e of current) {
+        const names = e.kind === 'wolf' ? WOLF_SKEL.names : e.kind === 'player' ? PLAYER_SKEL.names : [];
+        for (const name of names) {
+          if (n >= 256 || !sys.point(e.id, name, pv)) continue;
+          dots.setMatrixAt(n++, m4.makeTranslation(pv.x, pv.y, pv.z));
+        }
+      }
+      dots.count = n;
+      dots.instanceMatrix.needsUpdate = true;
+    });
+  }
   let frames = 0;
   // with a frozen clock (?t=) the picture is final once DONE is set: stop drawing so a loaded,
   // shared GPU can still take the screenshot (?live=1 keeps rendering)

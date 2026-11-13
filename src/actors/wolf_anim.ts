@@ -411,7 +411,7 @@ export class WolfAnimator {
     this.headYaw = damp(this.headYaw, lookYaw, 5, dt);
     this.headPitch = damp(this.headPitch, lookPitch, 5, dt);
     // carriage: neck low and forward when stalking / charging / cowering, the nod of the walk
-    const low = 0.32 * this.wStalk + 0.35 * this.wCharge * smooth(4, 9, this.spd) + 0.45 * this.wCower + 0.75 * this.wFeed + 0.35 * this.wDrag + 0.15 * this.wFlee;
+    const low = 0.22 * this.wStalk + 0.25 * this.wCharge * smooth(4, 9, this.spd) + 0.38 * this.wCower + 0.7 * this.wFeed + 0.3 * this.wDrag + 0.12 * this.wFlee;
     const nod = walk * Math.cos(ph * 2 * TAU) * 0.05 + trot * Math.cos(ph * 2 * TAU) * 0.03 + gal * flexG * -0.12;
     const up = lunge * 0.55 + this.flinch * 0.3;
     const hp = this.headPitch;
@@ -440,11 +440,13 @@ export class WolfAnimator {
     }
 
     // ---- tail: a damped chain, carried by mood ----
-    const baseT = 0.55 * this.wAlert + 0.95 * this.wCharge * smooth(4, 9, this.spd) - 0.55 * this.wCower - 0.4 * this.wFlee + 0.2 * smooth(1, 3, this.spd) - 0.25 * this.wFeed;
+    // carriage: hanging at rest, out straight behind when alert or running, tucked in fear
+    const baseT = 0.28 * this.wAlert + 0.4 * this.wCharge * smooth(4, 9, this.spd) - 0.55 * this.wCower - 0.4 * this.wFlee + 0.12 * smooth(1, 3, this.spd) - 0.25 * this.wFeed;
     for (let i = 0; i < 4; i++) {
-      const want = i === 0 ? baseT : baseT * 0.15 - (this.wCower + this.wFlee) * 0.25;
-      // spring toward the carriage; the body's bounce excites it
-      this.tailV[i] += ((want - this.tail[i]) * 60 - this.tailV[i] * 9) * dt + (gal * flexG + trot * Math.cos(ph * 2 * TAU) * 0.5) * dt * 2 * (i + 1) * 0.3;
+      // the brush hangs from its root: the outer segments droop a little rather than curl up (a fox's carriage)
+      const want = i === 0 ? baseT : i === 1 ? baseT * 0.15 - (this.wCower + this.wFlee) * 0.25 : -0.06 - (this.wCower + this.wFlee) * 0.15;
+      // spring toward the carriage; the body's bounce excites it a little
+      this.tailV[i] += ((want - this.tail[i]) * 60 - this.tailV[i] * 10) * dt + (gal * flexG + trot * Math.cos(ph * 2 * TAU) * 0.4) * dt * (1 + i) * 0.35;
       this.tail[i] += this.tailV[i] * dt;
     }
     const swish = (walk * 0.12 + trot * 0.1) * Math.sin(ph * TAU) + Math.sin(t * 0.8 + this.seed) * 0.04 * (1 - this.wMove);
@@ -593,7 +595,7 @@ export class WolfAnimator {
     this.body(e, gy, 0.27, 0.36, 0.06, 0.12, [0.0, -0.03, -0.05]);
     const t = ctx.time;
     const look = (1 - sl) * (Math.sin(t * 0.2 + this.seed) * 0.6);
-    this.headAlt(-0.3 - 0.55 * sl, -0.1 - 0.3 * sl, 0.25 + 0.2 * sl, look, 0, 0.1, [-0.6, 0.3, 0.3, 0.2], 0.5);
+    this.headAlt(-0.3 - 0.55 * sl, -0.1 - 0.3 * sl, 0.25 + 0.2 * sl, look, 0, 0.1, [0.15, 0.2, 0.12, 0.05], 0.5);
     const P = this.alt;
     // forelegs flat on the snow, paws ahead of the chest
     for (const i of [0, 1]) {
@@ -623,8 +625,10 @@ export class WolfAnimator {
     const gy = this.groundY(ctx, e.x, e.z, e.y);
     // howling comes in waves: the head rises and falls, the jaw opens on each call
     const call = 0.5 + 0.5 * Math.sin(e.moodT * 0.9);
-    this.body(e, gy, 0.2, 0.3, 0.75, 0, [0.1, 0.05, 0.0]);
-    this.headAlt(0.15 + 0.25 * call, 0.25 + 0.2 * call, 0.15 + 0.25 * call, 0, 0.12 + 0.18 * call, 0.6, [-1.1, 0.4, 0.3, 0.1], 0.2);
+    this.body(e, gy, 0.24, 0.3, 0.5, 0, [0.06, 0.03, 0.0]);
+    // the muzzle to the sky at ~60 degrees, the tail laid out behind on the snow
+    // the howl comes out of a pursed mouth: the jaw only parts
+    this.headAlt(0.05 + 0.15 * call, 0.1 + 0.1 * call, 0.05 + 0.15 * call, 0, 0.025 + 0.045 * call, 0.22, [0.3, 0.25, 0.05, -0.05], 0.2);
     const P = this.alt;
     _fwd.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     _right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));

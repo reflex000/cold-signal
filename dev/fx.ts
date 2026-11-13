@@ -103,7 +103,7 @@ engine.add(props);
 const fx = createFxSystem(engine, world) as FxSystem;
 // &nofx=1: the same scene without fx (a baseline for &perf=1)
 const nofx = P('nofx') === '1';
-if (nofx) fx.dispose();
+if (nofx) fx.dispose?.();
 else engine.add(fx);
 (window as any).FX = fx;
 
@@ -134,13 +134,20 @@ if (P('perf') === '1') {
 
 const type = (P('type') ?? 'campfire') as FireType;
 const stage = Math.max(0, Math.min(3, Math.round(b.num('fire', 1))));
-const ignite = P('ignite') === '1';
+const ignite = P('ignite') === '1' || P('ignite') === 'match';
 const fire = put({
   id: 10, kind: 'fire', type, x: 0, y: type === 'barrel' ? 0.9 : type === 'stove' ? 0.45 : 0, z: 0, yaw: 0.4, rev: 0,
   lit: !ignite && stage === 1, fuel: stage === 3 ? 0 : 300, heat: !ignite && stage === 1 ? b.num('heat', 0.9) : 0,
   size: b.num('size', 0.8), shelter: 0.15, embers: stage === 2 ? 150 : 0, by: 1,
 } as FireEnt) as ViewEnt<FireEnt>;
 if (type === 'barrel') props.add({ model: 'barrel', seed: 1, x: 0, y: 0, z: 0, yaw: 0.3, scale: 1 }, { lit: false });
+if (P('post') === '1') {
+  // a post beside the fire, to judge the fire's shadow ('high' and 'ultra')
+  const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.4, 0.12), new THREE.MeshStandardNodeMaterial({ color: 0x3a3028, roughness: 0.9 }));
+  post.position.set(1.0, 0.7, 0.5);
+  post.castShadow = post.receiveShadow = true;
+  scene.add(post);
+}
 if (type === 'stove') scene.add(standinStove());
 
 // players: the local one (first person with &fp=1) and two others round the fire
@@ -163,6 +170,9 @@ if (P('frost') || P('wet') || P('lsnow')) fx.forceOverlays(b.num('frost', 0), b.
 
 // ---- clock, pre-roll, scripted moments ----
 const warm = b.num('warm', 9);
+const frozen = P('t') !== null;
+let prerolling = false;
+let breathT = 0;
 let first = true;
 let frameNo = 0;
 const burst = P('fx') as BurstKind | null;
@@ -182,22 +192,26 @@ function syncView(time: number, dt: number): void {
   camState.pitch = Math.asin(Math.max(-1, Math.min(1, fwd.y)));
   // the bench camera is the goggles (overlays on) unless asked to be a third-person camera
   camState.third = P('third') === '1' ? 1 : 0;
-  // the local player's breathing cycle (as the view rig does it)
+  // the local player's breathing cycle (as the view rig does it; a fixed 2 s cycle with a frozen
+  // clock so a still always catches a breath)
   const r = view.rig;
-  r.breath = (r.breath + (0.22 + 0.55 * (1 - me.stamina)) * dt) % 1;
+  breathT += dt;
+  // frozen clock: a 3 s cycle whose exhale starts 0.6 s before the pre-roll ends (in the shot)
+  r.breath = frozen ? (((breathT / 3 + 0.5 - (warm - 0.6) / 3) % 1) + 1) % 1 : (r.breath + (0.22 + 0.55 * (1 - me.stamina)) * dt) % 1;
   if (fp) {
     me.x = camera.position.x;
     me.z = camera.position.z;
     me.y = camera.position.y - 1.62;
     me.yaw = camState.yaw;
   }
-  if (ignite) {
+  if (ignite && !prerolling) {
     // a match at 0.6 s for 1.2 s, lit at 1.8 s, the heat ramps like the sim (tau 22 s)
     igniteT += dt;
     const p2 = ents.get(1) as ViewEnt<PlayerEnt>;
-    p2.act = igniteT > 0.6 && igniteT < 1.8 ? 'ignite' : 'none';
-    p2.actT = Math.max(0, igniteT - 0.6);
-    if (igniteT >= 1.8 && !fire.lit) {
+    const holdMatch = P('ignite') === 'match'; // stills of the strike: the match never catches
+    p2.act = igniteT > 0.6 && (igniteT < 1.8 || holdMatch) ? 'ignite' : 'none';
+    p2.actT = holdMatch ? 0.5 : Math.max(0, igniteT - 0.6);
+    if (igniteT >= 1.8 && !fire.lit && !holdMatch) {
       fire.lit = true;
       view.bus.emit('sim', { t: 'fireLit', id: fire.id, by: 1 });
     }
@@ -220,14 +234,25 @@ b.onFrame((dt, time) => {
     first = false;
     // simulate the particles for a while so the smoke column is there in the first frame
     const step = 1 / 30;
+    prerolling = true;
     for (let t = time - warm; t < time && !nofx; t += step) {
       syncView(t, step);
       fx.update({ dt: step, time: t, view });
     }
+    prerolling = false;
   }
   syncView(time, dt);
   frameNo++;
-  if (burst && !nofx && frameNo === framesWanted - 2) {
+  // &die=fuel|wind|snow: the fire goes out on frame 10 (embers left)
+  const die = P('die');
+  if (die && frameNo === 10 && fire.lit) {
+    fire.lit = false;
+    fire.heat = 0;
+    fire.embers = die === 'fuel' ? 150 : 60;
+    view.bus.emit('sim', { t: 'fireOut', id: fire.id, why: die as 'fuel' | 'wind' | 'snow' });
+  }
+  // a burst every 24 frames from just before the shot on, so the capture always holds a fresh one
+  if (burst && !nofx && frameNo >= framesWanted - 2 && (frameNo - framesWanted + 2) % 24 === 0) {
     const tx = b.orbit.target.x, tz = b.orbit.target.z;
     if (burst === 'muzzle') view.bus.emit('sim', { t: 'shot', by: 2, x: tx - 0.6, y: 1.45, z: tz + 0.4, dx: 1, dy: 0.02, dz: -0.2, hx: tx + 30, hy: 0, hz: tz - 6, hit: 'ground' });
     else fx.burst(burst, tx, 0, tz, 0.3, 0.5, 0.8, 1.2);

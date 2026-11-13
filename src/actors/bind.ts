@@ -43,26 +43,35 @@ const sstep = (a: number, b: number, v: number): number => {
   return t * t * (3 - 2 * t);
 };
 
-/** Two-bone weights of point (x, y, z) along a chain. */
-export function chainWeights(def: SkelDef, chain: ChainSpec, x: number, y: number, z: number, out: SkinOut): void {
-  const bones = chain.bones;
-  if (chain.fn) {
-    chain.fn(x, y, z, out);
-    return;
-  }
+/**
+ * Two-bone weights of a point along a bone chain. Each joint is a plane through the joint that BISECTS
+ * the angle between the two bones (normal = sum of their directions), so a limb bent at bind (a dog's
+ * hind leg) is cut cleanly; when the two bones point nearly opposite ways (pelvis up, thigh down) the
+ * plane is perpendicular to the child bone instead. A point belongs to the bone between the planes
+ * around it and blends across the nearest plane within `blend` metres.
+ */
+export function planeWeights(def: SkelDef, bones: readonly number[], blend: number, x: number, y: number, z: number, out: SkinOut): void {
   if (bones.length === 1) {
     out.b0 = out.b1 = bones[0];
     out.w0 = 1;
     return;
   }
   const B = def.bind, T = def.tail;
-  const blend = chain.blend ?? 0.05;
   let seg = 0;
   let nearK = -1, nearS = Infinity;
   for (let k = 1; k < bones.length; k++) {
-    const b = bones[k];
-    let ax = T[b * 3] - B[b * 3], ay = T[b * 3 + 1] - B[b * 3 + 1], az = T[b * 3 + 2] - B[b * 3 + 2];
-    const l = Math.hypot(ax, ay, az) || 1;
+    const a = bones[k - 1], b = bones[k];
+    let px = T[a * 3] - B[a * 3], py = T[a * 3 + 1] - B[a * 3 + 1], pz = T[a * 3 + 2] - B[a * 3 + 2];
+    let cx = T[b * 3] - B[b * 3], cy = T[b * 3 + 1] - B[b * 3 + 1], cz = T[b * 3 + 2] - B[b * 3 + 2];
+    const lp = Math.hypot(px, py, pz) || 1, lc = Math.hypot(cx, cy, cz) || 1;
+    px /= lp; py /= lp; pz /= lp;
+    cx /= lc; cy /= lc; cz /= lc;
+    let ax = px + cx, ay = py + cy, az = pz + cz;
+    let l = Math.hypot(ax, ay, az);
+    if (l < 0.5) {
+      ax = cx; ay = cy; az = cz;
+      l = 1;
+    }
     ax /= l; ay /= l; az /= l;
     const s = (x - B[b * 3]) * ax + (y - B[b * 3 + 1]) * ay + (z - B[b * 3 + 2]) * az;
     if (s > 0) seg = k;
@@ -79,6 +88,15 @@ export function chainWeights(def: SkelDef, chain: ChainSpec, x: number, y: numbe
   }
   out.b0 = out.b1 = bones[seg];
   out.w0 = 1;
+}
+
+/** Two-bone weights of point (x, y, z) for a chain spec (its own function, or the joint planes). */
+export function chainWeights(def: SkelDef, chain: ChainSpec, x: number, y: number, z: number, out: SkinOut): void {
+  if (chain.fn) {
+    chain.fn(x, y, z, out);
+    return;
+  }
+  planeWeights(def, chain.bones, chain.blend ?? 0.05, x, y, z, out);
 }
 
 /**

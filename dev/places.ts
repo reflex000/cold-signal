@@ -216,12 +216,29 @@ function views(): Record<string, View> {
       p.position.copy(e.position).addScaledVector(e.dir, Math.max(0.3, 0.1 + e.size));
       scene.add(p);
     }
+    // the stove is a fire entity in the game (gfx/fx draws it): a stand-in light at each 'stove' anchor
+    for (let id = 0; id < props.count; id++) {
+      const p = props.anchor(id, 'stove');
+      if (!p) continue;
+      const pl = new THREE.PointLight(new THREE.Color(1.0, 0.45, 0.15), 9 * Math.max(byLight, 0.35), 9, 2);
+      pl.position.copy(p).add(new THREE.Vector3(0, 0.55, 0.45));
+      scene.add(pl);
+    }
     for (const l of props.lights()) {
       if (l.def.name && /beacon|lamp_red/.test(l.def.name) && charge < 0.2) continue;
       const p = new THREE.PointLight(new THREE.Color(l.def.color[0], l.def.color[1], l.def.color[2]), l.def.intensity * byLight, l.def.range, 2);
       p.position.copy(l.position);
       scene.add(p);
     }
+  }
+
+// lamps declared as 'light' emitters: the lantern burns with the stove, the shed lamp with power
+  for (const e of props.emitters('light')) {
+    if (e.def.powered ? charge < 0.05 : !fire) continue;
+    const c = (e.def.color as [number, number, number] | undefined) ?? [1, 0.75, 0.45];
+    const pl = new THREE.PointLight(new THREE.Color(c[0], c[1], c[2]), typeof e.def.intensity === 'number' ? e.def.intensity : 5, typeof e.def.range === 'number' ? e.def.range : 7, 2);
+    pl.position.copy(e.position);
+    scene.add(pl);
   }
 
   // ---- the snow field: level where the site's pads are, drifted beyond ----

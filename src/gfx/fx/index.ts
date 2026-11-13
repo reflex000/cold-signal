@@ -136,6 +136,37 @@ export function createFxSystem(engine: CsEngine, world: World): FxSystem {
   const info = { fires: 0, flares: 0, puffs: 0, glow: 0, debris: 0 };
   let lastTime = -1;
 
+  // ---- GAME's stand-in markers draw their own flames, stones and fire lights for fires and
+  // flares: hand them a view whose list() is empty for those kinds (their file is GAME's; this
+  // only wraps the call, as FIGURES does for players and wolves, with its own flag so both chain).
+  const EMPTY: never[] = [];
+  let markersMuted = false;
+  function muteMarkers(): void {
+    const m = engine.get('markers') as (GfxSystem & { __fxMuted?: boolean }) | undefined;
+    if (!m) return;
+    markersMuted = true;
+    if (m.__fxMuted) return;
+    const orig = m.update.bind(m);
+    let seen: View | null = null;
+    let proxy: View | null = null;
+    const frame: Frame = { dt: 0, time: 0, view: null as unknown as View };
+    m.update = (f: Frame): void => {
+      if (!f.view) return orig(f);
+      if (f.view !== seen) {
+        seen = f.view;
+        const real = f.view;
+        proxy = Object.create(real, {
+          list: { value: (k: string) => (k === 'fire' || k === 'flare' ? EMPTY : real.list(k as never)) },
+        }) as View;
+      }
+      frame.dt = f.dt;
+      frame.time = f.time;
+      frame.view = proxy as View;
+      orig(frame);
+    };
+    m.__fxMuted = true;
+  }
+
   // ---- the eye adapts to firelight ----
   // The sky's auto exposure adapts to moonlit snow; next to a fire at night that would blow the
   // fire's pool out to white. The firelight around the camera lowers the sky's exposureBias (its
@@ -214,6 +245,7 @@ export function createFxSystem(engine: CsEngine, world: World): FxSystem {
     update(f: Frame): void {
       const view = (f.view ?? null) as View | null;
       ctx.view = view;
+      if (!markersMuted) muteMarkers();
       if (view && view.bus !== bus) {
         unsub?.();
         bus = view.bus;

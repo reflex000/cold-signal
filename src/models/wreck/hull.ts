@@ -133,7 +133,8 @@ export const HULL = {
   CY: 1.22,
   /** Last station of the constant section; the nose tapers from here to the tip. */
   NOSE0: 6.2,
-  TIP: 9.25,
+  // the nose tip stops inside the blueprint's nose box (front face z 9.02)
+  TIP: 9.0,
   /** Frame stations every 0.5 m, aligned so the over-wing exit (z 0.4 .. 1.4) sits between frames. */
   frame0: 0.4,
   pitch: 0.5,
@@ -273,7 +274,7 @@ export function seatUnit(b: Builder, o: SeatOpts): void {
       b.pillow(pitch - 0.07, 0.58, 0.09, { round: 0.03, bulge: 0.01, seg: 2, ring: 1 }).move(0, 0.33, 0.03);
       b.ink({ color: hex(0xc9c6bb), mat: MAT.CLOTH, wear: 0.5, snow });
       b.pillow(pitch - 0.1, 0.17, 0.095, { round: 0.03, bulge: 0.006, seg: 1, ring: 1 }).move(0, 0.55, 0.035);
-    }).rotX(-rec).move(cx, 0.44, -0.18);
+    }).rotX(-rec).move(cx, 0.44, -0.13);
     // armrests between and at the ends
     b.ink({ color: PAL.plasticGrey, mat: MAT.PLASTIC, wear: 0.5, snow });
     if (i === 0) b.box(0.04, 0.05, 0.36, { bevel: 0.01 }).move(cx - pitch / 2 + 0.02, 0.64, 0.0);

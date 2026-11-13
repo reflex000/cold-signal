@@ -150,7 +150,8 @@ register(
     // the stabilisers: torn off at the root, ragged stubs
     b.ink({ color: LIVERY.white, mat: MAT.PAINT, wear: 0.7, rough: 0.7, snow: 1 });
     for (const side of [-1, 1]) {
-      const p = cone(-3.2, side * 95 * DEG);
+      // high on the cone (above head height: the stubs have no collider)
+      const p = cone(-3.2, side * 55 * DEG);
       const stub = b.box(0.55, 0.16, 1.5, { bevel: 0.02, rows: 2 });
       stub.crumple(0.035, 3.5).move(p[0] + side * 0.22, p[1] - 0.05, -3.2);
       b.ink({ color: PAL.primer, mat: MAT.PAINT, wear: 0.7, snow: 0.7 });
@@ -222,7 +223,7 @@ register(
     b.ink({ color: hex(0x6b6455), mat: MAT.PAINT, wear: 0.5, snow: 0 });
     {
       const s = sec(Z1 + 0.15);
-      const dome = b.lathe([[0, 0.25], [0.5, 0.2], [0.85, 0.08], [1, 0]], { sides: 18, smooth: true });
+      const dome = b.lathe([[0, 0.1], [0.5, 0.08], [0.85, 0.035], [1, 0]], { sides: 18, smooth: true });
       // convex toward the tail, the dish facing the hold
       dome.rotX(-Math.PI / 2).scale(s.a - 0.1, s.b - 0.1, 1).move(0, s.c, Z1 + 0.12).flip();
     }

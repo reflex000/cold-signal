@@ -113,6 +113,16 @@ export function createFigureMaterial(bones: BoneTexture): THREE.MeshStandardNode
   return m;
 }
 
+/** Dev: flat black figures (silhouette checks on a white background). */
+export function createSilhouetteMaterial(bones: BoneTexture): THREE.MeshBasicNodeMaterial {
+  const m = new THREE.MeshBasicNodeMaterial();
+  m.name = 'actors-silhouette';
+  m.fog = false;
+  m.positionNode = skinPosition(bones.tex, instanceRow());
+  m.colorNode = vec4(0, 0, 0, 1);
+  return m;
+}
+
 /**
  * Eyes: a dark, wet, glossy ball; the tapetum shines green-gold when a light near the viewer
  * faces it. The CPU writes the shine (scene radiance) into the data texel of the row; the shader

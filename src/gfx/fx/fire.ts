@@ -157,7 +157,6 @@ export class FireFx {
   }
 
   update(view: View | null): void {
-    const ctx = this.ctx;
     for (const f of this.fires.values()) f.seen = false;
     if (view) {
       for (const e of view.list('fire') as ViewEnt<FireEnt>[]) this.syncEnt(e, view);
@@ -171,7 +170,6 @@ export class FireFx {
       }
       this.step(f, view);
     }
-    void ctx;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -365,6 +363,10 @@ export class FireFx {
     f.glow += (glowTarget - f.glow) * Math.min(1, dt * 0.8);
     const vh = f.vh;
     const flick = fireFlicker(t, f.seed, g);
+    // how far it is: a distant fire is its light and its smoke, nothing finer
+    const cam = ctx.camera.position;
+    const dist = Math.hypot(f.x - cam.x, f.z - cam.z);
+    const near = dist < 300;
 
     // ---- flames ----
     const bx = f.x, by = f.y + L.base, bz = f.z;
@@ -373,7 +375,7 @@ export class FireFx {
     const wl = ctx.windSpeed > 0.01 ? 1 / ctx.windSpeed : 0;
     const leanK = Math.min(1.5, (ctx.windSpeed * open) / 7) * (1 + g * 0.9);
     const lx = ctx.windX * wl * leanK, lz = ctx.windZ * wl * leanK;
-    if (vh > 0.004) {
+    if (vh > 0.004 && near) {
       const n = L.tongues;
       const spread = L.bed * (0.55 + 0.45 * Math.max(0.2, f.size));
       for (let j = 0; j < n; j++) {
@@ -406,6 +408,18 @@ export class FireFx {
       }
     }
 
+    // far away the flames are a single bright point (sub-pixel glow keeps its energy)
+    if (!near && vh > 0.05) {
+      const s = ctx.glow.spec();
+      s.x = bx; s.y = by + 0.35 * H; s.z = bz;
+      s.life = Math.max(0.02, dt * 1.5);
+      s.s0 = s.s1 = 0.3 * H + 0.05;
+      s.op = 7 * vh * (0.85 + 0.15 * flick);
+      s.r = 1; s.g = 0.5; s.b = 0.18;
+      s.fin = s.fout = 0.001;
+      ctx.glow.emit(s);
+    }
+
     // ---- the match ----
     let matchK = 0;
     let mx = 0, my = 0, mz = 0;
@@ -417,15 +431,25 @@ export class FireFx {
         const p = view.ents.get(f.matchBy);
         const dx = p ? p.x - bx : 1, dz = p ? p.z - bz : 0;
         const l = Math.hypot(dx, dz) || 1;
-        mx = bx + (dx / l) * 0.14;
-        mz = bz + (dz / l) * 0.14;
-        my = by + 0.05;
+        // held into the gap between the sticks on the striker's side, above the tinder
+        mx = bx + (dx / l) * 0.27;
+        mz = bz + (dz / l) * 0.27;
+        my = by + 0.11;
       }
       if (matchK > 0) {
         const blown = f.failWhy === 'wind' ? failing : 0;
+        // the head of the match: a hot point in its little flame
+        const c = ctx.glow.spec();
+        c.x = mx; c.y = my + 0.01; c.z = mz;
+        c.life = Math.max(0.02, dt * 1.5);
+        c.s0 = c.s1 = 0.012;
+        c.op = 45 * matchK;
+        c.r = 1; c.g = 0.7; c.b = 0.35;
+        c.fin = c.fout = 0.001;
+        ctx.glow.emit(c);
         _t.x = mx; _t.y = my; _t.z = mz;
-        _t.h = 0.05 * (ma < 0.15 ? 1.8 : 1) * (0.85 + 0.15 * flick);
-        _t.w = 0.016;
+        _t.h = 0.075 * (ma < 0.15 ? 1.8 : 1) * (0.85 + 0.15 * flick);
+        _t.w = 0.022;
         _t.lx = lx * 0.4 + (ctx.windX * wl) * blown * 2;
         _t.lz = lz * 0.4 + (ctx.windZ * wl) * blown * 2;
         _t.seed = 7.7;
@@ -441,7 +465,7 @@ export class FireFx {
     if (t - f.failAt < 0.05 && t - f.failAt >= 0 && f.failAt > 0) this.wisp(mx || bx, (my || by) + 0.05, mz || bz, 3);
 
     // ---- coal bed ----
-    if (f.glow > 0.01) {
+    if (f.glow > 0.01 && dist < 120) {
       ctx.coals.add({
         x: bx, y: f.y + L.base + L.bedDy, z: bz,
         radius: L.bed * (f.type === 'campfire' ? 1.15 : 1),
@@ -470,8 +494,8 @@ export class FireFx {
       lh.colorFar!.copy(FAR);
     }
     if (matchK > 0) {
-      // the match is the only light until the fire takes
-      const mk = 2.2 * matchK * (0.9 + 0.1 * flick);
+      // the match is the only light until the fire takes: about a candela (twice that as it flares)
+      const mk = 0.9 * matchK * (0.9 + 0.1 * flick);
       if (mk > intensity) {
         intensity = mk;
         px = mx; py = my + 0.05; pz = mz;
@@ -486,13 +510,13 @@ export class FireFx {
     }
     lh.position.set(px, py, pz);
     lh.intensity = intensity;
-    lh.range = L.range * (0.45 + 0.55 * Math.max(vh, matchK > 0 ? 0.2 : 0, emberFrac * 0.3));
+    lh.range = matchK > 0 && vh < 0.05 ? 4 : L.range * (0.45 + 0.55 * Math.max(vh, emberFrac * 0.3));
     lh.on = intensity > 0.03;
 
     // ---- particles ----
     if (dt <= 0) return;
     // embers rising from the bed, more in a gust and after feeding
-    if (L.embers > 0) {
+    if (L.embers > 0 && dist < 90) {
       const fed = t - f.feedAt < 1.5 ? 18 : 0;
       const rate = (vh > 0.02 ? 4 + 16 * vh : f.glow * 1.2) * (1 + g * 2.5) * budget * L.embers + fed * budget;
       const n = Math.min(12, quota(f.acc.ember, rate, dt));
@@ -518,11 +542,14 @@ export class FireFx {
       if (!f.lit && f.glow > 0.02) rate += 1.6 * f.glow;
       rate += ctx.snowfall * 2 * vh;
       rate *= L.smoke * budget * (1 + 1.2 * smooth(4, 16, ctx.windSpeed * (1 - f.shelter * 0.7)));
+      // a smoke column is a landmark from far off: thinned with distance, gone past 700 m
+      rate *= 1 - smooth(150, 700, dist) * 0.85;
+      if (dist > 700) rate = 0;
       const n = Math.min(8, quota(f.acc.smoke, rate, dt));
       for (let i = 0; i < n; i++) this.smoke(f, bx, by, bz, H, vh, thick);
     }
     // steam where the snow melts at the rim of a campfire
-    if (L.steam && (vh > 0.02 || f.glow > 0.2)) {
+    if (L.steam && dist < 50 && (vh > 0.02 || f.glow > 0.2)) {
       const fresh = f.lit ? Math.max(0, 1 - age / 90) : 0;
       const rate = (0.5 + 2.2 * ctx.snowfall + 3 * fresh) * Math.max(vh, f.glow * 0.4) * budget;
       const n = Math.min(4, quota(f.acc.steam, rate, dt));
@@ -673,7 +700,7 @@ export class FireFx {
     const ctx = this.ctx;
     const dx = px - f.x, dz = pz - f.z;
     const l = Math.hypot(dx, dz) || 1;
-    const x = f.x + (dx / l) * 0.14, z = f.z + (dz / l) * 0.14, y = f.y + f.look.base + 0.05;
+    const x = f.x + (dx / l) * 0.27, z = f.z + (dz / l) * 0.27, y = f.y + f.look.base + 0.11;
     const R = ctx.rand;
     for (let i = 0; i < 7; i++) {
       const s = ctx.glow.spec();

@@ -139,7 +139,7 @@ register(
     // regular rows in 2 m segments (smaller occlusion neighbourhoods = faster bake)
     const rows: number[] = [];
     for (let z = ZS; z < HULL.NOSE0 - 1e-6; z += 0.25) rows.push(z);
-    rows.push(HULL.NOSE0, 6.5, 6.8, 7.1, 7.4, 7.7, 8.0, 8.3, 8.6, 8.85, 9.05, 9.18, HULL.TIP);
+    rows.push(HULL.NOSE0, 6.5, 6.8, 7.1, 7.4, 7.7, 8.0, 8.25, 8.5, 8.7, 8.86, 8.95, HULL.TIP);
     for (let s = 0; s < rows.length - 1; s += 4) {
       const seg = rows.slice(s, Math.min(rows.length, s + 5));
       skinParts.push(surface(b, seg, A, (z, a) => skin(z, a), { keep: (i, j) => keepCell(seg[i], seg[i + 1], A[j], A[j + 1]) }));
@@ -415,7 +415,7 @@ register(
 
     // ---- seats, exactly in their boxes ----
     for (const sb of bp.boxes.filter((x) => x.tag === 'seat')) {
-      const g = b.group(() => seatUnit(b, { n: 2, pitch: 0.62, snow: 0, damage: sb.z < 0 ? 0.6 : 0.35, recline: [r.range(0.15, 0.5), r.range(0.15, 0.6)], bare: sb.z < 0 && r.chance(0.5) ? [0] : [] }));
+      const g = b.group(() => seatUnit(b, { n: 2, pitch: 0.62, snow: 0, damage: sb.z < 0 ? 0.6 : 0.35, recline: [r.range(0.08, 0.28), r.range(0.08, 0.3)], bare: sb.z < 0 && r.chance(0.5) ? [0] : [] }));
       g.move(sb.x, FLOOR_Y, sb.z);
     }
     // seat rows that were torn out: empty track fittings, a loose cushion
@@ -607,7 +607,9 @@ register(
     drift(b, [[-2.25, 0, -8.2], [-2.35, 0, -4], [-2.3, 0, 0], [-2.2, 0, 4], [-1.9, 0, 7.6]], 1.6, 0.55, { lee: -0.5 });
     drift(b, [[2.25, 0, -8.2], [2.3, 0, -4.5], [2.2, 0, -1.6]], 1.4, 0.4, { lee: 0.4 });
     drift(b, [[2.15, 0, 2.6], [2.25, 0, 5.2], [1.9, 0, 7.8]], 1.4, 0.45, { lee: 0.4 });
-    snowHeap(b, [0.2, 0, 9.1], 1.4, 0.55, 0.9, 0.3);
+    // the snow the nose ploughed up as it came to rest, banked against it
+    snowHeap(b, [0.1, 0, 9.5], 1.95, 1.2, 1.15, 0.2);
+    drift(b, [[-2.1, 0, 8.4], [0, 0.1, 9.9], [2.1, 0, 8.6]], 1.6, 0.55);
     drift(b, [[-1.6, 0, -9.6], [0, 0.06, -9.75], [1.6, 0, -9.6]], 1.9, 0.2, { lee: 0.6, noise: 0.03 });
     // icicles under the torn crown, where the barrel's heat melts the snow on the roof
     for (let i = 0; i < 3; i++) {

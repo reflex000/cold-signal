@@ -303,7 +303,7 @@ export class PlayerAnimator {
     this.bodyYaw = dampAngle(this.bodyYaw, target, speed > 0.3 ? 7 : 5, dt);
 
     // ---------------- gait ----------------
-    const stepLen = clamp(0.36 + 0.2 * this.spd, 0.4, 1.4) * (1 - 0.25 * this.wCrouch) * (1 - 0.22 * this.wDeep);
+    const stepLen = clamp(0.32 + 0.18 * this.spd, 0.4, 1.35) * (1 - 0.25 * this.wCrouch) * (1 - 0.22 * this.wDeep);
     if (moving) this.phase = (this.phase + (this.spd / (2 * stepLen)) * dt) % 1;
     const duty = lerp(0.6, 0.36, this.wRun);
     this.updateFeet(e, ctx, dt, moving, stepLen, duty);
@@ -339,11 +339,21 @@ export class PlayerAnimator {
   // Feet
   // ------------------------------------------------------------------------------------------
 
+  private wasMoving = false;
+
   private updateFeet(e: PlayerEnt, ctx: AnimCtx, dt: number, moving: boolean, stepLen: number, duty: number): void {
     const vx = this.velX, vz = this.velZ;
     const spd = Math.max(this.spd, 0.3);
     const T = (2 * stepLen) / spd;
     const c = Math.cos(this.bodyYaw), s = Math.sin(this.bodyYaw);
+    const vl0 = Math.hypot(vx, vz) || 1;
+    if (moving && !this.wasMoving) {
+      // setting off: the foot furthest behind (along the motion) lifts first, the other is planted
+      const back = (f: Foot): number => ((f.pos.x - e.x) * vx + (f.pos.z - e.z) * vz) / vl0;
+      this.phase = back(this.feet[0]) <= back(this.feet[1]) ? duty : (duty + 0.5) % 1;
+      for (const f of this.feet) if (f.t < 1) f.t = 1;
+    }
+    this.wasMoving = moving;
     for (let i = 0; i < 2; i++) {
       const f = this.feet[i];
       const side = i === 0 ? -1 : 1;
@@ -359,6 +369,14 @@ export class PlayerAnimator {
             f.planted = true;
             f.pos.copy(f.to);
             f.yaw = f.toYaw;
+          }
+          // never leave a planted foot beyond the leg's reach (a stop, a turn, a lag in the snapshots):
+          // past 0.6 m from the body it slides after it
+          const dx = f.pos.x - e.x, dz = f.pos.z - e.z;
+          const d = Math.hypot(dx, dz);
+          if (d > 0.6) {
+            f.pos.x = e.x + (dx / d) * 0.6;
+            f.pos.z = e.z + (dz / d) * 0.6;
           }
           f.pitch = damp(f.pitch, 0, 14, dt);
           // late stance: the heel lifts
@@ -462,6 +480,19 @@ export class PlayerAnimator {
       // a foot below the body (downhill, a step): the pelvis drops so it still reaches
       const low = Math.min(f0.pos.y - (f0.planted ? 0 : 0.05), f1.pos.y - (f1.planted ? 0 : 0.05)) - e.y;
       h += clamp(low + this.sink, -0.25, 0) * 0.85;
+    }
+    if (this.wAir < 0.5 && swim < 0.5 && kneel < 0.5) {
+      // the hips sink so both ankles stay within reach (long strides dip at double support)
+      for (let i = 0; i < 2; i++) {
+        const f = this.feet[i];
+        const side = i === 0 ? -1 : 1;
+        const hx = e.x + _right.x * side * 0.092, hz = e.z + _right.z * side * 0.092;
+        const d = Math.hypot(f.pos.x - hx, f.pos.z - hz);
+        const reach = LEG * 0.985;
+        const maxHip = f.pos.y + ANKLE_H + Math.sqrt(Math.max(0, reach * reach - d * d));
+        const maxH = maxHip + 0.03 - rootY;
+        if (h > maxH) h = Math.max(h - 0.16, maxH);
+      }
     }
     h += this.wAir * 0.03;
     h = lerp(h, 1.04, swim);

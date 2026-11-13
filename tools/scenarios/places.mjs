@@ -12,6 +12,9 @@
 // Writes shots/places_<place>_door.jpg and places_<place>_in.jpg; exits non-zero on failures.
 export default async function ({ ev, step, shot, log, check, args }) {
   const only = (args.query ?? '').match(/only=(\w+)/)?.[1];
+  // a fixed, clear midday so the door and interior shots are comparable
+  await ev(() => window.CS.env({ storm: 0.05, clock: 12.5, lock: true }));
+  await step(8);
   // ---- page-side helpers: a brute-force ray against the props' triangles ----
   await ev(() => {
     const CS = window.CS;
@@ -133,6 +136,12 @@ export default async function ({ ev, step, shot, log, check, args }) {
             const g = w.groundAt(sx, sz, c.y0 + 2.5).y;
             if (g + 1.6 < c.y0 || g + 0.4 > c.y1) continue; // the face does not span the body
             if (Math.abs(w.groundAt(fx - n[0] * 0.05, fz - n[1] * 0.05, g + 0.6).y - g) > 0.6) continue;
+            // the cockpit behind the fuselage's bulkhead is shut off: nobody stands in it
+            if (id === 'wreck') {
+              const pc0 = Math.cos(p.yaw), ps0 = Math.sin(p.yaw);
+              const slx = (sx - p.x) * pc0 - (sz - p.z) * ps0, slz = (sx - p.x) * ps0 + (sz - p.z) * pc0;
+              if (slz > 6.5 && slz < 9 && Math.abs(slx) < 1.6) continue;
+            }
             // site-local position and facing, and the box, for the report
             const pc = Math.cos(p.yaw), ps = Math.sin(p.yaw);
             const lx = (fx - p.x) * pc - (fz - p.z) * ps, lz = (fx - p.x) * ps + (fz - p.z) * pc;
@@ -159,11 +168,13 @@ export default async function ({ ev, step, shot, log, check, args }) {
       const gaps = [];
       // knee, waist, eye, and for low furniture its top edge
       const hs = [0.35, 1.0, 1.6];
-      if (t.y1 - me.y < 1.65) hs.push(t.y1 - me.y - 0.05);
+      if (t.y1 - me.y < 1.65) hs.push(t.y1 - me.y - 0.022, t.y0 + 0.45 * (t.y1 - t.y0) - me.y);
       for (const hgt of hs) {
         const y = me.y + hgt;
-        if (y < t.y0 + 0.05 || y > t.y1 - 0.04) { gaps.push(null); continue; }
-        const d = window.__pl.ray(me.x, y, me.z, -t.nx, 0, -t.nz, 2.5);
+        if (y < t.y0 + 0.02 || y > t.y1 - 0.015) { gaps.push(null); continue; }
+        // three rays across the body (a single one slips through the gap between two seat backs)
+        let d = Infinity;
+        for (const side of [-0.16, 0, 0.16]) d = Math.min(d, window.__pl.ray(me.x - t.nz * side, y, me.z + t.nx * side, -t.nx, 0, -t.nz, 2.5));
         gaps.push(d === Infinity ? 9 : d - dist);
       }
       return { dist, gaps, x: me.x, z: me.z };
@@ -172,7 +183,8 @@ export default async function ({ ev, step, shot, log, check, args }) {
     const g = res.gaps.filter((v) => v !== null);
     const lateral = Math.hypot(res.x - (t.fx + t.nx * res.dist), res.z - (t.fz + t.nz * res.dist));
     if (res.dist > 0.7 || lateral > 0.5) continue; // stopped by something else on the way (or slid off): not this face
-    const sinks = g.some((v) => v < -0.14);
+    // a rope, a crank handle, a stone at one height is allowed; a surface standing out is not
+    const sinks = g.filter((v) => v < -0.14).length >= 2 || g.some((v) => v < -0.3);
     // open furniture (tables, bunks, seats, shelves) reads as a solid box only to the walk: an
     // invisible wall counts for wall-height boxes, or when even the top edge shows nothing
     const invisible = g.length > 0 && g.every((v) => v > 0.16) && (t.tall || g[g.length - 1] > 0.3);

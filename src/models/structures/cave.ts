@@ -129,20 +129,37 @@ register(
       const p = inner(ZB, s);
       const k = Math.sin((u * Math.PI) / 2);
       const cy = 1.4;
-      return [p[0] * (1 - k * 0.92), cy + (p[1] - cy) * (1 - k * 0.85) + 0.0, ZB - 0.18 * k];
+      return [p[0] * (1 - k), cy + (p[1] - cy) * (1 - k), ZB - 0.18 * k];
     }).ghost();
     // ---- the outer mass: offset well outside, wider toward the mouth to make the cliff faces ----
     // open to the sky: snow lies on its ledges and its top (the material's job)
     b.ink({ color: rockCol, mat: MAT.ROCK, wear: 0.3, rough: 0.92, snow: 1, vary: 0.04 });
     // Below 2.4 m the mass stands on the colliders' outer faces (people walk round it): the ring
     // boxes 1.7 m outside the chamber's edges, the flank boxes out to |x| 6.4 beside the mouth.
-    const outerHalf = (z: number) => (z > -1.3 ? 6.42 : halfW(z) + 1.92);
+    // outermost |x| of the blueprint's rock boxes at z (scanned once per row: exact for any layout)
+    const inBox = (x: number, z: number) => bp.boxes.some((q) => {
+      const dx = x - q.x, dz = z - q.z, c = Math.cos(q.yaw), sn = Math.sin(q.yaw);
+      return Math.abs(dx * c - dz * sn) <= q.hx && Math.abs(dx * sn + dz * c) <= q.hz;
+    });
+    const halfCache = new Map<number, number>();
+    const outerHalf = (z: number) => {
+      const key = Math.round(z * 1000);
+      let v = halfCache.get(key);
+      if (v === undefined) {
+        v = halfW(z) + 1.7;
+        for (let x = 7.5; x > 0; x -= 0.01) if (inBox(x, z) || inBox(-x, z)) { v = x; break; }
+        halfCache.set(key, v);
+      }
+      return v;
+    };
     const JAMB = 3.25, ZJ = 1.08, ZF = 0.42;
     const outer = (z: number, s: number): V3 => {
       const t = s < 0.5 ? s * 2 : (1 - s) * 2; // 0 at the foot .. 1 on top
       const side = s < 0.5 ? -1 : 1;
-      const top = crown(Math.min(z, ZM)) + 1.25 + 0.45 * fbm3(S + 12, z * 0.3, s * 2, 1, 2);
-      const wl = outerHalf(z);
+      // a broken top: blocks and a ragged skyline, not a dome
+      const top = crown(Math.min(z, ZM)) + 1.25 + 0.6 * fbm3(S + 12, z * 0.3, s * 2, 1, 2) + 0.5 * Math.max(0, noise3(S + 16, z * 0.45, s * 4, 2));
+      // the front ring stands on the flank boxes' front face (z 0.40): look the outline up just behind it
+      const wl = outerHalf(Math.min(z, 0.38));
       let x: number, y: number;
       if (t < 0.4) { y = -0.15 + (2.55 * t) / 0.4; x = side * wl; }
       else { const a = (((t - 0.4) / 0.6) * Math.PI) / 2; x = side * wl * Math.cos(a) ** 0.7; y = 2.4 + (top - 2.4) * Math.sin(a); }
@@ -150,16 +167,32 @@ register(
       // strata: beds about 0.7 m thick, each stepping back to a ledge that holds snow
       const bed = y / 0.7, f = bed - Math.floor(bed);
       const ledge = 0.2 * (f < 0.25 ? f / 0.25 : 1);
-      if (y < 2.4) return [x + side * (0.02 + 0.09 * sat(0.5 + n) + 0.04 * (1 - ledge / 0.2)), y, z];
+      // on the collider face, give or take 8 cm of rock: vertical joints, bedding grooves, bulges
+      if (y < 2.4) {
+        const along = z * 0.9 + x * 0.6;
+        const joint = Math.pow(Math.abs(Math.sin((along / 1.15) * Math.PI + noise3(S + 17, y * 0.8, z, 0) * 1.2)), 14);
+        const groove = Math.pow(Math.abs(Math.sin((y / 0.7) * Math.PI + 0.6 * noise3(S + 18, z * 0.5, x * 0.5, 0))), 16);
+        const out = 0.07 - 0.11 * sat(0.5 + n) - 0.07 * joint - 0.04 * groove;
+        return [x + side * out, y, z];
+      }
       const k = Math.cos((((t - 0.4) / 0.6) * Math.PI) / 2);
-      return [x + side * (n - ledge) * k, y + n * 0.6, z];
+      const block = 0.35 * Math.max(0, noise3(S + 19, x * 0.6, y * 0.6, z * 0.6));
+      return [x + side * (n * 1.6 + block - ledge) * k, y + n * 0.8, z];
     };
+    // weathering: lighter and darker beds, lichen, dark streaks under the ledges
+    const weather = (p: Part) => p.each((v) => {
+      const k = 1 + 0.2 * fbm3(S + 21, v.x * 0.35, v.y * 0.5, v.z * 0.35, 3);
+      const lich = sat((fbm3(S + 22, v.x * 0.8, v.y * 0.8, v.z * 0.8, 3) - 0.15) * 3) * sat(v.ny + 0.6);
+      const streak = sat(fbm3(S + 23, v.x * 2.5, 0, v.z * 2.5, 2) * 2) * 0.35;
+      const c = mixRGB(rockCol, hex(0x4f5246), lich * 0.6);
+      v.r = c[0] * k * (1 - streak); v.g = c[1] * k * (1 - streak); v.b = c[2] * k * (1 - streak);
+    });
     const zo = [ZF, -0.2, -0.8, -1.28, -1.34];
     for (let z = -1.9; z > -10.95; z -= 0.6) zo.push(z);
     const so = [0, 0.06, 0.13, 0.21, 0.3, 0.38, 0.45, 0.5, 0.55, 0.62, 0.7, 0.79, 0.87, 0.94, 1];
     for (let k = 0; k < zo.length - 1; k += 6) {
       const seg = zo.slice(k, Math.min(zo.length, k + 7));
-      rockGrid(b, seg, so, (z, s) => outer(z, s), { flip: true, facet: 0.8 }).ghost();
+      weather(rockGrid(b, seg, so, (z, s) => outer(z, s), { flip: true, facet: 0.8 }).ghost());
     }
     // the cliff face round the mouth: from the arch out to the jamb's front corner (z 1.08, where
     // the mouth's side boxes end), back along the jamb's side to the flank face (z 0.42), out to
@@ -178,7 +211,7 @@ register(
     // the back of the mass: a face on the back boxes' outer face (z -10.9), closing in on top
     rockGrid(b, [0, 0.5, 1], so, (u, s) => {
       const p = outer(-10.9, s);
-      return [p[0] * (1 - u * 0.95), p[1] * (1 - u * 0.25), -10.9 - 0.04 * u];
+      return [p[0] * (1 - u), 1.2 + (p[1] - 1.2) * (1 - u), -10.9 - 0.04 * u];
     }, { flip: true }).ghost();
 
     // ---- floor: gravel and rock, level at the blueprint's 0.03 ----
@@ -196,11 +229,10 @@ register(
       b.ink({ color: mixRGB(rockCol, PAL.rockBrown, r.next() * 0.5), mat: MAT.ROCK, wear: 0.35, snow: 0 });
       b.rock(r.range(0.05, 0.16), { detail: 1, rough: 0.6, facet: 0.7, flat: 0.4 }).rotY(r.range(0, 6.3)).move(x, 0.03, z);
     }
-    for (let i = 0; i < 9; i++) {
-      const side = i % 2 ? 1 : -1;
-      const x = side * r.range(2.3, 6.0), z = r.range(0.6, 2.8);
-      b.ink({ color: mixRGB(rockCol, PAL.rockBrown, r.next() * 0.4), mat: MAT.ROCK, wear: 0.3, snow: 1 });
-      b.rock(r.range(0.25, 0.75), { detail: 2, rough: 0.55, facet: 0.6, flat: 0.35 }).rotY(r.range(0, 6.3)).move(x, -0.05, z);
+    // no free boulders at the foot (they would have no collider): snow banked against the faces
+    for (const sx of [-1, 1]) {
+      snowHeap(b, [sx * 4.9, 0, 0.75], 1.4, 0.55, 0.6, 0.1);
+      snowHeap(b, [sx * 5.4, 0, -2.6], 1.0, 0.5, 1.4);
     }
 
     // ---- the old hearth: a ring of fire-blackened stones, ash ----
@@ -227,13 +259,14 @@ register(
         b.stencil(label, h * 0.18, { align: 'center', weight: 0.15 }).move(0, h * 0.42, d / 2 + 0.002);
       }).rotY(yaw).move(x, y, z);
     };
-    crate(3.0, 0.03, -6.45, 0.75, 0.48, 0.5, -Math.PI / 2 + 0.1, 'SURVEY');
-    crate(3.0, 0.03, -5.1, 0.7, 0.45, 0.48, -Math.PI / 2 - 0.08, 'GEO 4');
-    crate(3.02, 0.51, -6.3, 0.6, 0.38, 0.45, -Math.PI / 2 + 0.2, 'FRAGILE');
+    // shallow cases, flush with the wall: they have no collider, so they keep out of the way
+    crate(3.12, 0.03, -6.45, 0.75, 0.48, 0.38, -Math.PI / 2 + 0.05, 'SURVEY');
+    crate(3.12, 0.03, -5.1, 0.7, 0.45, 0.36, -Math.PI / 2 - 0.04, 'GEO 4');
+    crate(3.13, 0.51, -6.3, 0.6, 0.38, 0.34, -Math.PI / 2 + 0.12, 'FRAGILE');
     b.ink({ color: PAL.canvasOlive, mat: MAT.CLOTH, wear: 0.65, snow: 0 });
     {
       const tarp = b.cloth(1.6, 1.3, { nx: 12, ny: 10, billow: 0.12, wrinkle: 0.05, tear: 0.5, tearEdges: ['bottom', 'left'], thickness: 0.004 });
-      tarp.rotY(-Math.PI / 2).rotZ(0.35).move(3.15, 1.05, -5.8);
+      tarp.rotY(-Math.PI / 2).rotZ(0.12).move(3.27, 1.05, -5.8);
       tarp.warp((q) => { if (q.y < 0.05) q.y = 0.05 + (q.y - 0.05) * 0.1; });
       tarp.ghost();
     }
@@ -241,7 +274,7 @@ register(
     b.torus(0.17, 0.018, { segs: 14, sides: 5 }).move(2.75, 0.06, -4.55);
     b.torus(0.15, 0.018, { segs: 14, sides: 5 }).rotX(0.2).move(2.78, 0.1, -4.53);
     b.ink({ color: hex(0x3a4a2a), mat: MAT.PAINT, wear: 0.7, snow: 0 });
-    b.box(0.17, 0.46, 0.34, { bevel: 0.02 }).rotY(0.4).move(3.0, 0.26, -7.15);
+    b.box(0.17, 0.46, 0.34, { bevel: 0.02 }).rotZ(Math.PI / 2).rotY(0.3).move(3.1, 0.57, -5.0);
     void cache;
 
     // ---- the den: trampled bedding, old bones ----

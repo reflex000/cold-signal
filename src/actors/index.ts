@@ -14,9 +14,9 @@ import * as THREE from 'three/webgpu';
 import type { Frame, GfxSystem, Quality } from '../gfx/api';
 import type { CsEngine } from '../gfx/engine';
 import type { View, ViewEnt } from '../game/view';
-import type { Entity, EntityKind, LogEnt, NetId, PlayerEnt, ToolId, WolfEnt } from '../sim/types';
+import type { Entity, EntityKind, LogEnt, NetId, PlayerEnt, SimEvent, ToolId, WolfEnt } from '../sim/types';
 import type { World } from '../world/types';
-import { BoneTexture, ROW_TEXELS, createEyeMaterial, createFigureMaterial } from './gpu';
+import { BoneTexture, ROW_TEXELS, createEyeMaterial, createFigureMaterial, createSilhouetteMaterial } from './gpu';
 import { ITEM_HAND, ITEM_POINTS, TOOLS, getItem, itemGeometry } from './items';
 import { PlayerAnimator, type AnimCtx } from './player_anim';
 import { PLAYER_SKEL, buildPlayerMesh, slotGeometry, type PlayerMesh } from './player_model';
@@ -92,6 +92,13 @@ export interface ActorsSystem extends GfxSystem {
   forceLod: number | null;
   /** Dev: draw the bind pose (checks the meshes without the animation). */
   bindPose: boolean;
+  /**
+   * The local player's flashlight beam in first person (from where the right hand would be, along the
+   * view). On by default; a first-person hands rig that lights its own beam turns it off.
+   */
+  localBeam: boolean;
+  /** Dev: draw every figure flat black (silhouette checks). */
+  setSilhouette(on: boolean): void;
 }
 
 /** Overwrite a pose with the bind pose, standing at (x, y, z) facing yaw. */
@@ -193,6 +200,8 @@ export function createActorsSystem(engine: CsEngine, world: World | null): Actor
   const itemGeo: Partial<Record<Tool, THREE.BufferGeometry>> = {};
   const itemGeometryOf = (t: Tool): THREE.BufferGeometry => (itemGeo[t] ??= itemGeometry(getItem(t, 0)));
 
+  let silMat: THREE.Material | null = null;
+  let silOn = false;
   const players = new Map<NetId, PlayerFig>();
   const wolves = new Map<NetId, WolfFig>();
   let frameNo = 0;
@@ -247,10 +256,36 @@ export function createActorsSystem(engine: CsEngine, world: World | null): Actor
     return null;
   }
 
+  // presentation events: yelps, growls, barks and bites move the wolves' bodies
+  let busOff: (() => void) | null = null;
+  let busView: View | null = null;
+  function listen(view: View): void {
+    if (busView === view) return;
+    busOff?.();
+    busView = view;
+    busOff = view.bus?.on?.('sim', (ev: SimEvent) => {
+      switch (ev.t) {
+        case 'yelp':
+          wolves.get(ev.id)?.anim.event('yelp', ev.x, ev.z);
+          break;
+        case 'growl':
+          wolves.get(ev.id)?.anim.event('growl');
+          break;
+        case 'bark':
+          wolves.get(ev.id)?.anim.event('bark');
+          break;
+        case 'bite':
+          wolves.get(ev.id)?.anim.event('bite');
+          break;
+      }
+    }) ?? null;
+  }
+
   function update(f: Frame): void {
     const view = f.view;
     if (!view) return;
     frameNo++;
+    listen(view);
     if (!muted) muted = muteMarkers(engine);
     findPool();
     const dt = Math.min(0.1, Math.max(0, f.dt));
@@ -347,7 +382,8 @@ export function createActorsSystem(engine: CsEngine, world: World | null): Actor
         const want = fig.drawn && held === t && fig.lod < 2;
         let m = fig.items[t];
         if (want && !m) {
-          m = mkMesh(itemGeometryOf(t), figMat, `actors-item-${t}`, true);
+          m = mkMesh(itemGeometryOf(t), silOn && silMat ? silMat : figMat, `actors-item-${t}`, true);
+          if (silOn) m.userData.csMat = figMat;
           fig.items[t] = m;
         }
         if (m) {
@@ -359,6 +395,7 @@ export function createActorsSystem(engine: CsEngine, world: World | null): Actor
       }
       flashlight(fig, e, view);
     }
+    localFlashlight(view, dt);
     if (ownSpot && !ownUsed) ownSpot.intensity = 0;
     ownUsed = false;
 
@@ -401,6 +438,48 @@ export function createActorsSystem(engine: CsEngine, world: World | null): Actor
       ownSpot.target.updateMatrixWorld();
       ownSpot.intensity = 55 + 30 * e.aim;
       ownSpot.angle = 0.42 - 0.14 * e.aim;
+      ownUsed = true;
+    }
+  }
+
+  // the local player's beam in first person: from the right hand's place below the eye, along the
+  // view with a little lag (a hand, not a camera mount)
+  let localLight: LightReq | null = null;
+  const localDir = new THREE.Vector3(0, 0, -1);
+  const _ld = new THREE.Vector3();
+  function localFlashlight(view: View, dt: number): void {
+    const me = view.me;
+    const cam = view.camera;
+    const on = api.localBeam && !!me && me.held === 'flashlight' && me.lightOn && me.life === 'alive' && cam.third < 0.5;
+    if (!on) {
+      if (localLight) localLight.on = false;
+      return;
+    }
+    const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw), cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+    _ld.set(-sy * cp, sp, -cy * cp);
+    localDir.lerp(_ld, 1 - Math.exp(-14 * dt)).normalize();
+    // right of and below the eye, a little ahead
+    const px = cam.x + cy * 0.2 + _ld.x * 0.25, py = cam.y - 0.26 + _ld.y * 0.25, pz = cam.z - sy * 0.2 + _ld.z * 0.25;
+    const charge = me!.cellCharge ?? 1;
+    const dim = charge < 0.25 ? 0.35 + 0.65 * (charge / 0.25) : 1;
+    const focus = me!.aim;
+    if (pool) {
+      if (!localLight) localLight = pool.acquire('spot', 6);
+      const L = localLight;
+      L.on = true;
+      L.position.set(px, py, pz);
+      L.direction.copy(localDir);
+      L.color.setRGB(1, 0.93, 0.8);
+      L.intensity = (55 + 30 * focus) * dim;
+      L.range = 34 + 12 * focus;
+      L.angle = 0.42 - 0.14 * focus;
+      L.penumbra = 0.55;
+    } else if (ownSpot && !ownUsed) {
+      ownSpot.position.set(px, py, pz);
+      ownSpot.target.position.set(px + localDir.x, py + localDir.y, pz + localDir.z);
+      ownSpot.target.updateMatrixWorld();
+      ownSpot.intensity = (55 + 30 * focus) * dim;
+      ownSpot.angle = 0.42 - 0.14 * focus;
       ownUsed = true;
     }
   }
@@ -486,11 +565,28 @@ export function createActorsSystem(engine: CsEngine, world: World | null): Actor
     update,
     forceLod: null,
     bindPose: false,
+    localBeam: true,
+    setSilhouette(on: boolean): void {
+      silMat ??= createSilhouetteMaterial(bones);
+      group.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        if (on) {
+          m.userData.csMat ??= m.material;
+          m.material = silMat!;
+        } else if (m.userData.csMat) m.material = m.userData.csMat;
+      });
+      silOn = on;
+    },
     setQuality(q: Quality): void {
       quality = q;
       void quality;
     },
     dispose(): void {
+      busOff?.();
+      busOff = null;
+      localLight?.release();
+      localLight = null;
       for (const fig of players.values()) dropPlayer(fig);
       players.clear();
       wolves.clear();
@@ -505,6 +601,7 @@ export function createActorsSystem(engine: CsEngine, world: World | null): Actor
       geos.forEach((g) => g.dispose());
       figMat.dispose();
       eyeMat.dispose();
+      silMat?.dispose();
       bones.dispose();
     },
   };

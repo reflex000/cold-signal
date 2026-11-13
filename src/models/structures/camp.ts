@@ -29,7 +29,8 @@ register(
     const bp = BLUEPRINTS.tent_torn;
     const S = r.int(0, 1 << 20);
     // walls up to 1.2 m (the cloth colliders are 1.3 tall: the roof must not hang inside them)
-    const L = 3.2, HW = 1.16, EAVE = 1.2, RIDGE = 1.5;
+    // a real pitch on the roof (it is above head height: nothing collides with it)
+    const L = 3.2, HW = 1.16, EAVE = 1.2, RIDGE = 1.95;
     const collapsed = v === 2;
     // ridge height along the tent (z from -1.6 at the back to +1.6 at the front)
     const ridgeY = (z: number) => (collapsed ? RIDGE - 0.95 * sat((z + 0.4) / 2.0) ** 1.4 : RIDGE - 0.03 * Math.cos((z / L) * Math.PI) * 0);
@@ -62,7 +63,9 @@ register(
       p.warp((q) => {
         const z = q.x, u = -q.y / (EAVE + 0.06);
         const ey = eaveY(z);
-        q.x = side * (HW + 0.04 * u + 0.03 * Math.sin(z * 3.1 + S));
+        // canvas sags in between the corner stakes and the mid guy, and bellies in the wind
+        const sag = 0.09 * Math.abs(Math.sin((z / L) * Math.PI * 2)) * Math.sin(Math.PI * Math.min(1, u * 1.3));
+        q.x = side * (HW + 0.04 * u + 0.03 * Math.sin(z * 3.1 + S) - sag);
         q.y = ey * (1 - u) - 0.04;
         q.z = z;
       });

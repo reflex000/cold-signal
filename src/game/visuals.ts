@@ -94,5 +94,6 @@ export async function addVisualSystems(engine: CsEngine, world: World, want: Set
   engine.add(createStructureDriver(structures.props));
   engine.add(createStandinMarkers(engine));
   try { engine.add((await import('../gfx/fx')).createFxSystem(engine, world)); } catch (e) { console.warn('[visuals] src/gfx/fx failed to start:', e); } // FX: fire, flares, light pool, breath, goggle overlays
+  try { engine.add((await import('../actors')).createActorsSystem(engine, world)); } catch (e) { console.warn('[visuals] src/actors failed to start:', e); } // FIGURES: players and wolves, animated (the markers stop drawing them)
   return { used };
 }

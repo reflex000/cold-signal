@@ -320,7 +320,7 @@ export class Overlays {
           const e = id.add(epoch.mul(13.37));
           const h1 = hash(e), h2 = hash(e.add(1.7)), h3 = hash(e.add(3.1)), h4 = hash(e.add(5.3));
           const exist = float(1).sub(smoothstep(snow.mul(0.55).sub(0.04), snow.mul(0.55), h1));
-          const r = mix(float(0.07), float(0.17), h4).mul(float(1).sub(smoothstep(0.4, 3.5, age).mul(0.45)));
+          const r = mix(float(0.1), float(0.25), h4).mul(float(1).sub(smoothstep(0.4, 3.5, age).mul(0.45)));
           const q = f.sub(vec2(h2.sub(0.5), h3.sub(0.5)).mul(0.55));
           const ang = atan(q.y, q.x);
           // an out-of-focus clump: a soft blob with a ragged rim, not a drawn crystal
@@ -332,7 +332,8 @@ export class Overlays {
           const lum = luminance(out);
           // ice scatters the light coming through it: a little brighter than what is behind
           out.assign(mix(out, vec3(0.93, 0.95, 0.98).mul(min(lum.mul(1.08).add(0.1), 1)), flake.mul(0.75)));
-          out.assign(out.mul(float(1).sub(dropK.mul(float(1).sub(smoothstep(0.4, 0.9, d))).mul(0.08))));
+          // the melted drop: only a faint darker rim where its edge bends the light away
+          out.assign(out.mul(float(1).sub(dropK.mul(smoothstep(0.6, 0.95, d)).mul(0.06))));
         }
       });
       return out;

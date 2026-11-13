@@ -248,6 +248,10 @@ export class LightPool {
     const cand = this.cand;
     cand.length = 0;
     for (const h of this.handles) {
+      if (!h.slot) {
+        h.level = 0;
+        h.lit = false;
+      }
       if (!h.on || h.intensity <= 0 || h.range <= 0) {
         h.score = 0;
         continue;
@@ -335,7 +339,6 @@ export class LightPool {
       if (top.length >= PARTICLE_LIGHT_COUNT) break;
       if (h.score <= 0) continue;
       top.push(h);
-      if (!h.slot) h.level = h.intensity; // drawn in particles only
     }
     const P = PARTICLE_LIGHTS.pos.array as THREE.Vector4[];
     const C = PARTICLE_LIGHTS.col.array as THREE.Vector4[];

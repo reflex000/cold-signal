@@ -9,7 +9,7 @@
 // pose is an A-pose (arms 26 degrees out), legs straight.
 import * as THREE from 'three/webgpu';
 import { Builder, MAT, PAL, hex, mixRGB, type RGB, type V3 } from '../models/kit';
-import { bindGeometry, klass, recolor, tag, type ChainSpec, type SkinOut } from './bind';
+import { bindGeometry, klass, planeWeights, recolor, tag, type ChainSpec, type SkinOut } from './bind';
 import { SkelDef } from './rig';
 import { add, frame, hash, loft, mul, noise1, noise2, norm, smooth, sub, superEllipse, type Ring } from './shape';
 
@@ -106,26 +106,7 @@ function torsoFn(x: number, y: number, z: number, out: SkinOut): void {
   out.w0 = 1 - w;
 }
 function plainChain(c: ChainSpec, x: number, y: number, z: number, out: SkinOut): void {
-  const B = S.bind;
-  const blend = c.blend ?? 0.05;
-  let seg = 0, nearK = -1, nearS = Infinity;
-  for (let k = 1; k < c.bones.length; k++) {
-    const b = c.bones[k];
-    let ax = S.tail[b * 3] - B[b * 3], ay = S.tail[b * 3 + 1] - B[b * 3 + 1], az = S.tail[b * 3 + 2] - B[b * 3 + 2];
-    const l = Math.hypot(ax, ay, az) || 1;
-    ax /= l; ay /= l; az /= l;
-    const s = (x - B[b * 3]) * ax + (y - B[b * 3 + 1]) * ay + (z - B[b * 3 + 2]) * az;
-    if (s > 0) seg = k;
-    if (Math.abs(s) < Math.abs(nearS)) { nearS = s; nearK = k; }
-  }
-  if (nearK > 0 && Math.abs(nearS) < blend) {
-    out.b0 = c.bones[nearK];
-    out.b1 = c.bones[nearK - 1];
-    out.w0 = smooth(-blend, blend, nearS);
-    return;
-  }
-  out.b0 = out.b1 = c.bones[seg];
-  out.w0 = 1;
+  planeWeights(S, c.bones, c.blend ?? 0.05, x, y, z, out);
 }
 
 const CHAINS: ChainSpec[] = [];
@@ -169,9 +150,9 @@ const MAT_FOAM = hex(0x3e5060);
 const KNIT = hex(0x34322f);
 const SCARF = hex(0x4a4038);
 const BALA = hex(0x26272b);
-const RUFF = hex(0x6c5c4b);
-const RUFF_TIP = hex(0x2e2620);
-const RUFF_BASE = hex(0x9a8a74);
+const RUFF = hex(0x6e604f);
+const RUFF_TIP = hex(0x2b231d);
+const RUFF_BASE = hex(0x8c7f6e);
 const LINING = hex(0x1b1a1a);
 const FRAME = hex(0x141416);
 const LENS = hex(0x6b4818);
@@ -583,7 +564,7 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
     // the lining inside the rim is dark (rings past the fold; loft points are stored ring by ring)
     hood.each((v) => {
       const ring = Math.floor(v.i / N);
-      if (ring >= 9 && ring < H.length) { v.r = LINING[0]; v.g = LINING[1]; v.b = LINING[2]; v.snow = 0; }
+      if (ring >= 8 && ring < H.length) { v.r = LINING[0]; v.g = LINING[1]; v.b = LINING[2]; v.snow = 0; }
     });
     // the hood's lower back meets the collar: a skirt from the hood down onto the shoulders
     const skirt: Ring[] = [];
@@ -635,11 +616,13 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
     const ruff = loft(b, ruffRings, lod === 0 ? 12 : 6, { closed: true });
     tag(ruff, CH.HEAD);
     ruff.each((v) => {
-      // pale tips on the outer, forward edge; darker at the roots against the hood
+      // grizzled: clumps of paler and darker hair, dark roots against the hood, banded tips
       const r = Math.hypot(v.x / RX, (v.y - 1.655) / RY);
       const outer = smooth(1.05, 1.35, r) + smooth(-0.14, -0.175, v.z) * 0.6;
-      const n = 0.8 + 0.4 * (hash(Math.round(v.x * 260), Math.round(v.y * 260), 5) * 0.5 + 0.5);
-      const c = mixRGB(mixRGB(RUFF_TIP, RUFF, smooth(0.95, 1.08, r)), RUFF_BASE, Math.min(1, outer) * 0.7);
+      const clump = noise2(Math.atan2(v.y - 1.655, v.x) * 9, r * 6, 67, 0);
+      const n = 0.82 + 0.36 * (hash(Math.round(v.x * 260), Math.round(v.y * 260), 5) * 0.5 + 0.5);
+      let c = mixRGB(RUFF_TIP, RUFF, smooth(0.92, 1.1, r));
+      c = mixRGB(c, clump > 0 ? RUFF_BASE : RUFF_TIP, Math.min(1, outer) * (0.35 + 0.35 * Math.abs(clump)));
       v.r = c[0] * n; v.g = c[1] * n; v.b = c[2] * n;
     });
     if (lod === 0) {
@@ -682,16 +665,16 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
     face.move(0, 1.65, -0.012);
     tag(face, CH.HEAD);
     // the scarf wound twice round the lower face, up to the goggles, rimed where the breath freezes
-    b.ink({ color: SCARF, mat: MAT.CLOTH, wear: 0.6, snow: 0.3, vary: 0 });
+    b.ink({ color: SCARF, mat: MAT.CLOTH, wear: 0.7, snow: 0.04, vary: 0 });
     for (const [y, R, r, tilt] of [[1.596, 0.082, 0.03, 0.1], [1.624, 0.08, 0.026, -0.06]] as number[][]) {
       const w = b.torus(R, r, { sides: detail ? 7 : 5, segs: detail ? 18 : 10 });
       w.scale(1, 0.8, 1.08).rotX(tilt).move(0, y, -0.016);
-      if (detail) w.crumple(0.005, 22);
+      if (detail) w.crumple(0.006, 24);
       tag(w, CH.HEAD);
       w.each((v) => {
-        const m = smooth(0.06, 0.0, Math.hypot(v.x, v.y - 1.6)) * smooth(-0.085, -0.115, v.z);
-        v.r += (0.56 - v.r) * m * 0.65; v.g += (0.58 - v.g) * m * 0.65; v.b += (0.61 - v.b) * m * 0.65;
-        v.snow = Math.max(v.snow, m * 0.9);
+        // a small patch of rime over the mouth
+        const m = smooth(0.035, 0.0, Math.hypot(v.x, v.y - 1.6)) * smooth(-0.09, -0.115, v.z);
+        v.r += (0.42 - v.r) * m * 0.45; v.g += (0.44 - v.g) * m * 0.45; v.b += (0.47 - v.b) * m * 0.45;
       });
     }
     // goggles: frame, lens, strap round the hood
@@ -711,16 +694,6 @@ export function buildPlayerMesh(lod: number): PlayerMesh {
     b.ink({ color: LENS, mat: MAT.PLASTIC, rough: 0.07, metal: 0.65, wear: 0.05, snow: 0.0, vary: 0 });
     const lens = b.strap(arc(0.107, -0.86, 0.86, gy, 0.0, detail ? 12 : 6), 0.047, 0.006, { up: [0, 0, -1] });
     tag(lens, CH.HEAD);
-    if (lod < 2) {
-      b.ink({ color: hex(0x18191c), mat: MAT.CLOTH, wear: 0.4, snow: 0.5, vary: 0 });
-      const strapPts: V3[] = [];
-      for (let i = 0; i <= (detail ? 16 : 8); i++) {
-        const a = 0.95 + ((2 * Math.PI - 1.9) * i) / (detail ? 16 : 8);
-        strapPts.push([Math.sin(a) * 0.158, gy + 0.004, 0.0 - Math.cos(a) * 0.162]);
-      }
-      const gs = b.strap(strapPts, 0.036, 0.005, { up: [0, 0, 1] });
-      tag(gs, CH.HEAD);
-    }
     // scarf wrapped round the neck and chin
     b.ink({ color: KNIT, mat: MAT.CLOTH, wear: 0.45, snow: 0.5, vary: 0 });
     const scarf = b.torus(0.088, 0.036, { sides: detail ? 8 : 5, segs: detail ? 20 : 10 });
