@@ -10,7 +10,11 @@ Not mine (RELEASE): src/sim tuning, src/ui text, docs (except this note), media.
       (floating rock done; the tail's dark ring is the site pad's geometry in src/world: not mine)
 - [x] 3. Performance: measured (table below); dynamic resolution / auto settle; load time measured
 - [x] 4. Phones: --mobile 1, 390x844 portrait (rotate screen), 740x360 landscape
-- [ ] 5. npm run check / npm test / npm run build clean; every scenario passes (in progress)
+- [x] 5. check, test (238), build clean. Scenarios (final batch, 17:00-17:40): all pass on WebGPU except survive,
+      opening and netproof, whose failing checks are sim / tutorial-text outcomes changed by RELEASE and the bot
+      fix after 15:37 (survive passed here at 15:40): survive (same 2 checks on WebGPU, WebGL2, mobile: warm-up
+      270 s > 170 s, log put-down event), opening (2 hint-text checks), netproof (chop leaves 0 sticks; wood.ts
+      15:37). first and tour pass on WebGL2 and --mobile 1; playthrough won in 57 min 2 s; consoles clean.
 Review tools (scratchpad, not in the repo): review.mjs (plan-driven shots), phone.mjs, autoq.mjs, sheet.mjs.
 
 ## Ranked fix list (review in progress; worst "this looks real" damage first)
@@ -82,6 +86,10 @@ Review tools (scratchpad, not in the repo): review.mjs (plan-driven shots), phon
   4.5 -> 4.0 to keep nights dark. forest/common.ts: irradiance never below the sky's hemisphere light.
 - fx/overlays.ts frost veil floor follows the adapted scene (uVeil): no black ragged frame at night.
 - actors/player_model.ts snow exposure on hood 0.75 -> 0.35, parka 0.7 -> 0.5, pack 0.85 -> 0.55 (white caps).
+- #13 tail ring: src/world/blueprints.ts SITE_TAIL pad feather 9 -> 15 (the levelled pad stood up as a
+  platform on the falling ravine floor; its short apron read as a dark ring). World tests 13/13.
+- heli: game/heli.ts searchlight is a real spot from the FX pool (priority 7, 320 cd, 70 m): it lights the deck
+  and draws its beam in the storm air; visuals.ts passes the engine.
 - perf: markers merge closed lids into one draw (open crates draw body + lid), fold sticks/deadfall/logs
   to 2 variants and luggage to 3, no shadows from suitcases/toolboxes/first-aid cases: wreck view 282 -> 243
   draw calls.
@@ -108,11 +116,53 @@ perf.mjs --live 1, 1920x1080 window, medium renders 1632x918 (fps / GPU ms / dra
 - markers: dead wood draw range follows the tier (snags min(400, 5 x treeNear), wood min(200, 3 x treeNear)).
 
 ## Files touched
-src/gfx/weather/index.ts, volume.ts, snow.ts; src/gfx/sky/index.ts; src/gfx/post.ts; src/gfx/forest/common.ts,
-treemat.ts; src/gfx/fx/overlays.ts, breath.ts, particles.ts; src/actors/fp/index.ts, src/actors/index.ts;
-src/models/props/pickups.ts (new), deadwood.ts (new), index.ts; src/game/standin/markers.ts.
+- src/gfx: weather/index.ts, volume.ts, snow.ts; sky/index.ts, sky/common.ts; post.ts; engine.ts (warmup timing
+  stats); terrain/material.ts; forest/common.ts, treemat.ts, index.ts; fx/overlays.ts, breath.ts, particles.ts.
+- src/actors: fp/index.ts, fp/anim.ts, index.ts, wolf_model.ts, player_model.ts.
+- src/models: props/pickups.ts (new), props/deadwood.ts (new), props/index.ts; structures/cave.ts, cabin.ts;
+  wreck/fuselage.ts.
+- src/game: standin/markers.ts, icevis.ts, interior.ts, heli.ts, visuals.ts; hudmodel.ts (one line: no aim cross
+  while scoped, the brief's known item).
+- src/world/blueprints.ts (tail pad feather, with the coordinator's leave).
 
 ## Test commands
 - npm run check ; npm test ; npm run build
 - node tools/shot.mjs "<page?query>" --out <name> [--w 1600 --h 900] [--backend webgl] [--mobile 1]
-- scenarios: node tools/scenarios/<name>.mjs
+- scenarios: node tools/play.mjs tools/scenarios/<name>.mjs [--backend webgl] [--mobile 1] [--live 1]
+
+## Open (not done, smaller than what was fixed)
+- Shaded conifers at dusk / in storms stay very dark: physically consistent with a 4-5% albedo under the ACES fit;
+  the toe now holds some detail. A softer tone curve is the remaining lever (global look change).
+- Cliffs are still smooth heightmap geometry; the material now gives them ribs, stains and snow ledges.
+- Flare-gun reload: the left mitt is still large in frame for ~0.4 s (poses lowered; not re-animated).
+- Shader warmup 2.1-2.3 s of ~8.9 s load: overlap it with RELEASE's black opening (boot order in game.ts).
+- UI (RELEASE): compass degree labels 7.8 CSS px on phones; mobile.mjs's 'button pri on screen' check.
+
+## Final report
+
+**Review.** Shot all seven places plus aerial, ridge and valley views in six lights and weathers, the tour, hunt, survive, endgame, ice and heli scenarios, interiors, companions, viewmodel phases and phones. The ranked list is above.
+
+**Fixed, worst first.**
+1. Whiteout, including the climax, was a blank grey screen. The drawn visibility now has a floor (the sim's is unchanged) and the wash is gentler. Fires, flares, torches and the heli's new searchlight now glow and cast beams through snowy air ().
+2. Shaded spruce rendered black. Added snow bounce, a hemisphere floor, 1.3x foliage albedo and a film toe against the ACES curve. Nights lifted slightly.
+3. Pickups, crates and dead wood were coloured boxes. 15 new KIT models, instanced; looted crates show their lids open. Wreck view: 282 to 243 draw calls.
+4. Cliffs looked like concrete. Added ribs, stains, distant snow ledges and straight joints. The cave mass now meets the cliff and floating rocks are bedded.
+5. Firelit snow no longer looks like brown sticks. Fixed lens stars and dark discs, the glowing breath orb and the clipped torch ellipse.
+6. Lake patches no longer parallelograms; ripples on the ice-hole water; torn fuselage break; tail ring gone (world/blueprints pad feather). Grey wolves, aim cross hidden in the scope, bolt cuff away from the eye. Cabin roof gap, heat shield and window glow fixed. Brighter interiors, lighter snow caps on figures, no black frost frame at night, WebGL2 storm matches WebGPU.
+
+**Perf.** Medium at 1632x918: 48 to 77 fps (GPU 10 to 18 ms) in a clean run; later runs were noisier on a loaded machine. Mobile emulated: 108 to 223 fps. Dynamic resolution settles in about 5 s; auto did not flip tiers. Load is 8.9 s, of which warmup compile is 2.1 to 2.3 s.
+
+**Phones.** Title, stick, look, use, pack, pause and resume all work by touch at 844x390 and 740x360. Portrait shows the rotate screen. WebGL2 console clean.
+
+**Checks.** check, test (238) and build clean. Every scenario passes on WebGPU except survive, opening and netproof. Their failures are sim and tutorial-text results that changed after 15:37 with RELEASE's and the bot fix's edits (survive passed at 15:40). first and tour pass on WebGL2 and mobile. Playthrough won in 57 min.
+
+**Files.**
+- gfx: weather, sky, post, engine, terrain, forest, fx
+- actors: fp, anim, index, wolf_model, player_model
+- models: new props/pickups and props/deadwood, cave, cabin, fuselage
+- game: markers, icevis, interior, heli, visuals, one line in hudmodel
+- world/blueprints
+
+**Contracts.** No changes beyond two optional additions: an engine argument to createHeliVisual and two engine.stats fields.
+
+**Open.** Dusk conifers are still dark. Cliff geometry is still smooth. The flare-reload mitt is large in frame. Warmup could overlap the opening (needs a game.ts change).

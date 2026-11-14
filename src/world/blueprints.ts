@@ -669,7 +669,9 @@ const SITE_TAIL: Site = {
     bot2: A(-1.8, 0, 7.6, 0),
     bot3: A(3.4, 0, 3.4, 0),
   },
-  pads: [{ x: 0, z: 1.5, r: 8.5, feather: 9 }],
+  // (feather 15, was 9: on the falling ravine floor the levelled pad stood up as a platform whose short
+  // apron read as a dark ring round the tail from the approach. POLISH)
+  pads: [{ x: 0, z: 1.5, r: 8.5, feather: 15 }],
 };
 
 // CABIN. The woodshed stands off the east wall, open toward the cabin; heavy logs lie by it.
