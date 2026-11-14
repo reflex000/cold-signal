@@ -49,15 +49,15 @@ the console is clean, commit.
 - [x] Wolves and loot scale with player count; isolation pressure
 - [x] `?wire=json&lag=120` play test; snapshot size check; full scripted play-through to rescue
 
-## M6 — Make it look real, make it run
+## M6 — Make it look real, make it run (done)
 - [x] Deformable snow: footprints, trails, drag marks that fill in
 - [x] Post: tone mapping, bloom, ambient occlusion, anti-aliasing, frost and wet lens, grain
 - [x] Breath vapour, snow on the lens, flare light, eye shine, heat haze
 - [x] Quality presets (`mobile` to `ultra`), auto-detect, dynamic resolution; 60 fps on `medium`
-- [ ] Phone pass: touch layout, safe areas, WebGL2 path, memory
-- [ ] Harsh visual review of every place in every weather; fix list worked to empty
+- [x] Phone pass: touch layout, safe areas, WebGL2 path, memory
+- [x] Harsh visual review of every place in every weather; fix list worked to empty
 
 ## M7 — Release
-- [ ] Balance pass on a full hour's run; first-ten-minutes tutorial
-- [ ] README with controls and how to run; screenshots
+- [x] Balance pass on a full hour's run; first-ten-minutes tutorial
+- [x] README with controls and how to run; screenshots
 - [ ] Production build; deploy to GitHub Pages; check the live page on WebGPU, WebGL2 and phone

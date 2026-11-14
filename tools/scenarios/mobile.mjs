@@ -13,6 +13,19 @@ export default async function ({ page, ev, step, shot, log, check, mobile }) {
     window.CS.equip('axe');
   });
   await step(10);
+  // The button fades in once the axe is in hand: a CSS transition, which runs in real time while the
+  // game here is stepped (10 frames can pass in a few real milliseconds). Read it once it has settled.
+  const fade = await ev(() => new Promise((done) => {
+    const t0 = performance.now();
+    const tick = () => {
+      const e = document.querySelector('.tb-pri');
+      const settled = !!e && !e.classList.contains('off') && e.getAnimations().length === 0;
+      if (settled || performance.now() - t0 > 2000) done(Math.round(performance.now() - t0));
+      else requestAnimationFrame(tick);
+    };
+    tick();
+  }));
+  log(`the primary button settled after ${fade} ms (real time)`);
   const layout = await ev(() => {
     const r = (sel) => {
       const e = document.querySelector(sel);

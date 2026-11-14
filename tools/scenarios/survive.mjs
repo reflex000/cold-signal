@@ -196,7 +196,8 @@ export default async function ({ ev, step, shot, log, check }) {
   check(gathered >= 2, `gathered ${gathered} sticks by hand`);
   await ev(() => {
     const p = window.SV.me();
-    p.inv.stick = Math.max(p.inv.stick ?? 0, 7);
+    // three to lay the fire, three to feed it, three to keep it going while warming up (step 5)
+    p.inv.stick = Math.max(p.inv.stick ?? 0, 9);
     delete p.inv.tinder;
   });
 
@@ -315,12 +316,24 @@ export default async function ({ ev, step, shot, log, check }) {
   check(h.chips.fire, 'the HUD fire chip is on');
   await shot('survive_05_warming');
   await mark();
-  // warm until 36.9; resting warm by the fire also makes a checkpoint on the way (read its toast then)
-  let warmT = 30, cpSeen = false;
+  // warm until 36.9; resting warm by the fire also makes a checkpoint on the way (read its toast then).
+  // A good fire is kept fed: E on it whenever it burns low (under a minute of fuel, where the feed line
+  // comes), as a player keeps it. (Laid from three sticks and fed three, it alone lasts about as long
+  // as the warming takes in this wind: whether it outlasts it was down to the spot the search finds.)
+  let warmT = 30, cpSeen = false, fedWarm = 0, wentOut = false;
   for (let i = 0; i < 480 && (!cpSeen || b.core < 36.9); i++) {
     await step(15);
     if (b.core < 36.9) warmT += 0.5;
     b = await body();
+    const fl = await ev((fid) => {
+      const f = window.CS.sim.ctx.get(fid);
+      return { lit: f.lit, fuel: f.fuel };
+    }, fid);
+    if (!fl.lit && b.core < 36.9) wentOut = true;
+    if (fl.lit && fl.fuel < 60 && b.core < 36.9 && (b.inv.stick ?? 0) > 0) {
+      await press(USE);
+      fedWarm++;
+    }
     if (!cpSeen && (await since('checkpoint')).length > 0) {
       cpSeen = true;
       h = await hud();
@@ -329,8 +342,10 @@ export default async function ({ ev, step, shot, log, check }) {
       await shot('survive_05b_rested');
     }
   }
-  log(`33.5 -> 36.9 by the fire (lit just before) in ${warmT} s`);
-  check(warmT <= 170, 'warm again in about two minutes, the fire taking hold included');
+  const fedOnWay = (await since('fireFed')).filter((e) => e.id === fid && e.item === 'stick').length;
+  log(`33.5 -> 36.9 by the fire (lit just before) ${b.core >= 36.9 ? 'in ' + warmT + ' s' : 'NOT reached in ' + warmT + ' s'}, ${fedWarm} stick(s) fed on the way`);
+  check(!wentOut && fedOnWay === fedWarm, `the fire, fed with E as it burned low (${fedOnWay} sticks), kept burning until warm`);
+  check(b.core >= 36.9 && warmT <= 170, 'warm again in about two minutes, the fire taking hold included');
   check(cpSeen, 'resting warm at the fire makes a checkpoint');
 
 
@@ -476,8 +491,19 @@ export default async function ({ ev, step, shot, log, check }) {
   await ev(() => window.CS.input(null));
   await mark();
   await ev(() => window.CS.act({ t: 'release' }));
-  await step(3);
-  check((await since('logDrop')).length === 1, 'put down');
+  // The host lets go at once. The drop is an event about the log, not the player, so the client shows
+  // it with the log as drawn: INTERP_DELAY (net/client.ts, 0.1 s) behind, 3 or 4 frames.
+  let dropFrames = 0;
+  while (dropFrames < 6 && (await since('logDrop')).length === 0) {
+    await step(1);
+    dropFrames++;
+  }
+  const down = await ev((id) => {
+    const l = window.CS.sim.ctx.get(id);
+    return { a: l.a, b: l.b, host: window.SV.me().carry, client: window.CS.view.me.carry };
+  }, carry.id);
+  log(`put down: the drop on the client after ${dropFrames} frames`, down);
+  check((await since('logDrop')).length === 1 && down.a === 0 && down.b === 0 && down.host === 0 && down.client === 0, 'put down: nobody holds the log, on the host and on the client');
 
   // ---------------------------------------------------------------- 8. down from the cold
   // the companion waits by the fire; the player goes out alone into a whiteout at night

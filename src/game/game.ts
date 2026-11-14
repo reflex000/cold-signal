@@ -4,7 +4,9 @@
 //
 // Boot: URL params -> device -> settings -> UI (loading screen) -> engine -> audio -> World
 // (createWorld, progress on bus 'loading') -> visual systems (src/game/visuals.ts) -> a new-game
-// session behind the title -> warmup -> first frame -> 'title' (or straight to 'play').
+// session behind the title -> warmup (the shaders) -> first frame -> 'title' (or straight to 'play').
+// A person (no ?still, ?skipTitle or ?continue) gets the title as the warmup starts, over a veil
+// until the world is first drawn: New game then starts the opening while the shaders compile.
 //
 // Each frame: real time accumulates; the host ticks at exactly 30 Hz (at most 5 catch-up ticks),
 // each tick samples one InputCmd (input.ts) and sends it through the session; then the session
@@ -105,8 +107,16 @@ export class Game {
   private tickMs = 0;
   private ticks = 0;
   private framesRendered = 0;
+  /**
+   * The world has been drawn once (warmup done, a first frame rendered). Until then frames draw nothing:
+   * a person may already be on the title or in the opening, with the UI's veil over the scene.
+   */
+  private drawn = false;
+  private bootT0 = 0;
   /** Milliseconds from boot to the first frame on screen. */
   loadMs = 0;
+  /** Milliseconds from boot to the title on screen (0 while it has not been up). */
+  titleMs = 0;
   private readyResolve: (() => void) | null = null;
   readonly ready: Promise<void>;
   private bootError: unknown = null;
@@ -178,7 +188,7 @@ export class Game {
 
   private async boot(): Promise<void> {
     const p = this.params;
-    const bootT0 = performance.now();
+    const bootT0 = (this.bootT0 = performance.now());
     const uiGame: UiGame = {
       view: this.view,
       actions: this.actions,
@@ -243,19 +253,36 @@ export class Game {
     this.openSession(null);
     this.placeCamera(0);
 
+    // --- the shaders: engine.warmup compiles every pipeline the scene needs (the longest stretch of the
+    // load; three spreads it over frames). A person gets the title as it starts, over the UI's veil (the
+    // world is not drawn until it is done): New game starts the opening at once, its black, the wind and
+    // the two lines, and the compile ends under it; on the title the scene comes up behind the menu when
+    // drawn. The tools (?still), ?skipTitle and ?continue keep the loading screen up to the first frame.
     this.loading(0.86, 'Preparing the shaders');
     await nextFrame();
-    await engine.warmup();
+    const warm = engine.warmup();
+    const early = !p.still && !p.skipTitle && !(p.cont && this.save.has());
+    if (early) {
+      this.view.drawn = false;
+      this.installListeners();
+      this.setMode('title');
+      this.startLoop(); // frames run (title, opening, wind) and draw nothing until the shaders are in
+    }
+    await warm;
     this.loading(1, '');
 
-    this.installListeners();
-    this.last = performance.now();
-    this.netClock = this.last;
-    if (p.cont && this.save.has()) this.continueGame(false);
-    else if (p.skipTitle) this.newGame(undefined, false);
-    else this.setMode('title');
+    if (!early) {
+      this.installListeners();
+      this.last = performance.now();
+      this.netClock = this.last;
+      if (p.cont && this.save.has()) this.continueGame(false);
+      else if (p.skipTitle) this.newGame(undefined, false);
+      else this.setMode('title');
+    }
 
     // the first frame on screen, then tell the tools
+    this.drawn = true;
+    this.view.drawn = true;
     this.stepFrame(0, true);
     await nextFrame();
     await nextFrame();
@@ -364,6 +391,7 @@ export class Game {
     const from = this.mode;
     this.mode = m;
     this.view.mode = m;
+    if (m === 'title' && this.titleMs === 0) this.titleMs = performance.now() - this.bootT0;
     if (m !== 'play' && m !== 'photo') {
       this.input.release();
       this.input.exitLock();
@@ -613,14 +641,16 @@ export class Game {
     if (this.params.still) this.netClock += dt * 1000;
     this.pump();
 
-    // the opening runs in play mode but holds the world: it counts down only while nothing else is up
+    // the opening runs in play mode but holds the world: it counts down only while nothing else is up,
+    // and stays black, short of its fade, until the world has been drawn (the shaders may still compile)
     if (this.opening > 0 && mode === 'play') {
       if (this.padPressed()) this.skipOpening();
-      this.opening = Math.max(0, this.opening - dt);
+      this.opening = Math.max(this.drawn ? 0 : OPENING_FADE, this.opening - dt);
       this.view.opening = this.opening;
       if (this.opening === 0) this.padHeld = true;
     }
-    if (session && session.ready && RUNNING.includes(mode) && this.opening <= 0) {
+    // (nor does the world move on before it has been drawn: Continue chosen on the title during the warmup)
+    if (session && session.ready && RUNNING.includes(mode) && this.opening <= 0 && this.drawn) {
       this.acc += dt;
       let n = 0;
       while (this.acc >= DT - 1e-7 && n < MAX_CATCHUP) {
@@ -654,7 +684,8 @@ export class Game {
     this.hud.update(this.view, dt, !title, playing, wo);
 
     if (this.ui && this.ui.wantsPointer() && this.input.locked) this.input.exitLock();
-    if (render) {
+    // (nothing is drawn before the warmup is done: a frame would compile what is left, all at once)
+    if (render && this.drawn) {
       if (this.skySnaps > 0) {
         this.skySnaps--;
         this.engine.get<{ name: string; update(): void; snap?: () => void }>('sky')?.snap?.();
@@ -803,6 +834,7 @@ export class Game {
       ticks: this.ticks,
       frames: this.framesRendered,
       loadMs: Math.round(this.loadMs),
+      titleMs: Math.round(this.titleMs),
       loadGap: { ms: Math.round(this.loadGap.ms), before: this.loadGap.before },
       loadStalls: this.loadStalls,
       ents: counts,

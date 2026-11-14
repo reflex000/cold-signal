@@ -51,8 +51,20 @@ export default async function ({ ev, step, shot, log, check, mobile }) {
   });
   check(inside.d < 7 && inside.shelter > 0.5, `the new game opens inside the fuselage (${JSON.stringify(inside)})`);
   await shot('opening_05_fuselage');
-  await step(60);
-  await seen('start');
+  // the place card greets the end of the opening and has the screen to itself (hints.ts: the first
+  // line waits 3.5 s of play for it); then the first line comes: move and look
+  await step(60); // 2.9 s of play
+  h = await seen('under the place card');
+  const card = await ev(() => ({ on: !!document.querySelector('.pl.on'), name: document.querySelector('.pl-n')?.textContent ?? '' }));
+  check(card.on && card.name === 'The fuselage' && !h.hint && lines.length === 0, `the place card has the screen first, no line under it (${JSON.stringify({ ...card, hint: h.hint })})`);
+  let firstAt = 2.9;
+  for (let i = 0; i < 12 && lines.length === 0; i++) {
+    await step(5);
+    firstAt += 5 / 30;
+    await seen('start');
+  }
+  log(`the first line came after ${firstAt.toFixed(1)} s of play`);
+  check(lines.length === 1 && firstAt <= 4.2, `the first line follows the place card at once (${firstAt.toFixed(1)} s of play)`);
   await shot('opening_06_first_hint');
   check(lines.length === 1 && /move|look|thumb|stick/.test(lines[0]), 'the first line is move and look');
   if (mobile) check(/thumb|Drag/.test(lines[0]), 'touch: the line names the thumbs');

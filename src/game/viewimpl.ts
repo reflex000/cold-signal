@@ -39,6 +39,8 @@ export class ViewImpl implements View {
   readonly rig = { bob: 0, stride: 0, speed: 0, recoil: 0, sway: 0, breath: 0, shiver: 0, landing: 0 };
   /** Seconds left of a new game's opening (game.ts counts it down; ui/opening.ts draws it). */
   opening = 0;
+  /** The world has been drawn (game.ts: false while the shaders compile behind the title at boot). */
+  drawn = true;
 
   private session: ClientSession | null = null;
   private phase = 0;

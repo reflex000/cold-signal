@@ -203,18 +203,48 @@ export default async function ({ ev, step, shot, log, check }) {
   check(!!wood, 'dead wood to chop');
   if (wood) {
     await step(10);
-    await ev((w) => {
+    // Hold USE on it and watch every frame (no rendering in between): the companions gather wood lying
+    // by the group from where they stand (bots.ts works from the host's own reach), so the yield is on
+    // the snow for only a fraction of a second before one of them takes it. Every split log and stick
+    // the host drops must show on the client where the wood was, in the frame the wood goes, and then
+    // either still lie there or leave by a pickup the client hears about.
+    const w8 = await ev(({ w, frames }) => {
+      const CS = window.CS, g = CS.game;
+      const wanted = (p) => (p.item === 'stick' || p.item === 'log' || p.item === 'tinder') && Math.hypot(p.x - w.x, p.z - w.z) < 3.5;
+      const before = new Set(CS.sim.ctx.all('pickup').map((p) => p.id));
       window.NP.lookAt(w.x, w.y + 0.5, w.z);
-      window.CS.input({ b: 32 });
-    }, wood);
-    const gone = await stepUntil((id) => !window.CS.view.ents.has(id), 25, wood.id);
-    await ev(() => window.CS.input(null));
-    await stepUntil((w) => window.CS.view.list('pickup').some((p) => Math.hypot(p.x - w.x, p.z - w.z) < 3.5), 3, wood);
+      CS.input({ b: 32 });
+      let host = null, gone = -1, goneAt = Infinity;
+      const seen = new Map();
+      for (let f = 0; f < frames; f++) {
+        g.stepFrame(1 / 30, false);
+        if (!host && !CS.sim.ctx.get(w.id)) host = CS.sim.ctx.all('pickup').filter((p) => !before.has(p.id) && wanted(p)).map((p) => ({ id: p.id, item: p.item, n: p.n }));
+        for (const p of CS.view.list('pickup')) if (!before.has(p.id) && !seen.has(p.id) && wanted(p)) seen.set(p.id, { id: p.id, item: p.item, n: p.n, f });
+        if (gone < 0 && !CS.view.ents.has(w.id)) {
+          gone = f;
+          goneAt = CS.view.time;
+          CS.input(null);
+        }
+        if (gone >= 0 && f >= gone + 45) break; // 1.5 s on
+      }
+      CS.input(null);
+      // what became of each piece: still lying there on the client, or taken (a pickup event on the client)
+      const fate = (host || []).map((y) => {
+        const lying = CS.view.ents.has(y.id);
+        const took = window.NP.events.find((e) => e.t === 'pickup' && e.item === y.item && e.n === y.n && e.at >= goneAt);
+        return { ...y, lying, by: took ? took.by : 0 };
+      });
+      return { host, gone, seen: [...seen.values()], fate };
+    }, { w: wood, frames: 25 * 30 });
+    await step(1);
     const chopped = await since(m0, 'chopped');
     const swings = (await since(m0, 'swing')).filter((e) => e.hit === 'wood');
-    const yields = await ev((w) => window.CS.view.list('pickup').filter((p) => Math.hypot(p.x - w.x, p.z - w.z) < 3.5 && (p.item === 'stick' || p.item === 'log' || p.item === 'tinder')).length, wood);
-    log(`chopping: ${swings.length} blows, chopped ${chopped.length}, gone on the client ${gone}, ${yields} pickups beside it`);
-    check(gone && chopped.length === 1 && yields > 0, 'chopped: blows, the wood gone and its sticks lying there, on the client');
+    const host = w8.host || [];
+    const shown = host.filter((y) => w8.seen.some((s) => s.id === y.id && s.item === y.item && s.n === y.n && Math.abs(s.f - w8.gone) <= 2));
+    log(`chopping: ${swings.length} blows, chopped ${chopped.length}, gone on the client at frame ${w8.gone}; the host dropped ${host.map((y) => `${y.item} ${y.n}`).join(', ') || 'nothing'}, the client showed ${w8.seen.map((s) => `${s.item} ${s.n} (frame ${s.f})`).join(', ') || 'nothing'}; then ${w8.fate.map((y) => `${y.item} ${y.lying ? 'lying there' : y.by ? 'taken by ' + y.by : 'GONE'}`).join(', ')}`);
+    check(w8.gone >= 0 && chopped.length === 1 && swings.length >= 1, 'chopped: blows and the wood gone, on the client');
+    check(host.length > 0 && shown.length === host.length && w8.seen.length === host.length, 'its split logs and sticks land on the client where the wood was, with the wood going');
+    check(w8.fate.length > 0 && w8.fate.every((y) => y.lying || y.by), 'and each piece stays there or leaves by a pickup the client sees');
   }
   await shot('netproof_04_chop');
 

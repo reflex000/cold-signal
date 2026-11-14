@@ -1,5 +1,7 @@
 # Cold Signal
 
+**Play it: https://reflex000.github.io/cold-signal/** (a recent Chrome or Edge for WebGPU; other browsers use WebGL 2; phones in landscape)
+
 Flight 417 has come down on the south face of a mountain in a blizzard, an hour before dark. You crawl
 out of the broken fuselage into the snow. The emergency radio is dead: its five parts are scattered
 over the mountain, in the wreckage and in the places people left behind. Find them, carry them up to
@@ -16,7 +18,7 @@ phones. Every mesh, texture, sound and note of music in it is generated in code 
 |---|---|
 | ![The wreck at dusk: the barrel fire still burning beside the broken fuselage](media/wreck.jpg) | ![On the trail to the ranger cabin, with the HUD as you play it](media/forest.jpg) |
 | ![A campfire at night, warmth in a blue world](media/fire.jpg) | ![A whiteout: a few metres of sight and a fire that struggles](media/whiteout.jpg) |
-| ![The ice-fishing hut on the frozen lake](media/lake.jpg) | ![Two survivors crossing open snow at night](media/together.jpg) |
+| ![The ice-fishing hut on the frozen lake](media/lake.jpg) | ![A wolf circles two survivors at their fire at night](media/together.jpg) |
 | ![The signal tower on the north ridge](media/tower.jpg) | ![A clear night under the aurora](media/aurora.jpg) |
 
 ## Play

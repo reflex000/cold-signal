@@ -48,6 +48,10 @@ export const CSS = /* css */ `
 .opn-l{max-width:min(40em,86vw);text-align:center;font:300 1.18em/1.6 var(--ft);letter-spacing:.06em;color:var(--fg2);opacity:0}
 .touch .opn-l{font-size:1.06em}
 
+/* the world not drawn yet: a veil over the scene under the title and the opening (ui/index.ts) */
+.veil{position:absolute;inset:0;background:var(--ink);opacity:0;visibility:hidden;pointer-events:none;transition:opacity 1.4s ease,visibility 0s 1.4s}
+.veil.on{opacity:1;visibility:visible;transition:none}
+
 /* loading */
 .ld{background:var(--ink);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .9s ease,visibility 0s .9s}
 .ld.on{transition:opacity .2s}

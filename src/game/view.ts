@@ -102,6 +102,12 @@ export interface View {
    * world does not move on while it runs. (Optional member added by RELEASE.)
    */
   opening?: number;
+  /**
+   * False while the world has not been drawn yet: at boot a person may already have the title, or the
+   * opening, while the shaders still compile; the UI keeps a veil over the scene until this turns true.
+   * Absent or true otherwise. (Optional member added with the load overlap, RELEASE.)
+   */
+  drawn?: boolean;
 }
 
 /**

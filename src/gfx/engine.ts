@@ -507,10 +507,12 @@ export async function createEngine(canvas: HTMLCanvasElement, opts: { quality: Q
   const reversed = opts.depth === 'standard' ? false : gl ? gl.clipControl : true;
 
   // Chrome on Windows ignores the adapter power preference and warns about it on every page
-  // load; elsewhere (dual-GPU Macs and Linux laptops) it picks the discrete GPU.
-  let windows = false;
+  // load; elsewhere (dual-GPU Macs and Linux laptops) it picks the discrete GPU. Phones and tablets
+  // have the one GPU: no hint there either (a phone browser that says it is Android still warns
+  // when the machine under it is Windows, as in the tools' phone emulation).
+  let noHint = device.touch;
   try {
-    windows = /Windows/i.test(navigator.userAgent);
+    noHint = noHint || /Windows/i.test(navigator.userAgent);
   } catch {
     /* no navigator */
   }
@@ -522,7 +524,7 @@ export async function createEngine(canvas: HTMLCanvasElement, opts: { quality: Q
     forceWebGL,
     reversedDepthBuffer: reversed,
     outputBufferType: hdr ? THREE.HalfFloatType : THREE.UnsignedByteType,
-    powerPreference: windows ? undefined : 'high-performance',
+    powerPreference: noHint ? undefined : 'high-performance',
     trackTimestamp: opts.gpuTiming === true && (!forceWebGL || opts.gpuTimingWebGL === true),
   };
   const renderer = new THREE.WebGPURenderer(params as any);

@@ -89,10 +89,11 @@ const shot = async (shotName, o = {}) => {
     window.CS ? window.CS.shotReady() : new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
   );
   const file = path.join(shots, shotName + '.jpg');
-  await page.screenshot({ path: file, type: 'jpeg', quality: 88 });
+  // (a loaded machine can take a while to hand over a frame: more than playwright's default 30 s)
+  await page.screenshot({ path: file, type: 'jpeg', quality: 88, timeout: 180000 });
   console.log('  shot ' + path.relative(root, file));
   if (o.sheet) {
-    const png = PNG.sync.read(await page.screenshot({ type: 'png' }));
+    const png = PNG.sync.read(await page.screenshot({ type: 'png', timeout: 180000 }));
     const k = Number(o.scale || 4);
     const w = Math.floor(png.width / k), h = Math.floor(png.height / k);
     const out = new PNG({ width: w, height: h });
@@ -148,7 +149,8 @@ let crashed = false;
 try {
   const url = `${server.url}/?${q.toString()}`;
   console.log(`${name}: ${url} (${backend}${mobile ? ', mobile' : ''}${live ? ', live' : ''})`);
-  await page.goto(url, { waitUntil: 'load' });
+  // (the page's own load gets the same allowance as the boot: a loaded machine serves the dev modules slowly)
+  await page.goto(url, { waitUntil: 'load', timeout: Number(args.timeout || 240000) });
   if (bare) {
     await page.waitForFunction(() => window.DONE === true, null, { timeout: Number(args.timeout || 240000) });
     console.log(`  ready in ${((Date.now() - t0) / 1000).toFixed(1)} s: ${await page.evaluate(() => window.BACKEND)}`);

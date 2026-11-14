@@ -1,7 +1,7 @@
 // The README's pictures: scenes of the real game at 1600 x 900, written straight into media/ as small
-// JPEGs (and as full-quality copies in shots/media_*.jpg to judge): the wreck, the forest walk (with the
-// HUD as a player sees it), a campfire at night, the storm, the lake, the cabin, the tower, two survivors
-// at night with a pack about, the aurora. The README uses eight of them.
+// JPEGs (and as full-quality copies in shots/media_*.jpg to judge): the wreck, the trail to the cabin
+// (with the HUD as a player sees it), a campfire at night, the storm, the fishing hut on the lake, the
+// cabin, the tower, two survivors at their fire with a wolf circling, the aurora. The README uses eight.
 //   node tools/play.mjs tools/scenarios/media.mjs --q high [--only fire,aurora]
 import path from 'node:path';
 import fs from 'node:fs';
@@ -24,7 +24,7 @@ export default async function ({ page, ev, step, shot, log, check, args }) {
     await ui(withUi);
     await ev(() => window.CS.shotReady());
     await shot('media_' + name);
-    await page.screenshot({ path: path.join(media, name + '.jpg'), type: 'jpeg', quality: MEDIA_QUALITY });
+    await page.screenshot({ path: path.join(media, name + '.jpg'), type: 'jpeg', quality: MEDIA_QUALITY, timeout: 180000 });
     const kb = Math.round(fs.statSync(path.join(media, name + '.jpg')).size / 1024);
     log(`media/${name}.jpg ${kb} KB`);
     await ui(true);
@@ -37,6 +37,14 @@ export default async function ({ page, ev, step, shot, log, check, args }) {
     await ev((c) => window.CS.go(c.x, c.z, c.yaw, c.pitch), c);
     await step(settle);
   };
+  // the companion out of the picture: a few metres behind the camera (she walks back in a while later)
+  const mateBehind = (back = 7) =>
+    ev((back) => {
+      const CS = window.CS, me = CS.view.me, yaw = CS.view.camera.yaw;
+      for (const id of Object.keys(CS.game.botsDoing()).filter((k) => k !== 'auto').map(Number)) {
+        CS.game.host.botAct(id, { t: 'debug', cmd: 'tp', args: [me.x + Math.sin(yaw) * back, me.z + Math.cos(yaw) * back] });
+      }
+    }, back);
   // a viewpoint in front of a place, looking at it (as tour.mjs finds them)
   const viewOf = (id, dists = [21, 15, 28, 11], lift = 2) =>
     ev(([id, dists, lift]) => {
@@ -63,7 +71,7 @@ export default async function ({ page, ev, step, shot, log, check, args }) {
       const f = window.CS.world.props.find((p) => p.model === 'fuselage');
       const c = Math.cos(f.yaw), s = Math.sin(f.yaw);
       const at = (lx, lz) => ({ x: f.x + lx * c + lz * s, z: f.z - lx * s + lz * c });
-      const eye = at(-3.2, -21.5), tgt = at(1.2, -8); // out along the scar, looking back at the break
+      const eye = at(-2.6, -16), tgt = at(1.2, -8); // out along the scar, looking back into the break
       return { x: eye.x, z: eye.z, yaw: (Math.atan2(-(tgt.x - eye.x), -(tgt.z - eye.z)) * 180) / Math.PI, pitch: -2 };
     });
     await go(c, 40);
@@ -74,19 +82,20 @@ export default async function ({ page, ev, step, shot, log, check, args }) {
 
   // ---------------------------------------------------------------- the trail through the forest, HUD up
   if (want('forest')) {
-    await env({ storm: 0.1, clock: 16.15 });
+    await env({ storm: 0.15, clock: 16.5 });
     const c = await ev(() => {
       const w = window.CS.world, r = w.route, cabin = w.poi('cabin');
-      // on the trail about 120 m before the cabin, looking along it
+      // on the trail about 50 m before the cabin, the trees opening on it in the low sun
       let k = 0, best = Infinity;
       for (let i = 0; i < r.length; i++) {
         const d = Math.hypot(r[i].x - cabin.x, r[i].z - cabin.z);
         if (d < best) { best = d; k = i; }
       }
       let j = k, acc = 0;
-      while (j > 1 && acc < 120) { acc += Math.hypot(r[j].x - r[j - 1].x, r[j].z - r[j - 1].z); j--; }
-      const a = r[j], b = r[Math.min(r.length - 1, j + 4)];
-      return { x: a.x, z: a.z, yaw: (Math.atan2(-(b.x - a.x), -(b.z - a.z)) * 180) / Math.PI, pitch: -2 };
+      while (j > 1 && acc < 50) { acc += Math.hypot(r[j].x - r[j - 1].x, r[j].z - r[j - 1].z); j--; }
+      const a = r[j];
+      const eye = w.heightAt(a.x, a.z) + 1.66, d = Math.hypot(cabin.x - a.x, cabin.z - a.z);
+      return { x: a.x, z: a.z, yaw: (Math.atan2(-(cabin.x - a.x), -(cabin.z - a.z)) * 180) / Math.PI, pitch: (Math.atan2(cabin.y + 2 - eye, d) * 180) / Math.PI };
     });
     await go(c, 40);
     await step(240, 1 / 15); // the place card that greets the start fades
@@ -163,12 +172,24 @@ export default async function ({ page, ev, step, shot, log, check, args }) {
     await save('whiteout');
   }
 
-  // ---------------------------------------------------------------- the lake and the hut
+  // ---------------------------------------------------------------- the hut on the lake: close, its chimney
+  // smoking, the cliff behind, on a clear afternoon (a low sun leaves the clear ice in front a dark smear)
   if (want('lake')) {
-    await env({ storm: 0.05, clock: 16.35 });
-    const c = await viewOf('lake', [30, 45, 60], 1);
+    await env({ storm: 0.05, clock: 14.5 });
+    const c = await ev(() => {
+      const w = window.CS.world, p = w.poi('hut');
+      for (const [a, d] of [[-0.9, 18], [-0.9, 22], [0.45, 18], [-0.45, 18]]) {
+        const x = p.x + Math.sin(p.yaw + a) * d, z = p.z + Math.cos(p.yaw + a) * d;
+        if (!w.walkable(x, z) || !w.lineClear(x, w.heightAt(x, z) + 1.66, z, p.x, p.y + 2.5, p.z)) continue;
+        const eye = w.heightAt(x, z) + 1.66;
+        return { x, z, yaw: (Math.atan2(-(p.x - x), -(p.z - z)) * 180) / Math.PI, pitch: (Math.atan2(p.y + 1 - eye, d) * 180) / Math.PI };
+      }
+      return null;
+    });
     if (c) {
       await go(c, 40);
+      await mateBehind();
+      await step(2);
       await save('lake');
     } else check(false, 'no viewpoint on the lake');
   }
@@ -195,7 +216,8 @@ export default async function ({ page, ev, step, shot, log, check, args }) {
   }
 
   // ---------------------------------------------------------------- two survivors at night, a pack closing in
-  // (photo mode's chase view from behind the player; the wolves are out past the companion)
+  // (photo mode's chase view from behind the player; while the pack finds them the companion lays a fire,
+  // and a wolf circles out past her)
   if (want('together')) {
     await env({ storm: 0.15, clock: 22.3 }, 10);
     const spot = await ev(() => {
@@ -217,23 +239,30 @@ export default async function ({ page, ev, step, shot, log, check, args }) {
       if (!window.CS.view.me.lightOn) window.CS.act({ t: 'toggleLight' });
     });
     await ev((s) => window.CS.act({ t: 'debug', cmd: 'wolves', args: [s.x + 45, s.z - 20, 4] }), spot);
-    // let them find the player, stalk and close in
-    let near = null;
-    for (let i = 0; i < 40; i++) {
-      await step(90, 1 / 15);
-      near = await ev(() => {
-        const me = window.CS.view.me;
+    // let them find the player, stalk and close in; the picture wants the nearest wolf out in the open,
+    // in range of the light and not behind the companion (`apart`: degrees between them seen from here)
+    const nearWolf = () =>
+      ev(() => {
+        const CS = window.CS, me = CS.view.me;
+        const mate = CS.view.list('player').find((p) => p.id !== CS.view.myId);
         let best = null, bd = 1e9;
-        for (const w of window.CS.view.list('wolf')) {
+        for (const w of CS.view.list('wolf')) {
           const d = Math.hypot(w.x - me.x, w.z - me.z);
-          if (w.mood !== 'dead' && d < bd) { bd = d; best = { x: w.x, y: w.y, z: w.z, d, mood: w.mood }; }
+          if (w.mood !== 'dead' && d < bd) { bd = d; best = { x: w.x, y: w.y, z: w.z, d, mood: w.mood, apart: 180 }; }
+        }
+        if (best && mate) {
+          let da = Math.abs(Math.atan2(best.x - me.x, best.z - me.z) - Math.atan2(mate.x - me.x, mate.z - me.z));
+          if (da > Math.PI) da = 2 * Math.PI - da;
+          best.apart = (da * 180) / Math.PI;
         }
         return best;
       });
-      if (near && near.d < 15 && near.mood !== 'flee') break;
-    }
-    if (near) {
-      log(`wolves: nearest ${near.d.toFixed(1)} m, ${near.mood}`);
+    const framed = (n) => !!n && n.d > 4 && n.d < 14 && n.apart > 24 && n.mood !== 'flee' && n.mood !== 'cower';
+    let near = null;
+    for (let i = 0; i < 40; i++) {
+      await step(90, 1 / 15);
+      near = await nearWolf();
+      if (!framed(near)) continue;
       await ev((n) => {
         const me = window.CS.view.me;
         const yaw = (Math.atan2(-(n.x - me.x), -(n.z - me.z)) * 180) / Math.PI;
@@ -242,15 +271,35 @@ export default async function ({ page, ev, step, shot, log, check, args }) {
       }, near);
       await ev(() => window.CS.input({ mx: 0, mz: 0, b: 16 })); // raise the light: the beam finds the eyes
       await step(20);
-      await ev((n) => {
-        const me = window.CS.view.me;
+      near = await nearWolf();
+      if (framed(near)) break;
+      await ev(() => window.CS.input(null));
+      near = null;
+    }
+    if (near) {
+      log(`wolves: nearest ${near.d.toFixed(1)} m, ${near.mood}, ${near.apart.toFixed(0)} degrees from the companion`);
+      await ev(() => {
+        const CS = window.CS, me = CS.view.me;
         let best = null, bd = 1e9;
-        for (const w of window.CS.view.list('wolf')) {
+        for (const w of CS.view.list('wolf')) {
           const d = Math.hypot(w.x - me.x, w.z - me.z);
           if (w.mood !== 'dead' && d < bd) { bd = d; best = w; }
         }
-        if (best) window.CS.look((Math.atan2(-(best.x - me.x), -(best.z - me.z)) * 180) / Math.PI, 1);
-      }, near);
+        if (!best) return;
+        // the chase view sits behind the player, who covers the middle of the picture: look between the
+        // wolf and the companion, so they stand either side of the player
+        const mate = CS.view.list('player').find((p) => p.id !== CS.view.myId);
+        const yw = Math.atan2(-(best.x - me.x), -(best.z - me.z));
+        let yaw = yw;
+        if (mate) {
+          const ym = Math.atan2(-(mate.x - me.x), -(mate.z - me.z));
+          let dy = ym - yw;
+          while (dy > Math.PI) dy -= 2 * Math.PI;
+          while (dy < -Math.PI) dy += 2 * Math.PI;
+          yaw = Math.abs(dy) < Math.PI / 3 ? yw + dy / 2 : yw + Math.sign(dy) * 0.3;
+        }
+        CS.look((yaw * 180) / Math.PI, 1);
+      });
       await step(3);
       // from behind the survivor (photo mode's chase view): the parka, the beam, the eyes
       await ev(() => window.CS.game.actions.photo(true));
@@ -263,17 +312,24 @@ export default async function ({ page, ev, step, shot, log, check, args }) {
 
   // ---------------------------------------------------------------- a clear night, the aurora
   if (want('aurora')) {
+    // the flashlight from the night with the pack goes away: its head and the mitt filled the lower frame
+    await ev(() => {
+      if (window.CS.view.me.lightOn) window.CS.act({ t: 'toggleLight' });
+      window.CS.equip('hands');
+    });
     await env({ storm: 0, clock: 23.4 }, 30);
     const c = await ev(() => {
       const w = window.CS.world, lake = w.poi('lake');
-      // out on the ice south of the hut, looking north past it to the ridge
+      // out on the ice south of the hut, looking north past it to the ridge, the sky up to the curtains
       for (const d of [70, 55, 85, 40]) {
         const x = lake.x - 12, z = lake.z + d;
-        if (w.walkable(x, z) && w.iceAt(x, z) > 0) return { x, z, yaw: 4, pitch: 12 };
+        if (w.walkable(x, z) && w.iceAt(x, z) > 0) return { x, z, yaw: 4, pitch: 16 };
       }
-      return { x: lake.x - 12, z: lake.z + 40, yaw: 4, pitch: 12 };
+      return { x: lake.x - 12, z: lake.z + 40, yaw: 4, pitch: 16 };
     });
     await go(c, 60);
+    await mateBehind(8);
+    await step(2);
     const a = await ev(() => window.CS.view.env.aurora);
     log(`aurora ${a.toFixed(2)}`);
     await save('aurora');

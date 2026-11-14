@@ -5,7 +5,7 @@ import type { Mode } from '../game/view';
 import type { HurtCause } from '../sim/types';
 import type { UiApi, UiGame } from './api';
 import { CSS } from './css';
-import { type Ctx, h, on } from './dom';
+import { type Ctx, cls, h, on } from './dom';
 import { createEnd, type EndKind } from './end';
 import { createHud } from './hud';
 import { icon } from './icons';
@@ -54,12 +54,20 @@ export function createUI(game: UiGame): UiApi {
   const end = createEnd(ctx, nav);
   const loading = createLoading(ctx);
   const opening = createOpening(ctx);
+  // the world not drawn yet (the shaders still compiling behind the title at boot): a dark veil over
+  // the scene and the HUD, under the title and the opening, that thins away once it is drawn
+  const veil = h('div', 'veil', root);
+  let veiled = false;
+  const syncVeil = (): void => {
+    const v = view.drawn === false;
+    if (v !== veiled) cls(veil, 'on', (veiled = v));
+  };
   const rot = h('div', 'rot', root);
   icon('rotate', '', rot);
   h('b', '', rot, 'Rotate your phone');
   h('span', '', rot, 'Cold Signal is played in landscape.');
   // paint order, bottom to top
-  for (const e of [hud.el, touch?.el, title.el, opening.el, menu.el, inv.el, end.el, loading.el, rot]) if (e) root.appendChild(e);
+  for (const e of [hud.el, touch?.el, veil, title.el, opening.el, menu.el, inv.el, end.el, loading.el, rot]) if (e) root.appendChild(e);
 
   // ---------------------------------------------------------------- modes
   let mode: Mode | '' = '';
@@ -85,6 +93,7 @@ export function createUI(game: UiGame): UiApi {
     const prev = mode;
     mode = m;
     modeAt = performance.now();
+    syncVeil(); // (before the loading screen starts to go)
     if (m === 'play' || m === 'boot' || m === 'photo') nav.open(null);
     loading.show(m === 'boot');
     hud.show(m === 'play' && !opening.active());
@@ -150,6 +159,7 @@ export function createUI(game: UiGame): UiApi {
   return {
     update(dt) {
       if (view.mode !== mode) applyMode(view.mode);
+      syncVeil();
       // the opening of a new game covers the screen; the HUD and the touch controls come up after it
       const wasOpening = opening.active();
       opening.update();
