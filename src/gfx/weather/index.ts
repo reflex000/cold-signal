@@ -107,6 +107,9 @@ export function createWeatherSystem(engine: Engine, world: World | null = null):
   let whiteout = 0;
   let visibility = 4000;
   let snowClock = 0;
+  /** 0 outdoors .. 1 with the eye inside a roofed room (fuselage, cabin, hut, shed): the falling-snow
+   *  layers wrap around the camera, so indoors they would drift through the room itself. */
+  let indoorK = 0;
   const lastCam = new THREE.Vector3(NaN, 0, 0);
   const camVel = new THREE.Vector3();
   const right = new THREE.Vector3();
@@ -205,9 +208,15 @@ export function createWeatherSystem(engine: Engine, world: World | null = null):
     SNOWU.sheets.value = smooth(0.2, 0.7, storm) * (0.65 + 0.35 * gust);
     SNOWU.sheetShift.value = (SNOWU.sheetShift.value + speed * 0.9 * dt) % 24;
     const count = quality.snowParticles;
-    close.setCount(Math.min(close.max, count * 0.5) * Math.min(1, snowfall * 1.15));
-    near.setCount(Math.min(near.max, count) * Math.min(1, snowfall * 1.15));
-    mid.setCount(Math.min(mid.max, count * 0.5) * Math.min(1, snowfall * 1.15));
+    const indoorTarget = world ? (world.shelterAt(cam.x, cam.y, cam.z, env.windX, env.windZ).indoor ? 1 : 0) : 0;
+    // stepping inside clears the room at once (flakes outside stay hidden behind the walls); stepping
+    // out lets the snowfall close in over ~0.3 s
+    if (indoorTarget > indoorK || dt <= 0) indoorK = indoorTarget;
+    else indoorK += (indoorTarget - indoorK) * (1 - Math.exp(-dt * 4));
+    const outdoors = 1 - indoorK;
+    close.setCount(Math.min(close.max, count * 0.5) * Math.min(1, snowfall * 1.15) * outdoors);
+    near.setCount(Math.min(near.max, count) * Math.min(1, snowfall * 1.15) * outdoors);
+    mid.setCount(Math.min(mid.max, count * 0.5) * Math.min(1, snowfall * 1.15) * (1 - 0.75 * indoorK));
     const wx = env.windX * (1 + 0.65 * gust) * dt, wz = env.windZ * (1 + 0.65 * gust) * dt;
     close.advance(wx, wz);
     near.advance(wx, wz);
