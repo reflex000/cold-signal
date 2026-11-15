@@ -8,13 +8,21 @@
 //              down. One carrier drags it (move.ts reads p.carry), two carry it at a walk (p.carryPair).
 //              The log follows its carriers and keeps its length between them; carriers who pull more
 //              than 2 m apart lose it. Set down within 1.5 m of a fire, it goes on the fire (12 min).
-// Owner: SURVIVAL.
+//   branches   the dead lower branches of any pine, fir or snag (static world.trees, not entities) snap
+//              off by hand: 'gather' (sent by the client once USE is held on a trunk in focus) starts a
+//              hold of USE (PlayerAct 'use', GATHER_TIME); facing the trunk within GATHER_REACH of its bark
+//              to the end gives sticks (GATHER_LIVE, a snag 3 or 4). Each tree gives once: it joins
+//              SimState.gathered and 'gathered' tells every client. What the pack cannot hold falls at
+//              the foot of the tree.
+// Owner: SURVIVAL (branches: the gathering fix).
 import { clamp } from '../../core/math';
+import { hash01 } from '../../core/rng';
+import type { TreeInst, World } from '../../world/types';
 import type { SimCtx, System } from '../api';
-import { makeWood } from '../entities';
+import { makeWood, packRoom } from '../entities';
 import { BTN, type FireEnt, type LogEnt, type PlayerEnt, type WoodEnt } from '../types';
 import { feedFire } from './fire';
-import { canReach, eyeHeight, focusOf, spawnPickup, toast } from './items';
+import { canReach, eyeHeight, focusOf, fullText, spawnPickup, takeItem, toast } from './items';
 import { canEquip } from './players';
 
 /** Seconds one swing of the axe takes, and when in it the blade lands. */
@@ -337,6 +345,163 @@ function follow(ctx: SimCtx, l: LogEnt): void {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Dead branches off a standing tree
+// ---------------------------------------------------------------------------------------------
+
+/** Seconds USE is held at a trunk to snap off its dead lower branches. */
+export const GATHER_TIME = 1;
+/** Metres from the body to a trunk's bark within which its lower branches are in reach. */
+export const GATHER_REACH = 2;
+/** The client picked from a view up to ~100 ms old and the player kept moving: a little allowance. */
+const GATHER_SLACK = 0.5;
+/** The band of trunk, metres above its foot, where the dead lower branches grow (what the eye aims at). */
+export const BRANCH_LOW = 0.25;
+export const BRANCH_HIGH = 2.4;
+/** Sticks a living pine or fir gives; a dead standing one (a snag) gives GATHER_SNAG or one more. */
+export const GATHER_LIVE = 2;
+export const GATHER_SNAG = 3;
+/**
+ * Ticks the host waits for the held USE that came with the request: actions are applied on arrival,
+ * commands one per tick from a queue a few deep (net/host.ts MAX_BACKLOG 5).
+ */
+const GATHER_WAIT = 10;
+const GATHER_KEY = 'wood.gather.'; // + player id -> the tree index being stripped
+const GATHER_WAIT_KEY = 'wood.gatherWait.'; // + player id -> ticks waited for USE (gone once it is held)
+
+/** A conifer whose dead lower branches snap off by hand (not a sapling). */
+export function hasBranches(t: TreeInst): boolean {
+  return t.kind === 'pine' || t.kind === 'fir' || t.kind === 'snag';
+}
+
+/** Trunk radius at the foot, metres: the world's collider, else world/scatter.ts's rule for the kind. */
+export function trunkRadius(t: TreeInst): number {
+  if (typeof t.r === 'number' && t.r > 0) return t.r;
+  return t.kind === 'snag' ? 0.1 + 0.14 * t.scale : t.kind === 'sapling' ? 0.04 : 0.12 + 0.2 * t.scale;
+}
+
+/** Sticks tree `i` gives: two from a living tree, three or four (by the tree) from a snag. */
+export function treeSticks(world: World, i: number): number {
+  const t = world.trees[i];
+  if (!t || !hasBranches(t)) return 0;
+  return t.kind === 'snag' ? GATHER_SNAG + (hash01(world.seed * 7 + 977, i, 3) < 0.5 ? 1 : 0) : GATHER_LIVE;
+}
+
+/** Has tree `i` been stripped already. */
+export function isGathered(ctx: SimCtx, i: number): boolean {
+  const g = ctx.state.gathered;
+  return g !== undefined && g.includes(i);
+}
+
+/** The tree an action names, if it is one with branches to snap. */
+function branchTree(ctx: SimCtx, i: unknown): TreeInst | undefined {
+  if (typeof i !== 'number' || !Number.isInteger(i) || i < 0) return undefined;
+  const t = ctx.world.trees[i];
+  return t && hasBranches(t) ? t : undefined;
+}
+
+/**
+ * `p` can reach the lower branches of `t`: within GATHER_REACH of the bark (plus the allowance), the
+ * feet near the height of its foot, and nothing solid (a rock, a wall; lineClear ignores trees) between
+ * the eye and the trunk.
+ */
+function treeInReach(ctx: SimCtx, p: PlayerEnt, t: TreeInst): boolean {
+  const r = trunkRadius(t);
+  const dx = t.x - p.x, dz = t.z - p.z;
+  const d = Math.hypot(dx, dz);
+  if (d - r > GATHER_REACH + GATHER_SLACK) return false;
+  if (p.y < t.y - 2.5 || p.y > t.y + 2.5) return false;
+  const ey = p.y + eyeHeight(p);
+  const k = d > 1e-3 ? Math.max(0, d - r - 0.1) / d : 0;
+  const ty = clamp(ey - 0.4, t.y + BRANCH_LOW + 0.2, t.y + BRANCH_HIGH);
+  return k <= 0 || ctx.world.lineClear(p.x, ey, p.z, p.x + dx * k, ty, p.z + dz * k);
+}
+
+/** Still turned to the trunk, with the crosshair on no other thing (the client sends focus 0 for a tree). */
+function facingTree(ctx: SimCtx, p: PlayerEnt, t: TreeInst): boolean {
+  if (ctx.input(p.id).focus !== 0) return false;
+  const dx = t.x - p.x, dz = t.z - p.z;
+  const d = Math.hypot(dx, dz);
+  if (d < trunkRadius(t) + 0.6) return true;
+  return (dx * -Math.sin(p.yaw) + dz * -Math.cos(p.yaw)) / d > 0.3;
+}
+
+function stopGather(ctx: SimCtx, p: PlayerEnt): void {
+  const vars = ctx.state.vars;
+  delete vars[GATHER_KEY + p.id];
+  delete vars[GATHER_WAIT_KEY + p.id];
+  if (p.act === 'use') {
+    p.act = 'none';
+    p.actT = 0;
+  }
+}
+
+/** Action 'gather': start the hold on tree `i`, or say why not. */
+function startGather(ctx: SimCtx, p: PlayerEnt, i: unknown): void {
+  if (p.life !== 'alive' || p.swim || p.carry !== 0) return;
+  const t = branchTree(ctx, i);
+  if (!t) return;
+  const tree = i as number;
+  if (isGathered(ctx, tree)) {
+    toast(ctx, p, 'info', 'Its dead branches are gone.');
+    return;
+  }
+  if (!treeInReach(ctx, p, t)) return; // (the client offers only trees in reach: a stale view, nothing to tell)
+  if (packRoom(p.inv, 'stick') <= 0) {
+    toast(ctx, p, 'warn', fullText('stick'), 'stick');
+    return;
+  }
+  const vars = ctx.state.vars;
+  const key = GATHER_KEY + p.id;
+  // busy with something else (a swing, a match, a crate, eating): this press does nothing
+  if (p.act !== 'none' && !(p.act === 'use' && vars[key] !== undefined)) return;
+  vars[key] = tree;
+  vars[GATHER_WAIT_KEY + p.id] = 0;
+  p.act = 'use';
+  p.actT = 0;
+}
+
+/** The branches come away: sticks into the pack (the rest at the foot of the tree), the tree is spent. */
+function snapBranches(ctx: SimCtx, p: PlayerEnt, tree: number, t: TreeInst): void {
+  const n = treeSticks(ctx.world, tree);
+  (ctx.state.gathered ??= []).push(tree);
+  ctx.emit({ t: 'gathered', by: p.id, tree });
+  const k = takeItem(ctx, p, 'stick', n);
+  if (k >= n) return;
+  let ax = p.x - t.x, az = p.z - t.z;
+  const al = Math.hypot(ax, az) || 1;
+  ax /= al;
+  az /= al;
+  const r = trunkRadius(t) + 0.55;
+  spawnPickup(ctx, 'stick', n - k, t.x + ax * r - az * 0.3, t.z + az * r + ax * 0.3, Math.max(p.y, t.y), Math.atan2(ax, az) + 1.2);
+  toast(ctx, p, 'warn', 'Your pack is full. The rest is on the ground.');
+}
+
+/** A hold under way: keeps going while USE is held, facing the trunk, in reach; done after GATHER_TIME. */
+function gathering(ctx: SimCtx, p: PlayerEnt): void {
+  const vars = ctx.state.vars;
+  const tree = vars[GATHER_KEY + p.id];
+  if (tree === undefined) return;
+  const t = branchTree(ctx, tree);
+  if (!t || p.life !== 'alive' || p.swim || p.carry !== 0 || p.act !== 'use' || isGathered(ctx, tree) || !treeInReach(ctx, p, t) || !facingTree(ctx, p, t)) {
+    stopGather(ctx, p);
+    return;
+  }
+  const waitKey = GATHER_WAIT_KEY + p.id;
+  if (!ctx.held(p.id, BTN.USE)) {
+    // let go (or the USE that came with the request is still on its way)
+    const w = vars[waitKey];
+    if (w === undefined || w >= GATHER_WAIT) stopGather(ctx, p);
+    else vars[waitKey] = w + 1;
+    return;
+  }
+  if (vars[waitKey] !== undefined) delete vars[waitKey];
+  p.actT += ctx.dt;
+  if (p.actT < GATHER_TIME - 1e-6) return;
+  stopGather(ctx, p);
+  snapBranches(ctx, p, tree, t);
+}
+
+// ---------------------------------------------------------------------------------------------
 // The system
 // ---------------------------------------------------------------------------------------------
 
@@ -348,6 +513,7 @@ export const wood: System = {
     for (let i = 0; i < list.length; i++) {
       const p = list[i];
       axe(ctx, p);
+      gathering(ctx, p);
       if (p.life !== 'alive' || !ctx.pressed(p.id, BTN.USE)) continue;
       const l = focusOf(ctx, p, 'log');
       if (!l || !canReach(ctx, p, l)) continue;
@@ -373,11 +539,17 @@ export const wood: System = {
       }
       return true;
     }
+    if (a.t === 'gather') {
+      startGather(ctx, p, (a as { tree?: unknown }).tree);
+      return true;
+    }
     return false;
   },
 
   leave(ctx, p) {
     const l = p.carry ? ctx.get(p.carry) : undefined;
     if (l && l.kind === 'log') letGo(ctx, l, p, p.id);
+    delete ctx.state.vars[GATHER_KEY + p.id];
+    delete ctx.state.vars[GATHER_WAIT_KEY + p.id];
   },
 };

@@ -29,6 +29,8 @@ export interface TreeInst {
   variant: number; // 0..7 mesh variant
   kind: 'pine' | 'fir' | 'snag' | 'sapling';
   snow: number; // 0..1 snow load
+  /** Trunk radius at the foot, metres (the tree's collider; 0 for a sapling). (Optional member: the generated world always sets it.) */
+  r?: number;
 }
 
 export interface RockInst {

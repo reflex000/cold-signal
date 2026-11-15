@@ -43,7 +43,7 @@ Keyboard and mouse (click the game to capture the mouse):
 | Shift | Sprint |
 | Space | Jump |
 | Ctrl or C | Crouch |
-| E | Use what you look at (take, open, light, feed, revive, install, crank). Hold for long actions |
+| E | Use what you look at (take, open, light, feed, revive, install, crank). Hold for long actions, such as snapping the dead branches off a tree trunk for sticks |
 | Left button | Swing the axe, fire, crank the radio |
 | Right button | Aim the rifle, raise the flashlight or the radio |
 | R | Reload (rifle, flare gun, flashlight cell) |
@@ -63,7 +63,7 @@ Gamepad (standard mapping):
 | Right stick | Look |
 | A | Jump |
 | B | Crouch |
-| X | Use. Hold for long actions |
+| X | Use. Hold for long actions (dead branches off a tree trunk) |
 | Y | Reload |
 | RT | Swing, fire, crank |
 | LT | Aim, raise the light |
@@ -74,7 +74,8 @@ Gamepad (standard mapping):
 
 Touch (phones and tablets, in landscape): the left thumb moves (the stick appears where you touch),
 a drag on the right side looks. The large button swings, fires and cranks (drag on it to keep
-looking), the sight button aims, the hand uses what you look at (hold for long actions), the arrows
+looking), the sight button aims, the hand uses what you look at (hold for long actions, such as
+snapping the dead branches off a tree trunk), the arrows
 jump, crouch and lock sprint, the tool ring changes tools, the small button reloads or switches the
 flashlight, and the pack button opens the pack, where a fire is laid.
 

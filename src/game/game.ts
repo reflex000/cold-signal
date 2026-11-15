@@ -28,7 +28,7 @@ import { Host } from '../net/host';
 import { createLoopback, type Loopback } from '../net/loopback';
 import { copyInput, neutralInput } from '../sim/entities';
 import { Sim } from '../sim/sim';
-import { DT, type Action, type InputCmd, type SimEvent, type ToolId } from '../sim/types';
+import { BTN, DT, type Action, type InputCmd, type SimEvent, type ToolId } from '../sim/types';
 import { TOOL_ORDER } from '../ui/text';
 import { createUI } from '../ui/index';
 import { OPENING_FADE, OPENING_SECONDS, OPENING_SKIP_AFTER } from '../ui/opening';
@@ -617,12 +617,14 @@ export class Game {
   /** One host tick: sample the input (or let the autopilot play), send it, run the bots, step the host. */
   private tick(): void {
     const s = this.session!;
-    if (this.auto && this.view.me) this.autoTick();
+    const manual = !(this.auto && this.view.me);
+    if (!manual) this.autoTick();
     else {
       this.input.sample(this.cmd);
       this.cmd.focus = this.focus.id;
     }
     s.sendInput(this.cmd);
+    if (manual) this.askGather();
     this.pump();
     this.bots.tick(DT);
     const t0 = performance.now();
@@ -631,6 +633,25 @@ export class Game {
     this.tickMs += (ms - this.tickMs) * 0.05;
     this.ticks++;
     this.fresh = false;
+  }
+
+  /** The tree a 'gather' went out for during this hold of USE (-1: none yet). */
+  private gatherAsked = -1;
+
+  /**
+   * USE held on a tree trunk in focus (E, the touch hand, the pad's X: all the same bit): ask the host to
+   * snap off its dead branches, once per tree per hold. The host times the hold itself (wood.ts) and ends
+   * it when USE is let go; the ring follows its progress (focus.ts describeTree).
+   */
+  private askGather(): void {
+    if ((this.cmd.b & BTN.USE) === 0) {
+      this.gatherAsked = -1;
+      return;
+    }
+    const f = this.focus.focus;
+    if (!f || f.kind !== 'tree' || f.tree === undefined || f.tree === this.gatherAsked) return;
+    this.gatherAsked = f.tree;
+    this.actions.act({ t: 'gather', tree: f.tree });
   }
 
   /** Advance everything by dt seconds of real time; render when asked. */

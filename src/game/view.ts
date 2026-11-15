@@ -21,13 +21,17 @@ export interface Camera {
 }
 
 export interface Focus {
+  /** The entity in focus; 0 for a tree (trees are static world instances, not entities). */
   id: NetId;
-  kind: EntityKind;
-  verb: string; // 'Take', 'Open', 'Feed fire', 'Light', 'Revive', 'Crank', 'Install', 'Chop', 'Lift'
+  /** 'tree': the trunk of a conifer whose dead branches can be snapped off (see `tree`). */
+  kind: EntityKind | 'tree';
+  verb: string; // 'Take', 'Open', 'Feed fire', 'Light', 'Revive', 'Crank', 'Install', 'Chop', 'Lift', 'Snap dead branches'
   name: string; // 'Dry sticks', 'Campfire', ...
   hold: number | null; // 0..1 progress when the action is a hold, else null
   key: string; // 'E'
   note?: string; // 'needs matches'
+  /** With kind 'tree': its index in world.trees. (Optional member added for the branch gathering.) */
+  tree?: number;
 }
 
 export interface Hud {
@@ -92,6 +96,11 @@ export interface View {
   /** Cached per-kind lists, rebuilt when the entity set changes. */
   list<K extends EntityKind>(kind: K): ViewEnt<Extract<Entity, { kind: K }>>[];
   ice: Map<number, IceCell>;
+  /**
+   * Trees (indices into world.trees) whose dead branches have been snapped off (SimState.gathered as the
+   * client session follows it). Absent means none. (Optional member added for the branch gathering.)
+   */
+  gathered?: ReadonlySet<number>;
   camera: Camera;
   hud: Hud;
   /** Local-only feel values for the first-person rig: 0..1 walk cycle phase, sway, recoil. */

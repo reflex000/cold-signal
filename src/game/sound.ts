@@ -83,6 +83,15 @@ export class SoundDirector {
       case 'chopped':
         this.sfx('wood_split', pos(ev.x, ev.y, ev.z));
         break;
+      case 'gathered': {
+        // dead branches snapped off a trunk (the sticks going into the pack are the 'pickup' after it)
+        const t = this.world.trees[ev.tree];
+        if (!t) break;
+        const at = pos(t.x, t.y + 1.3, t.z);
+        this.sfx('wood_split', at, 0.55);
+        this.sfx('branch_snow', at, 0.35, 0.08);
+        break;
+      }
       case 'shot':
         this.sfx('rifle_shot', ev.by === me ? undefined : pos(ev.x, ev.y, ev.z));
         if (ev.hit === 'ground') this.sfx('bullet_snow', pos(ev.hx, ev.hy, ev.hz), 1, 0.05);

@@ -83,6 +83,21 @@ export class ImpactFx {
         this.burst('snow', ev.x, ev.y + 1.5, ev.z, 0, 0, 0, 1.2);
         break;
       }
+      case 'gathered': {
+        // dead branches snapped off a trunk: twigs and bark on the side of the one who broke them, and
+        // the snow the shaken branches let go
+        const t = ctx.world.trees[ev.tree];
+        if (!t || !near(t.x, t.z, 50)) break;
+        const p = view.ents.get(ev.by);
+        let dx = p ? p.x - t.x : 0, dz = p ? p.z - t.z : 1;
+        const l = Math.hypot(dx, dz) || 1;
+        dx /= l;
+        dz /= l;
+        const r = (t.r ?? 0.3) + 0.05;
+        this.burst('chips', t.x + dx * r, t.y + 1.3, t.z + dz * r, dx, 0.2, dz, 0.45);
+        this.burst('snow', t.x + dx * r, t.y + 2.1, t.z + dz * r, 0, 0, 0, 0.5);
+        break;
+      }
       case 'iceBreak': {
         const y = ctx.world.lake ? ctx.world.lake.level : ctx.ground(ev.x, ev.z);
         this.burst('splash', ev.x, y, ev.z, 0, 0, 0, 1.4);

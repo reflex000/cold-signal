@@ -363,7 +363,11 @@ export function createInventory(ctx: Ctx, nav: Nav): InventoryApi {
     cls(fShelter.r, 'ok', sh >= 0.6);
     cls(fShelter.r, 'short', sh < 0.3 && wind > 4);
     let note: string;
-    if (sticks < 3) note = count(me, 'axe') > 0 ? 'Sticks lie under the trees, and the axe makes more from dead wood. Three lay a fire.' : 'Sticks lie under the trees. Three lay a fire.';
+    if (sticks < 3) {
+      // (the dead lower branches of any conifer snap off by hand: a hold of use at the trunk, sim/systems/wood.ts)
+      const key = ctx.device === 'pad' ? 'X' : ctx.device === 'touch' ? 'the hand' : 'E';
+      note = `Dead branches snap off any pine or fir: hold ${key} at the trunk. Sticks lie under the trees too${count(me, 'axe') > 0 ? ', and the axe makes more from dead wood' : ''}. Three lay a fire.`;
+    }
     else if (matches <= 0) note = 'No matches. A fire that still has embers relights without one.';
     else if (sh < 0.3 && wind > 4) note = 'The wind will likely take the match. Lay it in the lee of a rock, a wall or the trees.';
     else if (tinder > 0) note = 'Lay it, then strike a match. With tinder it will almost surely catch.';

@@ -19,6 +19,7 @@ import type { Camera, GameBus, Hud, Mode, Settings, View, ViewEnt } from './view
 const EMPTY_LIST: never[] = [];
 const NO_ENTS = new Map<NetId, ViewEnt>();
 const NO_ICE = new Map<number, IceCell>();
+const NO_TREES: ReadonlySet<number> = new Set<number>();
 
 export class ViewImpl implements View {
   readonly world: World;
@@ -34,6 +35,8 @@ export class ViewImpl implements View {
   myId: NetId = 0;
   ents: Map<NetId, ViewEnt> = NO_ENTS;
   ice: Map<number, IceCell> = NO_ICE;
+  /** Trees stripped of their dead branches (the session's set). */
+  gathered: ReadonlySet<number> = NO_TREES;
   readonly camera: Camera = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0, fov: 75, third: 0 };
   readonly hud: Hud = makeHud();
   readonly rig = { bob: 0, stride: 0, speed: 0, recoil: 0, sway: 0, breath: 0, shiver: 0, landing: 0 };
@@ -75,6 +78,7 @@ export class ViewImpl implements View {
       this.myId = 0;
       this.ents = NO_ENTS;
       this.ice = NO_ICE;
+      this.gathered = NO_TREES;
       return;
     }
     this.env = s.env;
@@ -82,6 +86,7 @@ export class ViewImpl implements View {
     this.stats = s.stats;
     this.ents = s.ents;
     this.ice = s.ice;
+    this.gathered = s.gathered;
     this.myId = s.myId;
     this.me = s.me;
   }

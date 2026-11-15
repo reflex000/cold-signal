@@ -21,18 +21,20 @@
 //   lead      (autopilot) warm up at a fire or build one when cold, sit out a whiteout at a fire, then the
 //             next radio part in route order, picking up useful things it passes
 //   follow    (companion) build and feed a fire when the group stops in the cold; hand over what the leader
-//             lacks (radio parts always: the leader goes where they are needed); gather sticks and chop dead
-//             wood while the group is camped; keep a slot beside the leader: closer in bad weather (inside
+//             lacks (radio parts always: the leader goes where they are needed); gather sticks (picked up, or
+//             the dead branches of a pine or fir snapped off: Action 'gather', wood.ts) and chop dead wood
+//             while the group is camped; keep a slot beside the leader: closer in bad weather (inside
 //             huddle range), never onto thin ice or off a cliff
 // Movement goes through botnav.ts (trail, local A*, hazard checks). Simple, readable rules; no cheats:
 // a mind reads the state (as any client does) and its body obeys the same simulation as everyone's.
 // Owner: TOGETHER (first version: GAME).
 import { wrapAngle } from '../core/math';
 import type { Host } from '../net/host';
-import { neutralInput } from '../sim/entities';
+import { CARRY_LIMIT, neutralInput } from '../sim/entities';
 import { EYE_STAND } from '../sim/move';
 import { padOf, PARTS, PART_ITEM } from '../sim/systems/objective';
 import { REVIVE_RANGE } from '../sim/systems/vitals';
+import { hasBranches, trunkRadius } from '../sim/systems/wood';
 import { BTN, type Action, type DeviceEnt, type Entity, type FireEnt, type InputCmd, type ItemId, type LogEnt, type NetId, type PickupEnt, type PlayerEnt, type ToolId, type WolfEnt } from '../sim/types';
 import type { WorldEx } from '../world/index';
 import { canWork, iceRisk, Planner, SimReader, steer, Walker, type Reader, type Steer } from './botnav';
@@ -669,8 +671,12 @@ export class Mind {
       this.buildFailT = this.t;
       return false;
     }
-    // no sticks: fetch some (further afield if need be), or cut them from dead wood with the axe
-    return this.fetch(r, pl, p, 'stick', 40, dt) || this.chop(r, pl, p, p.x, p.z, 30, dt) || this.fetch(r, pl, p, 'stick', 120, dt) || this.chop(r, pl, p, p.x, p.z, 70, dt);
+    // no sticks: pick up some close by, snap the dead branches off a tree near, fetch them from further
+    // afield, or cut them from dead wood with the axe
+    return (
+      this.fetch(r, pl, p, 'stick', 12, dt) || this.snap(r, pl, p, p.x, p.z, 20, dt) || this.fetch(r, pl, p, 'stick', 40, dt) ||
+      this.chop(r, pl, p, p.x, p.z, 30, dt) || this.fetch(r, pl, p, 'stick', 120, dt) || this.chop(r, pl, p, p.x, p.z, 70, dt)
+    );
   }
 
   private buildFailT = -1e9;
@@ -756,6 +762,73 @@ export class Mind {
     return false;
   }
 
+  /**
+   * Snap the dead branches off the nearest unstripped pine, fir or snag within `within` m of (x, z), as a
+   * person does: walk up to the trunk, face it, ask (Action 'gather') and hold USE while the host times
+   * it. True while busy; false when there is no such tree (or the pack has no room for sticks).
+   */
+  private snap(r: Reader, pl: Planner, p: PlayerEnt, x: number, z: number, within: number, dt: number): boolean {
+    if (p.carry || has(p, 'stick') >= CARRY_LIMIT.stick - 1) return false;
+    const w = r.world;
+    let i = this.snapTree;
+    // the tree picked before, if it is still unstripped and still near where this asks about
+    if (i >= 0 && (r.gathered(i) || this.skipped('tr' + i) || Math.hypot(w.trees[i].x - x, w.trees[i].z - z) > within + 2)) i = -1;
+    if (i < 0) {
+      const near = this.treeScratch;
+      near.length = 0;
+      w.treesIn(x - within, z - within, x + within, z + within, near);
+      let bd = within;
+      for (let k = 0; k < near.length; k++) {
+        const t = w.trees[near[k]];
+        if (!hasBranches(t) || r.gathered(near[k]) || this.skipped('tr' + near[k]) || iceRisk(r, t.x, t.z) > 0) continue;
+        const d = Math.hypot(t.x - x, t.z - z);
+        if (d < bd) {
+          bd = d;
+          i = near[k];
+        }
+      }
+    }
+    this.snapTree = i;
+    if (i < 0) return false;
+    const t = w.trees[i];
+    const tr = trunkRadius(t);
+    const key = 'tr' + i;
+    this.doing = 'snap branches';
+    // a spot by the trunk, with nothing in between, the feet near its foot
+    const by = (sx: number, sz: number): boolean => {
+      const d = Math.hypot(sx - t.x, sz - t.z) - tr;
+      if (d < 0.3 || d > 1.3) return false;
+      const gy = w.groundAt(sx, sz, t.y + 1).y;
+      return Math.abs(gy - t.y) < 1.5 && w.lineClear(sx, gy + EYE_STAND, sz, t.x, t.y + 1.2, t.z);
+    };
+    if (Math.hypot(p.x - t.x, p.z - t.z) - tr > 1.5 || Math.abs(p.y - t.y) > 2) {
+      this.go(r, pl, p, t.x, t.z, tr + 1.3, dt, false, by);
+      if (this.giveUp(key)) {
+        this.skip.set(key, this.t + 300);
+        this.snapTree = -1;
+      }
+      return true;
+    }
+    this.look(p, t.x, t.y + 1.2, t.z);
+    if (Math.abs(wrapAngle(this.yaw - this.cmd.yaw)) < 0.3) {
+      // turned to it: ask, then hold on (the host lets go of a hold whose USE stops)
+      if (p.act === 'none') this.act({ t: 'gather', tree: i }, 'gather', 1.5);
+      this.hold(BTN.USE);
+    }
+    if (this.giveUp(key)) {
+      this.skip.set(key, this.t + 300);
+      this.snapTree = -1;
+    }
+    return true;
+  }
+
+  private snapTree = -1;
+  private readonly treeScratch: number[] = [];
+  private skipped(key: string): boolean {
+    const until = this.skip.get(key);
+    return until !== undefined && this.t < until;
+  }
+
   /** Chop the nearest dead wood near (x, z) with the axe (USE on it chops). True while busy. */
   private chop(r: Reader, pl: Planner, p: PlayerEnt, x: number, z: number, within: number, dt: number): boolean {
     if (has(p, 'axe') === 0 || p.stamina < 0.2) return false;
@@ -826,6 +899,7 @@ export class Mind {
       if (lit && lit.fuel > 240 && p.core > 35.6 && env.storm < 0.8 && has(p, 'stick') < 6) {
         const pk = this.pickupNear(r, pl, lit.x, lit.z, 'stick', 14);
         if (pk && this.take(r, pl, p, pk, dt)) return;
+        if (!pk && this.snap(r, pl, p, lit.x, lit.z, 10, dt)) return;
       }
       if (this.warmAt(r, pl, p, p.x, p.z, dt, 40)) return;
       // no fire can be made here: back to the nearest one burning (the camp we left), however far
@@ -836,8 +910,10 @@ export class Mind {
     // 2. keep the fire-making kit: sticks
     // (further afield while the sky darkens: the next fire may have to be made in a whiteout)
     if (has(p, 'stick') < 6 && this.fetch(r, pl, p, 'stick', env.storm > 0.45 || has(p, 'stick') < 3 ? 25 : 12, dt)) return;
+    // a pine or fir right by the way gives its dead branches in a second
+    if (has(p, 'stick') < 6 && this.snap(r, pl, p, p.x, p.z, 4, dt)) return;
     // with fewer than a fire's worth, a detour is worth it: a whiteout without a fire is how people die up here
-    if (has(p, 'stick') < 3 && r.objective().stage !== 'holdout' && (this.fetch(r, pl, p, 'stick', 60, dt) || this.chop(r, pl, p, p.x, p.z, 30, dt))) return;
+    if (has(p, 'stick') < 3 && r.objective().stage !== 'holdout' && (this.fetch(r, pl, p, 'stick', 60, dt) || this.snap(r, pl, p, p.x, p.z, 25, dt) || this.chop(r, pl, p, p.x, p.z, 30, dt))) return;
 
     // 3. useful things on the way
     if (this.scavenge(r, pl, p, 9, dt)) return;
@@ -905,7 +981,7 @@ export class Mind {
         }
         // the fire is going: gather wood near it while warm enough, else warm up beside it
         if (p.core > 35.8 && dist(L, p) < 25) {
-          if (has(p, 'stick') < 8 && this.fetch(r, pl, p, 'stick', 16, dt)) return;
+          if (has(p, 'stick') < 8 && (this.fetch(r, pl, p, 'stick', 16, dt) || this.snap(r, pl, p, lit.x, lit.z, 16, dt))) return;
           if (has(p, 'log') < 2 && this.chop(r, pl, p, lit.x, lit.z, 18, dt)) return;
         }
         this.doing = 'warm by the fire';
@@ -923,7 +999,7 @@ export class Mind {
         const d = Math.max(0.5, dist(L, p));
         const ux = (p.x - L.x) / d, uz = (p.z - L.z) / d;
         if (this.build(r, pl, p, L.x + ux * 1.5, L.z + uz * 1.5, dt)) return;
-      } else if (has(p, 'stick') < 3 && this.fetch(r, pl, p, 'stick', 20, dt)) return;
+      } else if (has(p, 'stick') < 3 && (this.fetch(r, pl, p, 'stick', 20, dt) || this.snap(r, pl, p, L.x, L.z, 15, dt))) return;
     } else {
       this.buildTries = 0;
       this.buildSpot = null;
@@ -934,7 +1010,7 @@ export class Mind {
 
     // gather on the way: sticks when short, supplies close by, while the leader is near
     if (dist(L, p) < 14 && !(L.life === 'downed')) {
-      if (has(p, 'stick') < 6 && this.fetch(r, pl, p, 'stick', 8, dt)) return;
+      if (has(p, 'stick') < 6 && (this.fetch(r, pl, p, 'stick', 8, dt) || this.snap(r, pl, p, p.x, p.z, 4, dt))) return;
       if (this.scavenge(r, pl, p, 6, dt)) return;
     }
 

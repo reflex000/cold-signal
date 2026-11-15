@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { makeLog, makePickup, makeWolf } from '../sim/entities';
 import { Sim } from '../sim/sim';
 import { cmd, jsonIssues, scriptCmd } from '../sim/testkit';
-import { createTestWorld } from '../sim/testworld';
+import { createTestWorld, TEST_TREE } from '../sim/testworld';
 import { cost, LONG_TEST_MS } from '../sim/timing';
-import { DT, DYNAMIC_KINDS, type InputCmd, type PlayerEnt, type SimEvent } from '../sim/types';
+import { BTN, DT, DYNAMIC_KINDS, type InputCmd, type PlayerEnt, type SimEvent } from '../sim/types';
 import { ClientSession, INTERP_DELAY } from './client';
 import { Host } from './host';
 import { createLoopback } from './loopback';
@@ -386,6 +386,22 @@ describe('host and client', () => {
     r.sim.state.ice.length = 0;
     for (let i = 0; i < 5; i++) r.tick();
     expect(r.client.ice.size).toBe(0);
+  });
+
+  it('tells clients which trees are stripped of their dead branches: the welcome, then each gathered event', () => {
+    const r = rig({ wire: 'json' });
+    r.client.sendAction({ t: 'debug', cmd: 'tp', args: [TEST_TREE.x - 1.2, TEST_TREE.z] });
+    for (let i = 0; i < 3; i++) r.tick({ yaw: EAST });
+    expect(r.client.gathered.size).toBe(0);
+    r.client.sendAction({ t: 'gather', tree: 0 });
+    for (let i = 0; i < 40; i++) r.tick({ yaw: EAST, b: BTN.USE });
+    expect(r.sim.state.gathered).toEqual([0]);
+    expect(hostPlayer(r).inv.stick).toBe(2);
+    expect(r.client.gathered.has(0)).toBe(true);
+    expect(r.clientEvents).toContainEqual({ t: 'gathered', by: r.client.myId, tree: 0 });
+    // someone joining later (here: the game continued from a save) has it from the welcome
+    const r2 = rig({ wire: 'json' }, Sim.fromState(world, r.sim.serialize(), { seed: 0, debug: true }));
+    expect([...r2.client.gathered]).toEqual([0]);
   });
 
   it('interpolates the environment between snapshots', () => {

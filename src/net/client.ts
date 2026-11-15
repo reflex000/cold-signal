@@ -136,6 +136,12 @@ export class ClientSession {
   readonly objective: Objective = makeObjective();
   readonly ice = new Map<number, IceCell>();
   readonly stats: Stats = makeStats();
+  /**
+   * Trees (indices into world.trees) whose dead branches are gone: SimState.gathered from the welcome,
+   * then every 'gathered' event as it arrives (not at its presentation time, so a stripped tree is never
+   * offered again in between).
+   */
+  readonly gathered = new Set<number>();
   /** Bumped whenever an entity appears in or leaves `ents`. */
   version = 0;
   /** Newest snapshot tick received. */
@@ -347,6 +353,7 @@ export class ClientSession {
         this.ice.set(c.i, cell);
       }
     }
+    if (Array.isArray(st.gathered)) for (const i of st.gathered) if (Number.isInteger(i)) this.gathered.add(i);
     this.frames.push({ tick: st.tick, env: st.env, objective: st.objective, stats: undefined, ice: [], events: [], done: true });
     for (const e of st.ents) {
       const tr = this.makeTrack(e, true);
@@ -420,6 +427,7 @@ export class ClientSession {
     const evs = s.events;
     for (let i = 0; i < evs.length; i++) {
       const ev = evs[i];
+      if (ev.t === 'gathered' && Number.isInteger(ev.tree)) this.gathered.add(ev.tree);
       if (this.isMine(ev) && !(predicting && isMoveEvent(ev))) this.push(ev);
     }
 
@@ -682,6 +690,7 @@ export class ClientSession {
     this.ents.clear();
     this.frames = [];
     this.ice.clear();
+    this.gathered.clear();
     this.pending.length = 0;
     this.meTrack = null;
     this.me = null;

@@ -123,6 +123,30 @@ describe('tutorial lines', () => {
     }
   });
 
+  it('sticks: at a tree trunk, snapping off its dead branches, with the key of the device in use', () => {
+    for (const [d, key] of [['kbm', 'E'], ['pad', 'X'], ['touch', 'the hand']] as const) {
+      const { t, f } = tutor(d);
+      t.moved = 10;
+      t.turned = 2;
+      run(t, f, 5);
+      f.focus = { id: 0, kind: 'tree', tree: 12, verb: 'Snap dead branches', name: 'Pine', hold: null, key: '' };
+      expect(run(t, f, 2)).toBe(`Dead branches snap off any pine or fir: hold ${key} at the trunk. Sticks lie under the trees too. Three lay a fire.`);
+      // three sticks in the pack: done for good
+      f.me.inv.stick = 3;
+      f.focus = null;
+      expect(run(t, f, 1)).toBe('');
+      expect(t.isDone('sticks')).toBe(true);
+    }
+    // with the axe it says the axe cuts more too
+    const { t, f } = tutor();
+    t.moved = 10;
+    t.turned = 2;
+    f.me.inv.axe = 1;
+    run(t, f, 5);
+    f.focus = { id: 0, kind: 'tree', tree: 12, verb: 'Snap dead branches', name: 'Fir', hold: null, key: 'E' };
+    expect(run(t, f, 2)).toContain('and the axe cuts more from dead wood');
+  });
+
   it('lay and light a fire: the lines come when a fire would help, and go when it is done', () => {
     const { t, f } = tutor('pad');
     t.moved = 10;

@@ -1,5 +1,6 @@
 // Survive: the survival loop played for real in the game, through the same input path a player uses.
-// Walk into a whiteout and get cold, gather sticks, lay a fire and fail to light it in the wind,
+// Walk into a whiteout and get cold, gather sticks (picked up, and snapped off a pine with a held E: the
+// prompt, the ring, two sticks, the tree never offered again), lay a fire and fail to light it in the wind,
 // light it, warm up, feed it, rest (a checkpoint), chop deadfall with the axe, carry a heavy log with a
 // companion, go down from the cold, get revived by the companion, open a crate, eat. A shot at every
 // beat; the HUD must show it (temperature and stage, the effect chips, the focus prompt, toasts, the
@@ -7,7 +8,7 @@
 //   node tools/play.mjs tools/scenarios/survive.mjs [--backend webgl]
 const USE = 32, PRIMARY = 8;
 
-export default async function ({ ev, step, shot, log, check }) {
+export default async function ({ page, ev, step, shot, log, check }) {
   await step(10);
   // ---------------------------------------------------------------- page-side helpers
   await ev(() => {
@@ -81,6 +82,49 @@ export default async function ({ ev, step, shot, log, check }) {
       const pitch = (Math.atan2(y + h - eye, Math.hypot(x - best.sx, z - best.sz)) * 180) / Math.PI;
       CS.look(yaw, pitch);
       return { ...best, yaw, pitch, cam: c.y };
+    };
+    /**
+     * Stand 1.1 m from the bark of the nearest unstripped pine or fir with level open ground beside it and
+     * no entity near (one would take the focus), facing the trunk at chest height. Returns what it found.
+     */
+    SV.atTree = (from = SV.me()) => {
+      const w = CS.world, gone = CS.view.gathered;
+      const idx = w.treesIn(from.x - 80, from.z - 80, from.x + 80, from.z + 80, []);
+      idx.sort((a, b) => Math.hypot(w.trees[a].x - from.x, w.trees[a].z - from.z) - Math.hypot(w.trees[b].x - from.x, w.trees[b].z - from.z));
+      const busy = (x, z) => {
+        for (const k of ['pickup', 'crate', 'wood', 'log', 'fire', 'device']) for (const e of CS.view.list(k)) if (Math.hypot(e.x - x, e.z - z) < 3) return true;
+        return false;
+      };
+      for (const i of idx) {
+        const t = w.trees[i];
+        if ((t.kind !== 'pine' && t.kind !== 'fir') || gone.has(i) || busy(t.x, t.z)) continue;
+        const r = (t.r || 0.3) + 1.1;
+        for (let k = 0; k < 12; k++) {
+          const a = (k / 12) * Math.PI * 2;
+          const sx = t.x + Math.sin(a) * r, sz = t.z + Math.cos(a) * r;
+          if (!w.walkable(sx, sz)) continue;
+          const gy = w.groundAt(sx, sz, t.y + 1).y;
+          if (Math.abs(gy - t.y) > 0.4 || !w.lineClear(sx, gy + 1.6, sz, t.x, t.y + 1.2, t.z)) continue;
+          // no other trunk between the eye and this one
+          let hidden = false;
+          for (const j of idx) {
+            if (j === i) continue;
+            const o = w.trees[j];
+            if (Math.hypot(o.x - t.x, o.z - t.z) > 4) continue;
+            const ux = t.x - sx, uz = t.z - sz, l = Math.hypot(ux, uz);
+            const along = ((o.x - sx) * ux + (o.z - sz) * uz) / l;
+            if (along > 0 && along < l && Math.abs((o.x - sx) * uz - (o.z - sz) * ux) / l < (o.r || 0.3) + 0.25) hidden = true;
+          }
+          if (hidden) continue;
+          const yaw = (Math.atan2(-(t.x - sx), -(t.z - sz)) * 180) / Math.PI;
+          CS.go(sx, sz, yaw, 0);
+          const me = SV.me();
+          const pitch = (Math.atan2(t.y + 1.2 - (me.y + 1.66), Math.hypot(t.x - me.x, t.z - me.z)) * 180) / Math.PI;
+          CS.look(yaw, pitch);
+          return { i, kind: t.kind, x: t.x, y: t.y, z: t.z, d: Math.round((Math.hypot(t.x - me.x, t.z - me.z) - (t.r || 0)) * 100) / 100 };
+        }
+      }
+      return null;
     };
     SV.bot = 0;
     SV.botSeq = 1;
@@ -194,6 +238,47 @@ export default async function ({ ev, step, shot, log, check }) {
     log(`stick pickup ${t.id}: +${n1 - n0}`);
   }
   check(gathered >= 2, `gathered ${gathered} sticks by hand`);
+
+  // ---------------------------------------------------------------- 2b. dead branches off a standing tree
+  // up close to the trunk of a pine or fir, nothing else in focus: the prompt offers to snap off its dead
+  // branches; holding the real E key a second gives two sticks; the tree is never offered again
+  const tree = await ev(() => window.SV.atTree());
+  check(!!tree, 'found a pine or fir to strip of its dead branches');
+  if (tree) {
+    await step(4);
+    h = await hud();
+    const tf = await ev(() => { const f = window.CS.view.hud.focus; return f ? { kind: f.kind, tree: f.tree, id: f.id } : null; });
+    check(!!tf && tf.kind === 'tree' && tf.tree === tree.i && h.focus.startsWith('Snap dead branches'), `the focus offers "${h.focus}" (tree ${tf ? tf.tree : '-'}, wanted ${tree.i})`);
+    check(h.focusShown, 'the prompt is on screen');
+    const s0 = (await body()).inv.stick ?? 0;
+    await mark();
+    await page.keyboard.down('KeyE');
+    await step(15); // half a second in: the ring fills with the host's progress
+    const ring = await ev(() => window.CS.view.hud.focus?.hold ?? null);
+    check(ring !== null && ring > 0.2 && ring < 0.85, `the focus ring shows the hold (${ring})`);
+    await shot('survive_02b_branches');
+    await step(24);
+    await page.keyboard.up('KeyE');
+    await step(6);
+    const s1 = (await body()).inv.stick ?? 0;
+    const snapped = await since('gathered');
+    h = await hud();
+    log(`dead branches off a ${tree.kind} (tree ${tree.i}, ${tree.d} m from the bark): +${s1 - s0} sticks; toasts`, h.toasts);
+    check(s1 - s0 === 2, `two sticks from a living ${tree.kind} (+${s1 - s0})`);
+    check(snapped.length === 1 && snapped[0].tree === tree.i, 'the host tells the tree is stripped');
+    check(h.toasts.some((t) => t.startsWith('Dry sticks')), 'the pickup toast');
+    const offered = await ev((i) => {
+      const f = window.CS.view.hud.focus;
+      return { focus: f ? `${f.verb} ${f.name}` : '', tree: f ? f.tree : undefined, gone: window.CS.view.gathered.has(i), host: (window.CS.sim.state.gathered || []).includes(i) };
+    }, tree.i);
+    check(offered.gone && offered.host && offered.tree !== tree.i, `the stripped tree is not offered again (focus "${offered.focus}")`);
+    await page.keyboard.down('KeyE');
+    await step(40);
+    await page.keyboard.up('KeyE');
+    await step(3);
+    check(((await body()).inv.stick ?? 0) === s1, 'E held at it again gives nothing');
+  }
+
   await ev(() => {
     const p = window.SV.me();
     // three to lay the fire, three to feed it, three to keep it going while warming up (step 5)

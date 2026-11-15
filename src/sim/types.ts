@@ -62,6 +62,13 @@ export type Action =
   | { t: 'feed'; fire: NetId; item: 'stick' | 'log' | 'tinder' }
   | { t: 'carry'; log: NetId } // take one end of a heavy log (two carriers move at full speed)
   | { t: 'release' } // put the heavy log down
+  /**
+   * Start snapping the dead lower branches off a conifer (`tree` is an index into world.trees: trees are
+   * static world instances, not entities). The host checks reach, sight, the tree and pack room, then
+   * times a hold of USE (PlayerAct 'use'); each tree gives its dead wood once (SimState.gathered).
+   * (Optional member added for the branch gathering.)
+   */
+  | { t: 'gather'; tree: number }
   | { t: 'ping'; x: number; y: number; z: number } // co-op marker
   | { t: 'respawn' } // after death, back to the last checkpoint (solo) or as a spectator-revive
   | { t: 'debug'; cmd: string; args?: number[] }; // dev tools only, ignored unless sim.debug
@@ -306,6 +313,12 @@ export interface SimState {
   /** Small story flags and timers owned by individual systems; keys are 'system.name'. */
   vars: Record<string, number>;
   stats: Stats;
+  /**
+   * Indices into world.trees whose dead lower branches have been snapped off (Action 'gather'), in the
+   * order it happened; absent until the first. Clients read it from the welcome and then follow the
+   * 'gathered' events. (Optional member added for the branch gathering.)
+   */
+  gathered?: number[];
 }
 
 // ------------------------------------------------------------------------------------------
@@ -324,6 +337,8 @@ export type SimEvent =
   | { t: 'equip'; id: NetId; tool: ToolId }
   | { t: 'swing'; by: NetId; hit: 'none' | 'wood' | 'wolf' | 'ground'; x: number; y: number; z: number }
   | { t: 'chopped'; by: NetId; id: NetId; x: number; y: number; z: number }
+  /** The dead branches of world.trees[tree] snapped off (it joins SimState.gathered). (Optional member, branch gathering.) */
+  | { t: 'gathered'; by: NetId; tree: number }
   | { t: 'shot'; by: NetId; x: number; y: number; z: number; dx: number; dy: number; dz: number; hx: number; hy: number; hz: number; hit: 'none' | 'ground' | 'wolf' | 'wood' }
   | { t: 'dry'; by: NetId } | { t: 'reload'; by: NetId }
   | { t: 'flareShot'; by: NetId; id: NetId } | { t: 'flareLand'; id: NetId; x: number; y: number; z: number } | { t: 'flareOut'; id: NetId }

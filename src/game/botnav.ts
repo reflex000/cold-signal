@@ -36,13 +36,29 @@ export interface Reader {
   list<K extends EntityKind>(kind: K): readonly Extract<Entity, { kind: K }>[];
   /** Stressed, broken or refrozen lake cell i, if any. */
   ice(i: number): IceCell | undefined;
+  /** world.trees[i] has had its dead branches snapped off (SimState.gathered). */
+  gathered(i: number): boolean;
 }
 
 /** The authoritative state, read beside the host (companion bots). */
 export class SimReader implements Reader {
+  private gone = new Set<number>();
+  private goneFrom: number[] | undefined = undefined;
+  private goneLen = 0;
   constructor(readonly world: WorldEx, private ctx: SimCtx) {}
   setCtx(ctx: SimCtx): void {
     this.ctx = ctx;
+  }
+  gathered(i: number): boolean {
+    // SimState.gathered only grows: follow it into a set
+    const g = this.ctx.state.gathered;
+    if (g !== this.goneFrom || (g && g.length < this.goneLen)) {
+      this.gone.clear();
+      this.goneFrom = g;
+      this.goneLen = 0;
+    }
+    if (g) for (; this.goneLen < g.length; this.goneLen++) this.gone.add(g[this.goneLen]);
+    return this.gone.has(i);
   }
   env(): Env {
     return this.ctx.state.env;
@@ -75,6 +91,9 @@ export class ViewReader implements Reader {
   }
   list<K extends EntityKind>(kind: K): readonly Extract<Entity, { kind: K }>[] {
     return this.view.list(kind);
+  }
+  gathered(i: number): boolean {
+    return this.view.gathered?.has(i) ?? false;
   }
   ice(i: number): IceCell | undefined {
     return this.view.ice.get(i);

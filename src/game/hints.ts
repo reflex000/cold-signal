@@ -188,10 +188,12 @@ const STEPS: Step[] = [
   },
   {
     id: 'sticks',
-    when: (t, v, me) => (me.inv.stick ?? 0) < 3 && (t.focusIs(v, 'stick') || (t.outside && t.playTime > 75)),
+    when: (t, v, me) => (me.inv.stick ?? 0) < 3 && (t.focusIs(v, 'stick') || v.hud.focus?.kind === 'tree' || (t.outside && t.playTime > 75)),
     done: (_t, _v, me) => (me.inv.stick ?? 0) >= 3,
-    text: (_d, _t, _v, me) =>
-      (me.inv.axe ?? 0) > 0 ? 'Sticks lie under the trees, and the axe cuts more from dead wood. Three lay a fire.' : 'Sticks lie half buried under the trees. Three lay a fire.',
+    // (the dead lower branches of any conifer snap off by hand, sim/systems/wood.ts; E, X and the hand all hold USE)
+    text: (d, _t, _v, me) =>
+      `Dead branches snap off any pine or fir: hold ${KEYS.use[d]} at the trunk. ` +
+      ((me.inv.axe ?? 0) > 0 ? 'Sticks lie under the trees too, and the axe cuts more from dead wood. Three lay a fire.' : 'Sticks lie under the trees too. Three lay a fire.'),
   },
   {
     id: 'build',

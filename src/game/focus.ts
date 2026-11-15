@@ -2,15 +2,22 @@
 // its name, for hud.focus and InputCmd.focus (the host validates the choice). Picked by the
 // distance from the view ray to the thing's centre, so small items are as easy to aim at as
 // crates; walls and terrain in between block it.
+// With no entity in focus, the trunk of a pine, fir or snag the view ray meets within reach (its bark
+// within GATHER_REACH of the body, at the height of its dead lower branches) is offered: E held snaps
+// them off (sim/systems/wood.ts). Trees are world instances, not entities: such a focus has id 0 and
+// the tree's index; game.ts sends the 'gather' action for it. A stripped tree (view.gathered) is not
+// offered again.
 // Owner: GAME.
 import { ITEM, PART_NAME } from '../ui/text';
+import { CARRY_LIMIT } from '../sim/entities';
 import { SWIM_DEPTH } from '../sim/move';
 import { PULL_RANGE, PULL_TIME } from '../sim/systems/ice';
 import { CRATE_HOLD } from '../sim/systems/items';
 import { BED_TIME, DEVICE_AIM, INSTALL_TIME } from '../sim/systems/objective';
 import { REVIVE_RANGE } from '../sim/systems/vitals';
+import { BRANCH_HIGH, BRANCH_LOW, GATHER_REACH, GATHER_TIME, hasBranches, trunkRadius } from '../sim/systems/wood';
 import type { CrateEnt, DeviceEnt, Entity, FireEnt, LogEnt, PickupEnt, PlayerEnt, WoodEnt } from '../sim/types';
-import type { World } from '../world/types';
+import type { TreeInst, World } from '../world/types';
 import type { Camera, Focus, View, ViewEnt } from './view';
 
 /** Metres from the eye. */
@@ -41,6 +48,20 @@ const CRATE_NAME: Record<CrateEnt['type'], string> = {
 };
 const WOOD_NAME: Record<WoodEnt['type'], string> = { snag: 'Dead tree', deadfall: 'Deadfall', stump: 'Stump', branchpile: 'Branch pile' };
 const FIRE_NAME: Record<FireEnt['type'], string> = { campfire: 'Campfire', stove: 'Stove', barrel: 'Barrel fire' };
+const TREE_NAME: Record<TreeInst['kind'], string> = { pine: 'Pine', fir: 'Fir', snag: 'Dead tree', sapling: 'Sapling' };
+export const GATHER_VERB = 'Snap dead branches';
+/** A trunk counts as aimed at within this much of its bark, metres (a forgiving ring round a thin pole). */
+const TRUNK_MARGIN = 0.12;
+
+/** What E does at the trunk of world.trees[i] for `me` (a hold: the host's progress fills the ring). */
+export function describeTree(t: TreeInst, i: number, me: PlayerEnt, keyLabel: string): Focus {
+  const full = (me.inv.stick ?? 0) >= CARRY_LIMIT.stick;
+  return {
+    id: 0, kind: 'tree', tree: i, verb: GATHER_VERB, name: TREE_NAME[t.kind] ?? 'Tree', key: keyLabel,
+    hold: me.act === 'use' ? Math.min(1, me.actT / GATHER_TIME) : null,
+    ...(full ? { note: 'pack full' } : {}),
+  };
+}
 
 function itemName(p: PickupEnt): string {
   const t = ITEM[p.item];
@@ -124,11 +145,58 @@ function describeDevice(d: DeviceEnt, me: PlayerEnt, base: { id: number; kind: E
 const KINDS = ['pickup', 'crate', 'fire', 'wood', 'log', 'device', 'player'] as const;
 
 export class FocusPicker {
-  /** The current pick (also in view.hud.focus), and its id for the next command (0 = none). */
+  /** The current pick (also in view.hud.focus), and its id for the next command (0 = none, or a tree). */
   focus: Focus | null = null;
   id = 0;
+  private readonly near: number[] = [];
 
   constructor(private readonly world: World) {}
+
+  /**
+   * The conifer trunk the view ray (origin o, unit direction d) meets first, within REACH of the eye, at
+   * the height of the dead lower branches, its bark within GATHER_REACH of the body, still unstripped and
+   * in sight (walls and rocks block; lineClear ignores trees). Returns its index or -1.
+   */
+  private pickTree(view: View, me: PlayerEnt, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number): number {
+    const w = this.world;
+    const a = dx * dx + dz * dz;
+    if (a < 1e-4) return -1; // looking straight down or up
+    const near = this.near;
+    near.length = 0;
+    const R = GATHER_REACH + 1;
+    w.treesIn(me.x - R, me.z - R, me.x + R, me.z + R, near);
+    const gone = view.gathered;
+    let best = -1, bestS = Infinity, bx = 0, by = 0, bz = 0;
+    for (let k = 0; k < near.length; k++) {
+      const i = near[k];
+      const t = w.trees[i];
+      if (!hasBranches(t) || (gone !== undefined && gone.has(i))) continue;
+      const r = trunkRadius(t);
+      if (Math.hypot(t.x - me.x, t.z - me.z) - r > GATHER_REACH) continue;
+      // the ray against the trunk as an upright cylinder of radius r + TRUNK_MARGIN
+      const rr = r + TRUNK_MARGIN;
+      const fx = ox - t.x, fz = oz - t.z;
+      const b = fx * dx + fz * dz;
+      const c = fx * fx + fz * fz - rr * rr;
+      let s = 0;
+      if (c > 0) {
+        const disc = b * b - a * c;
+        if (disc < 0) continue;
+        s = (-b - Math.sqrt(disc)) / a;
+        if (s < 0) continue; // behind the eye
+      }
+      if (s > REACH || s >= bestS) continue;
+      const y = oy + dy * s;
+      if (y < t.y + BRANCH_LOW || y > t.y + BRANCH_HIGH) continue;
+      best = i;
+      bestS = s;
+      bx = ox + dx * s;
+      by = y;
+      bz = oz + dz * s;
+    }
+    if (best < 0 || !w.lineClear(ox, oy, oz, bx, by, bz)) return -1;
+    return best;
+  }
 
   update(view: View, cam: Camera, keyLabel: string, enabled: boolean): Focus | null {
     const me = view.me;
@@ -175,7 +243,12 @@ export class FocusPicker {
       const k = d > 1e-3 ? Math.max(0, d - sh.r - 0.15) / d : 0;
       if (k <= 0 || this.world.lineClear(ox, oy, oz, ox + tx * k, oy + ty * k, oz + tz * k)) f = describe(best, me, keyLabel);
     }
-    if (f && this.focus && this.focus.id === f.id && this.focus.verb === f.verb && this.focus.name === f.name && this.focus.note === f.note) {
+    if (!f && !me.swim && me.carry === 0) {
+      // nothing else in focus: a trunk whose dead branches can be snapped off
+      const i = this.pickTree(view, me, ox, oy, oz, dx, dy, dz);
+      if (i >= 0) f = describeTree(this.world.trees[i], i, me, keyLabel);
+    }
+    if (f && this.focus && this.focus.id === f.id && this.focus.kind === f.kind && this.focus.tree === f.tree && this.focus.verb === f.verb && this.focus.name === f.name && this.focus.note === f.note) {
       // same thing: keep the object (the HUD compares by identity) and refresh the progress
       this.focus.hold = f.hold;
       this.focus.key = f.key;

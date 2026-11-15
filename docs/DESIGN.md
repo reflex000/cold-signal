@@ -35,9 +35,11 @@ split logs (3 min) or a heavy log (12 min). Wind raises burn rate; a strong gust
 snowfall on a starved, unsheltered fire kills it. A dead fire keeps embers for a while and
 relights without a match. Fixed fireplaces: the cabin stove, the barrel at the wreck.
 
-**Wood.** Sticks lie under trees. The axe turns dead standing trees and deadfall into sticks and
-split logs. Heavy logs cannot go in a pack: one player drags one slowly, two carry it at walking
-pace (one at each end).
+**Wood.** Sticks lie under trees and beside the trail, in bundles of one to three, with a few by the
+wreck for the first fire. The dead lower branches of any pine, fir or snag snap off by hand: a hold
+of use at the trunk for a second gives two sticks (a snag three or four), once per tree. The axe
+turns dead standing trees and deadfall into sticks and split logs. Heavy logs cannot go in a pack:
+one player drags one slowly, two carry it at walking pace (one at each end).
 
 **Wolves.** Packs of 3 to 6 with an alpha. They howl before they come. They stalk at the edge of
 sight, circle, send one in to feint, and charge whoever is most isolated, weakest, or downed.

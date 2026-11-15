@@ -2,7 +2,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createWorld, type WorldEx } from './index';
 import type { PartId } from '../sim/types';
-import type { Collider, SpawnDef } from './types';
+import type { Collider, SpawnDef, SpawnItem } from './types';
 import { slowdown } from '../sim/timing';
 
 const DEG = 1 / 90; // slopeAt is the slope angle / 90 degrees
@@ -143,6 +143,25 @@ describe('world', () => {
     expect(W.spawn.packs.length).toBe(4);
     const wakes = W.spawn.packs.map((p) => p.wakeAt);
     expect(wakes.slice().sort((a, b) => a - b)).toEqual(wakes);
+  });
+
+  it('leaves sticks where people walk: 8 to 12 by the fuselage, many beside the trail, bundles of 1 to 3', () => {
+    const sticks = W.spawn.defs.filter((d): d is SpawnItem => d.kind === 'pickup' && d.item === 'stick');
+    const fus = W.props.find((p) => p.model === 'fuselage')!;
+    const within = (r: number, x: number, z: number) => sticks.filter((d) => Math.hypot(d.x - x, d.z - z) <= r).reduce((a, d) => a + d.n, 0);
+    const byWreck = within(40, fus.x, fus.z);
+    expect(byWreck).toBeGreaterThanOrEqual(8);
+    expect(byWreck).toBeLessThanOrEqual(12);
+    // within 10 m of the trail (the dense route polyline), a hundred and more
+    let nearTrail = 0;
+    for (const d of sticks) if (W.trail.some((p) => Math.hypot(p.x - d.x, p.z - d.z) <= 10)) nearTrail += d.n;
+    expect(nearTrail).toBeGreaterThanOrEqual(100);
+    // scattered bundles hold 1 to 3 (the stacks laid at the cabin hearth and in the cave are their own)
+    const laid = [W.poi('cabin'), W.poi('cave')];
+    for (const d of sticks) if (laid.every((p) => Math.hypot(d.x - p.x, d.z - p.z) > 30)) expect(d.n >= 1 && d.n <= 3, `bundle of ${d.n}`).toBe(true);
+    // under a dense canopy some lie on top of the snow
+    expect(sticks.filter((d) => d.lie === 'ground').length).toBeGreaterThan(50);
+    console.log(`sticks: ${sticks.length} pickups, ${sticks.reduce((a, d) => a + d.n, 0)} in all; ${byWreck} by the fuselage, ${nearTrail} within 10 m of the trail`);
   });
 
   it('starts the players just outside the fuselage break, on the ground', () => {
